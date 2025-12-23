@@ -59,16 +59,20 @@ def download_large_drive_file(file_id):
 # --- Technical Indicator Logic (Matches divergence_make_dashboard.py) ---
 
 def calculate_rsi(series, period):
+    """Calculates the Relative Strength Index (RSI) exactly as the local script."""
     delta = series.diff()
     gain = delta.where(delta > 0, 0).fillna(0)
     loss = -delta.where(delta < 0, 0).fillna(0)
+    # Using adjust=False and com=period-1 to match original ewm logic
     avg_gain = gain.ewm(com=period - 1, min_periods=period, adjust=False).mean()
     avg_loss = loss.ewm(com=period - 1, min_periods=period, adjust=False).mean()
+    # Handle division by zero using original np.where logic
     rs = np.where(avg_loss != 0, avg_gain / avg_loss, np.inf) 
     rsi = 100 - (100 / (1 + rs))
     return rsi.round(2)
 
 def calculate_ema(series, period):
+    """Calculates Exponential Moving Average (EMA)."""
     return series.ewm(span=period, adjust=False).mean().round(2)
 
 @st.cache_data
@@ -85,15 +89,22 @@ def process_ticker_indicators(df, timeframe='Daily'):
             'Price': 'last',
             'Volume': 'sum',
             'Ticker': 'first'
-        }).reset_index().dropna()
+        }).reset_index()
+        # Create ChartDate for weekly (matches original ChartDate logic)
+        df['ChartDate'] = df['Date'] - pd.Timedelta(days=4)
+        df = df.dropna(subset=['Price', 'Volume'])
 
+    # Calculation must happen BEFORE dropna to preserve lookback history
     df['RSI'] = calculate_rsi(df['Price'], RSI_PERIOD)
     df['EMA8'] = calculate_ema(df['Price'], EMA_PERIOD) 
     df['EMA21'] = calculate_ema(df['Price'], EMA21_PERIOD)
     df['VolSMA'] = df['Volume'].rolling(window=VOL_SMA_PERIOD).mean()
-    return df.dropna()
+    
+    # Dropna only after indicators are calculated to avoid losing initial bars unnecessarily
+    return df.dropna().reset_index(drop=True)
 
 def find_divergences(df_timeframe, ticker):
+    """Detects RSI divergences and returns only the most recent signal if active."""
     divergences = {'bullish': [], 'bearish': []}
     if len(df_timeframe) < DIVERGENCE_LOOKBACK + 1:
         return divergences
@@ -152,7 +163,7 @@ def find_divergences(df_timeframe, ticker):
                 'Price 2': round(float(second_point['Price']), 2)
             })
     
-    # Consolidation Logic (Matches consolidateSignals in original JS/HTML)
+    # Consolidation Logic
     if bullish_hits:
         latest_bull = bullish_hits[-1]
         earliest_first_date = min([h['First Date'] for h in bullish_hits])
