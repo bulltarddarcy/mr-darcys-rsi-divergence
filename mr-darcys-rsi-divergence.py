@@ -4,6 +4,7 @@ import numpy as np
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import requests
+import io
 
 # --- Page Config ---
 st.set_page_config(
@@ -12,7 +13,7 @@ st.set_page_config(
     layout="wide"
 )
 
-# --- Constants from your local script (Divergence_make_dashboard.py) ---
+# --- Constants from local script (Divergence_make_dashboard.py) ---
 RSI_PERIOD = 14
 EMA_PERIOD = 8 
 EMA21_PERIOD = 21 
@@ -20,26 +21,39 @@ VOL_SMA_PERIOD = 30
 DIVERGENCE_LOOKBACK = 180  
 SIGNAL_LOOKBACK_PERIOD = 15 
 
-# --- Link Processing Utility ---
-def get_direct_url(url):
-    """Converts a standard Google Drive share link to a direct download link, handling large files."""
-    if not url:
-        return None
-    
-    file_id = None
-    if "/file/d/" in url:
-        file_id = url.split('/')[-2]
-    elif "id=" in url:
-        file_id = url.split('id=')[-1].split('&')[0]
-    
-    if file_id:
-        # Standard direct link might fail for files > 100MB due to virus scan warning.
-        # This format is more robust for large files.
-        return f"https://docs.google.com/uc?export=download&id={file_id}&confirm=t"
-    
-    return url
+# --- Improved Google Drive Loading Utility ---
 
-# --- Technical Indicator Logic (Reverted to match divergence_make_dashboard.py) ---
+def get_drive_file_id(url):
+    """Extracts file ID from various Google Drive link formats."""
+    if not url: return None
+    if "/file/d/" in url:
+        return url.split('/d/')[-1].split('/')[0].split('?')[0]
+    elif "id=" in url:
+        return url.split('id=')[-1].split('&')[0]
+    return None
+
+def download_large_drive_file(file_id):
+    """Downloads large files from Drive by bypassing the virus scan warning."""
+    base_url = "https://docs.google.com/uc?export=download"
+    session = requests.Session()
+    
+    # First request to check for the 'confirm' token
+    response = session.get(base_url, params={'id': file_id}, stream=True)
+    
+    token = None
+    for key, value in response.cookies.items():
+        if key.startswith('download_warning'):
+            token = value
+            break
+            
+    if token:
+        # Second request with the confirmation token
+        params = {'id': file_id, 'confirm': token}
+        response = session.get(base_url, params=params, stream=True)
+        
+    return response
+
+# --- Technical Indicator Logic (Matches divergence_make_dashboard.py) ---
 
 def calculate_rsi(series, period):
     delta = series.diff()
@@ -57,10 +71,7 @@ def calculate_ema(series, period):
 @st.cache_data
 def process_ticker_indicators(df, timeframe='Daily'):
     df = df.copy()
-    
-    # Resample if Weekly is selected (Matches original Resample Logic)
     if timeframe == 'Weekly':
-        # aggregate closing price as 'last' to maintain consistency with original script
         df = df.resample('W-FRI', on='Date').agg({
             'Open': 'first',
             'High': 'max',
@@ -77,30 +88,21 @@ def process_ticker_indicators(df, timeframe='Daily'):
     return df.dropna()
 
 def find_divergences(df_timeframe, ticker):
-    """
-    Detects RSI divergences with volume flags. 
-    Matches the EXACT logic found in find_divergences() from divergence_make_dashboard.py
-    """
     divergences = {'bullish': [], 'bearish': []}
-    
     if len(df_timeframe) < DIVERGENCE_LOOKBACK + 1:
         return divergences
             
     start_index = max(DIVERGENCE_LOOKBACK, len(df_timeframe) - SIGNAL_LOOKBACK_PERIOD)
     
-    # Matching the original forward loop over the Signal Lookback period
     for i in range(start_index, len(df_timeframe)):
         second_point = df_timeframe.iloc[i]
         lookback_df = df_timeframe.iloc[i - DIVERGENCE_LOOKBACK : i]
         
-        # Pivot Selection - EXACT matches to original script
         min_rsi_idx = lookback_df['RSI'].idxmin() 
         first_point_low = lookback_df.loc[min_rsi_idx]
-
         max_rsi_idx = lookback_df['RSI'].idxmax()
         first_point_high = lookback_df.loc[max_rsi_idx]
 
-        # Tag Logic
         is_vol_high = second_point['Volume'] > (second_point['VolSMA'] * 1.5)
         v_growth = second_point['Volume'] > first_point_low['Volume']
         
@@ -108,13 +110,10 @@ def find_divergences(df_timeframe, ticker):
         if is_vol_high: tags.append("VOL_HIGH")
         if v_growth: tags.append("V_GROWTH")
 
-        # Standard Bullish Logic (Price < lookback_df['Close'].min())
         if second_point['RSI'] > first_point_low['RSI'] and second_point['Close'] < lookback_df['Close'].min():
-            # Check EMA8 cross only for tagging, not for signal validity
             current_tags = list(tags)
             if second_point['Close'] >= second_point['EMA8']:
                 current_tags.append("EMA8")
-                
             divergences['bullish'].append({
                 'Ticker': ticker,
                 'Tags': " ".join(current_tags),
@@ -125,13 +124,10 @@ def find_divergences(df_timeframe, ticker):
                 'Price 2': round(float(second_point['Close']), 2)
             })
 
-        # Standard Bearish Logic (Price > lookback_df['Close'].max())
         if second_point['RSI'] < first_point_high['RSI'] and second_point['Close'] > lookback_df['Close'].max():
-            # Check EMA21 cross only for tagging
             current_tags = list(tags)
             if second_point['Close'] <= second_point['EMA21']:
                 current_tags.append("EMA21")
-                
             divergences['bearish'].append({
                 'Ticker': ticker,
                 'Tags': " ".join(current_tags),
@@ -141,55 +137,45 @@ def find_divergences(df_timeframe, ticker):
                 'Price 1': round(float(first_point_high['Close']), 2),
                 'Price 2': round(float(second_point['Close']), 2)
             })
-            
     return divergences
 
 # --- Data Loading ---
 
-@st.cache_data(ttl=3600, show_spinner="Crunching numbers...")
+@st.cache_data(ttl=3600, show_spinner="Loading large dataset...")
 def load_large_data(url):
+    file_id = get_drive_file_id(url)
+    if not file_id:
+        st.error("Could not parse File ID from URL.")
+        return pd.DataFrame()
+        
     try:
-        direct_url = get_direct_url(url)
-        if not direct_url:
-            st.error("Invalid URL generated.")
-            return pd.DataFrame()
-        
-        dtype_dict = {
-            'Ticker': 'category', 
-            'Close': 'float32', 
-            'Open': 'float32', 
-            'High': 'float32', 
-            'Low': 'float32', 
-            'Volume': 'float32'
-        }
-        
-        # We use requests to get the content first to avoid some drive handshake issues
-        response = requests.get(direct_url)
+        response = download_large_drive_file(file_id)
         if response.status_code != 200:
-            st.error(f"Failed to fetch data from Drive. HTTP Status: {response.status_code}")
+            st.error(f"Failed to fetch data. Status: {response.status_code}")
             return pd.DataFrame()
             
-        from io import BytesIO
-        df = pd.read_csv(BytesIO(response.content), dtype=dtype_dict)
+        dtype_dict = {
+            'Ticker': 'category', 'Close': 'float32', 'Open': 'float32', 
+            'High': 'float32', 'Low': 'float32', 'Volume': 'float32'
+        }
         
-        if 'Date' in df.columns:
-            df['Date'] = pd.to_datetime(df['Date'])
-        else:
-            # Fallback if the first column is the date but unnamed
-            df.rename(columns={df.columns[0]: 'Date'}, inplace=True)
-            df['Date'] = pd.to_datetime(df['Date'])
+        # Use io.BytesIO to read the binary content directly into pandas
+        df = pd.read_csv(io.BytesIO(response.content), dtype=dtype_dict)
+        
+        # Handle Date parsing
+        date_col = next((c for c in df.columns if 'date' in c.lower()), df.columns[0])
+        df[date_col] = pd.to_datetime(df[date_col])
+        if date_col != 'Date': df.rename(columns={date_col: 'Date'}, inplace=True)
             
         return df
     except Exception as e:
-        st.error(f"Error loading file: {str(e)}")
-        st.info("Ensure your Google Drive file is shared as 'Anyone with the link' and your Streamlit Secret keys are correct.")
+        st.error(f"Critical load error: {str(e)}")
         return pd.DataFrame()
 
 # --- App UI ---
 
 st.title("📉 RSI Divergences Live")
 
-# Pull URLs exclusively from Secrets
 PRESETS = {
     "Darcy's List": st.secrets.get("URL_DIVERGENCES"),
     "Midcap": st.secrets.get("URL_MIDCAP"),
@@ -199,28 +185,16 @@ PRESETS = {
 AVAILABLE_DATASETS = {k: v for k, v in PRESETS.items() if v is not None}
 
 if not AVAILABLE_DATASETS:
-    st.error("No data sources configured. Please add URL_DIVERGENCES, URL_MIDCAP, and URL_SP500 to your Streamlit Secrets.")
+    st.error("No secrets configured in Streamlit Cloud.")
     st.stop()
 
-# Sidebar Styling and Layout
 st.sidebar.markdown("### Data Configuration")
-
-# Dataset Selection
-selected_dataset = st.sidebar.radio(
-    "Select Dataset", 
-    list(AVAILABLE_DATASETS.keys()),
-    index=0
-)
-
-# RSI Divergence Length (Timeframe)
+selected_dataset = st.sidebar.radio("Select Dataset", list(AVAILABLE_DATASETS.keys()), index=0)
 timeframe = st.sidebar.radio("RSI Divergence Length", ["Daily", "Weekly"], index=0)
-
-# View Mode selection
 view_mode = st.sidebar.radio("View Mode", ["Summary Dashboard", "Ticker Detail"], index=0)
 
 final_url = AVAILABLE_DATASETS[selected_dataset]
 
-# Column config for summary tables
 DIV_COLUMN_CONFIG = {
     "Ticker": st.column_config.TextColumn(width="small"),
     "Tags": st.column_config.TextColumn(width="medium"),
@@ -253,29 +227,15 @@ if final_url:
             with col1:
                 st.subheader("🟢 Bullish Divergences")
                 if all_bullish: 
-                    # Sort by Signal Date descending for dashboard feel
                     df_bull = pd.DataFrame(all_bullish).sort_values('Signal Date', ascending=False)
-                    st.dataframe(
-                        df_bull, 
-                        use_container_width=True, 
-                        hide_index=True,
-                        column_config=DIV_COLUMN_CONFIG
-                    )
-                else: 
-                    st.write("None detected.")
+                    st.dataframe(df_bull, use_container_width=True, hide_index=True, column_config=DIV_COLUMN_CONFIG)
+                else: st.write("None detected.")
             with col2:
                 st.subheader("🔴 Bearish Divergences")
                 if all_bearish: 
                     df_bear = pd.DataFrame(all_bearish).sort_values('Signal Date', ascending=False)
-                    st.dataframe(
-                        df_bear, 
-                        use_container_width=True, 
-                        hide_index=True,
-                        column_config=DIV_COLUMN_CONFIG
-                    )
-                else: 
-                    st.write("None detected.")
-
+                    st.dataframe(df_bear, use_container_width=True, hide_index=True, column_config=DIV_COLUMN_CONFIG)
+                else: st.write("None detected.")
         else:
             ticker_list = sorted(raw_df['Ticker'].unique())
             selected_ticker = st.sidebar.selectbox("Select Ticker", ticker_list)
@@ -297,6 +257,6 @@ if final_url:
             fig_rsi.update_layout(height=300, title=f"RSI ({timeframe})", template="plotly_dark")
             st.plotly_chart(fig_rsi, use_container_width=True)
     else:
-        st.warning("Data not accessible. Verify Streamlit Secrets match your Google Drive permissions.")
+        st.warning("Data load failed. Check Drive permissions or Secrets configuration.")
 else:
     st.info("Select a dataset to begin.")
