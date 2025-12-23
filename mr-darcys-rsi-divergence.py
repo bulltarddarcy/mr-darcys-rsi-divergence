@@ -77,7 +77,7 @@ def process_ticker_indicators(df, timeframe='Daily'):
     
     # Resample if Weekly is selected
     if timeframe == 'Weekly':
-        # aggregate Price (Close) as 'last' to maintain consistency with original script
+        # aggregate Price as 'last' to maintain consistency with original script
         df = df.resample('W-FRI', on='Date').agg({
             'Open': 'first',
             'High': 'max',
@@ -152,7 +152,7 @@ def find_divergences(df_timeframe, ticker):
                 'Price 2': round(float(second_point['Price']), 2)
             })
     
-    # Consolidation Logic
+    # Consolidation Logic (Matches consolidateSignals in original JS/HTML)
     if bullish_hits:
         latest_bull = bullish_hits[-1]
         earliest_first_date = min([h['First Date'] for h in bullish_hits])
@@ -210,19 +210,28 @@ def load_large_data(url):
         df = pd.read_csv(io.BytesIO(response.content), dtype=dtype_dict)
         
         # Standardize Columns immediately after loading (Matches prepare_data in original script)
-        # 1. Clean column names
+        # 1. Clean column names to handle casing and spaces
         df.columns = [col.strip().upper() for col in df.columns]
         
-        # 2. Identify and rename Close to Price
-        close_col = next((col for col in df.columns if 'CLOSE' in col), None)
+        # 2. Identify and rename Ticker column robustly
+        ticker_col = next((col for col in df.columns if 'TICKER' in col or 'SYMBOL' in col), None)
+        if ticker_col:
+            df.rename(columns={ticker_col: 'Ticker'}, inplace=True)
+            df['Ticker'] = df['Ticker'].astype('category')
+        else:
+            # If no ticker column, we can't group data properly
+            st.error("Missing 'Ticker' or 'Symbol' column in dataset.")
+            return pd.DataFrame()
+        
+        # 3. Identify and rename Close to Price
+        close_col = next((col for col in df.columns if 'CLOSE' in col or 'PRICE' in col), None)
         if close_col:
             df.rename(columns={close_col: 'Price'}, inplace=True)
         else:
-            # Fallback for data structure
-            st.error("Missing 'Close' column in dataset.")
+            st.error("Missing 'Close' or 'Price' column in dataset.")
             return pd.DataFrame()
 
-        # 3. Handle Date parsing
+        # 4. Handle Date parsing
         date_col = next((c for c in df.columns if 'DATE' in c), df.columns[0])
         df[date_col] = pd.to_datetime(df[date_col])
         if date_col != 'Date': 
@@ -273,6 +282,8 @@ if final_url:
         if view_mode == "Summary Dashboard":
             st.header(f"System-Wide Scanner: {selected_dataset} ({timeframe})")
             all_bullish, all_bearish = [], []
+            
+            # Robustly get unique tickers after column normalization
             unique_tickers = raw_df['Ticker'].unique()
             
             scan_progress = st.progress(0)
@@ -305,7 +316,6 @@ if final_url:
             
             st.subheader(f"Analysis: {selected_ticker} ({timeframe})")
             fig = go.Figure()
-            # Note: Ticker Detail view now uses 'Price' instead of 'Close'
             fig.add_trace(go.Scatter(x=ticker_df['Date'], y=ticker_df['Price'], name="Price", line=dict(color='white')))
             fig.add_trace(go.Scatter(x=ticker_df['Date'], y=ticker_df['EMA8'], name="EMA 8", line=dict(color='cyan', dash='dot')))
             fig.add_trace(go.Scatter(x=ticker_df['Date'], y=ticker_df['EMA21'], name="EMA 21", line=dict(color='magenta', dash='dot')))
