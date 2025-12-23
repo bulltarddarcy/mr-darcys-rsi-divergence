@@ -74,7 +74,7 @@ def process_ticker_indicators(df, timeframe='Daily'):
     """
     FIX: Indicators are calculated on the RAW dataframe first.
     Slicing/Resampling happens AFTER to ensure indicator warm-up parity.
-    Explicit separation of Daily/Weekly paths.
+    Explicit separation of Daily/Weekly paths with the -4 day weekly offset.
     """
     df = df.copy().sort_values('Date')
     
@@ -100,6 +100,10 @@ def process_ticker_indicators(df, timeframe='Daily'):
             'EMA21': 'last',
             'VolSMA': 'last'
         }).reset_index().dropna()
+        
+        # Apply -4 Day Offset to align with Monday start date
+        df['Date'] = df['Date'] - pd.Timedelta(days=4)
+        
     else:
         # Daily block: Bypass resampling completely to maintain index integrity
         df = df.dropna()
