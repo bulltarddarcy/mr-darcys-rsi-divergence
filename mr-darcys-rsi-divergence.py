@@ -74,19 +74,22 @@ def calculate_ema(series, period):
 @st.cache_data
 def process_ticker_indicators(df, timeframe='Daily'):
     df = df.copy()
+    
+    # Resample if Weekly is selected
     if timeframe == 'Weekly':
+        # aggregate Price (Close) as 'last' to maintain consistency with original script
         df = df.resample('W-FRI', on='Date').agg({
             'Open': 'first',
             'High': 'max',
             'Low': 'min',
-            'Close': 'last',
+            'Price': 'last',
             'Volume': 'sum',
             'Ticker': 'first'
         }).reset_index().dropna()
 
-    df['RSI'] = calculate_rsi(df['Close'], RSI_PERIOD)
-    df['EMA8'] = calculate_ema(df['Close'], EMA_PERIOD) 
-    df['EMA21'] = calculate_ema(df['Close'], EMA21_PERIOD)
+    df['RSI'] = calculate_rsi(df['Price'], RSI_PERIOD)
+    df['EMA8'] = calculate_ema(df['Price'], EMA_PERIOD) 
+    df['EMA21'] = calculate_ema(df['Price'], EMA21_PERIOD)
     df['VolSMA'] = df['Volume'].rolling(window=VOL_SMA_PERIOD).mean()
     return df.dropna()
 
@@ -117,9 +120,10 @@ def find_divergences(df_timeframe, ticker):
         if is_vol_high: tags.append("VOL_HIGH")
         if v_growth: tags.append("V_GROWTH")
 
-        if second_point['RSI'] > first_point_low['RSI'] and second_point['Close'] < lookback_df['Close'].min():
+        # Standard Bullish (logic looks for second_point['Price'])
+        if second_point['RSI'] > first_point_low['RSI'] and second_point['Price'] < lookback_df['Price'].min():
             current_tags = list(tags)
-            if second_point['Close'] >= second_point['EMA8']:
+            if second_point['Price'] >= second_point['EMA8']:
                 current_tags.append("EMA8")
             bullish_hits.append({
                 'Ticker': ticker,
@@ -128,13 +132,14 @@ def find_divergences(df_timeframe, ticker):
                 'Signal Date': second_point['Date'],
                 'firstRSI': first_point_low['RSI'],
                 'secondRSI': second_point['RSI'],
-                'Price 1': round(float(first_point_low['Close']), 2),
-                'Price 2': round(float(second_point['Close']), 2)
+                'Price 1': round(float(first_point_low['Price']), 2),
+                'Price 2': round(float(second_point['Price']), 2)
             })
 
-        if second_point['RSI'] < first_point_high['RSI'] and second_point['Close'] > lookback_df['Close'].max():
+        # Standard Bearish
+        if second_point['RSI'] < first_point_high['RSI'] and second_point['Price'] > lookback_df['Price'].max():
             current_tags = list(tags)
-            if second_point['Close'] <= second_point['EMA21']:
+            if second_point['Price'] <= second_point['EMA21']:
                 current_tags.append("EMA21")
             bearish_hits.append({
                 'Ticker': ticker,
@@ -143,17 +148,14 @@ def find_divergences(df_timeframe, ticker):
                 'Signal Date': second_point['Date'],
                 'firstRSI': first_point_high['RSI'],
                 'secondRSI': second_point['RSI'],
-                'Price 1': round(float(first_point_high['Close']), 2),
-                'Price 2': round(float(second_point['Close']), 2)
+                'Price 1': round(float(first_point_high['Price']), 2),
+                'Price 2': round(float(second_point['Price']), 2)
             })
     
-    # Consolidation Logic (Matches JavaScript consolidateSignals in original)
+    # Consolidation Logic
     if bullish_hits:
-        # Collapse multiple bullish signals for this ticker into one
-        latest_bull = bullish_hits[-1] # Take the most recent hit
+        latest_bull = bullish_hits[-1]
         earliest_first_date = min([h['First Date'] for h in bullish_hits])
-        
-        # Combine unique tags from all hits in the period
         all_tags = set()
         for h in bullish_hits: all_tags.update(h['Tags'])
         
@@ -170,7 +172,6 @@ def find_divergences(df_timeframe, ticker):
     if bearish_hits:
         latest_bear = bearish_hits[-1]
         earliest_first_date = min([h['First Date'] for h in bearish_hits])
-        
         all_tags = set()
         for h in bearish_hits: all_tags.update(h['Tags'])
         
@@ -206,19 +207,26 @@ def load_large_data(url):
             'High': 'float32', 'Low': 'float32', 'Volume': 'float32'
         }
         
-        # Read binary content into buffer
         df = pd.read_csv(io.BytesIO(response.content), dtype=dtype_dict)
         
-        # Handle Date parsing and column normalization
-        date_col = next((c for c in df.columns if 'date' in c.lower()), None)
-        if date_col:
-            df[date_col] = pd.to_datetime(df[date_col])
-            if date_col != 'Date': 
-                df.rename(columns={date_col: 'Date'}, inplace=True)
+        # Standardize Columns immediately after loading (Matches prepare_data in original script)
+        # 1. Clean column names
+        df.columns = [col.strip().upper() for col in df.columns]
+        
+        # 2. Identify and rename Close to Price
+        close_col = next((col for col in df.columns if 'CLOSE' in col), None)
+        if close_col:
+            df.rename(columns={close_col: 'Price'}, inplace=True)
         else:
-            # Fallback to first column as Date
-            df.iloc[:, 0] = pd.to_datetime(df.iloc[:, 0])
-            df.rename(columns={df.columns[0]: 'Date'}, inplace=True)
+            # Fallback for data structure
+            st.error("Missing 'Close' column in dataset.")
+            return pd.DataFrame()
+
+        # 3. Handle Date parsing
+        date_col = next((c for c in df.columns if 'DATE' in c), df.columns[0])
+        df[date_col] = pd.to_datetime(df[date_col])
+        if date_col != 'Date': 
+            df.rename(columns={date_col: 'Date'}, inplace=True)
             
         return df
     except Exception as e:
@@ -297,7 +305,8 @@ if final_url:
             
             st.subheader(f"Analysis: {selected_ticker} ({timeframe})")
             fig = go.Figure()
-            fig.add_trace(go.Scatter(x=ticker_df['Date'], y=ticker_df['Close'], name="Price", line=dict(color='white')))
+            # Note: Ticker Detail view now uses 'Price' instead of 'Close'
+            fig.add_trace(go.Scatter(x=ticker_df['Date'], y=ticker_df['Price'], name="Price", line=dict(color='white')))
             fig.add_trace(go.Scatter(x=ticker_df['Date'], y=ticker_df['EMA8'], name="EMA 8", line=dict(color='cyan', dash='dot')))
             fig.add_trace(go.Scatter(x=ticker_df['Date'], y=ticker_df['EMA21'], name="EMA 21", line=dict(color='magenta', dash='dot')))
             fig.update_layout(height=500, template="plotly_dark")
