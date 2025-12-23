@@ -177,6 +177,17 @@ view_mode = st.sidebar.radio("View Mode", ["Summary Dashboard", "Ticker Detail"]
 
 final_url = AVAILABLE_DATASETS[selected_dataset]
 
+# Column config to keep widths minimal
+DIV_COLUMN_CONFIG = {
+    "Ticker": st.column_config.TextColumn(width="small"),
+    "Tags": st.column_config.TextColumn(width="medium"),
+    "First Date": st.column_config.TextColumn(width="small"),
+    "Signal Date": st.column_config.TextColumn(width="small"),
+    "RSI": st.column_config.TextColumn(width="small"),
+    "Price 1": st.column_config.NumberColumn(format="$%.2f", width="small"),
+    "Price 2": st.column_config.NumberColumn(format="$%.2f", width="small"),
+}
+
 if final_url:
     raw_df = load_large_data(final_url)
 
@@ -199,13 +210,23 @@ if final_url:
             with col1:
                 st.subheader("🟢 Bullish Divergences")
                 if all_bullish: 
-                    st.dataframe(pd.DataFrame(all_bullish), use_container_width=True, hide_index=True)
+                    st.dataframe(
+                        pd.DataFrame(all_bullish), 
+                        use_container_width=True, 
+                        hide_index=True,
+                        column_config=DIV_COLUMN_CONFIG
+                    )
                 else: 
                     st.write("None detected.")
             with col2:
                 st.subheader("🔴 Bearish Divergences")
                 if all_bearish: 
-                    st.dataframe(pd.DataFrame(all_bearish), use_container_width=True, hide_index=True)
+                    st.dataframe(
+                        pd.DataFrame(all_bearish), 
+                        use_container_width=True, 
+                        hide_index=True,
+                        column_config=DIV_COLUMN_CONFIG
+                    )
                 else: 
                     st.write("None detected.")
 
