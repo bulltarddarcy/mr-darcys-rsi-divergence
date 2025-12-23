@@ -1,97 +1,195 @@
 import streamlit as st
 import pandas as pd
-from streamlit_gsheets import GSheetsConnection
+import numpy as np
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 
 # --- Page Config ---
 st.set_page_config(
     page_title="RSI Divergences Live",
-    page_icon="📉",
+    page_icon="📊",
     layout="wide"
 )
 
-st.title("📉 RSI Divergences Live")
-st.markdown("""
-This application pulls consolidated data directly from Google Drive to identify and visualize RSI Divergences.
-""")
+# --- Constants from local script ---
+RSI_PERIOD = 14
+EMA_PERIOD = 8
+EMA21_PERIOD = 21
+VOL_SMA_PERIOD = 30
+DIVERGENCE_LOOKBACK = 180  
+SIGNAL_LOOKBACK_PERIOD = 15 
 
-# --- Data Connection ---
-# Instructions: 
-# 1. Share your Google Drive CSV with "Anyone with the link" as a Viewer.
-# 2. In your Streamlit Secrets (on the Cloud dashboard), add the URL for:
-#    combined_data_divergences.csv, combined_data_sp500.csv, and combined_data_midcap.csv
-# This uses the st-gsheets-connection or direct URL reading.
+# --- Link Processing Utility ---
+def get_direct_url(url):
+    """Converts a standard Google Drive share link to a direct download link."""
+    if not url:
+        return None
+    if "drive.google.com" in url and "id=" not in url:
+        try:
+            # Extract ID from /file/d/ID/view format
+            file_id = url.split('/')[-2] if '/file/d/' in url else url.split('/')[-1].split('?')[0]
+            return f"https://docs.google.com/uc?export=download&id={file_id}"
+        except:
+            return url
+    return url
 
-@st.cache_data(ttl=3600)  # Cache for 1 hour
-def load_data(url):
+# --- Technical Indicator Logic ---
+
+def calculate_rsi(series, period):
+    delta = series.diff()
+    gain = delta.where(delta > 0, 0).fillna(0)
+    loss = -delta.where(delta < 0, 0).fillna(0)
+    avg_gain = gain.ewm(com=period - 1, min_periods=period, adjust=False).mean()
+    avg_loss = loss.ewm(com=period - 1, min_periods=period, adjust=False).mean()
+    rs = np.where(avg_loss != 0, avg_gain / avg_loss, np.inf) 
+    rsi = 100 - (100 / (1 + rs))
+    return rsi.round(2)
+
+def calculate_ema(series, period):
+    return series.ewm(span=period, adjust=False).mean().round(2)
+
+@st.cache_data
+def process_ticker_indicators(df):
+    df = df.copy()
+    df['RSI'] = calculate_rsi(df['Close'], RSI_PERIOD)
+    df['EMA8'] = calculate_ema(df['Close'], EMA_PERIOD) 
+    df['EMA21'] = calculate_ema(df['Close'], EMA21_PERIOD)
+    df['VolSMA'] = df['Volume'].rolling(window=VOL_SMA_PERIOD).mean()
+    return df.dropna()
+
+def find_divergences(df_timeframe, ticker):
+    divergences = {'bullish': [], 'bearish': []}
+    if len(df_timeframe) < DIVERGENCE_LOOKBACK + 1:
+        return divergences
+            
+    start_index = max(DIVERGENCE_LOOKBACK, len(df_timeframe) - SIGNAL_LOOKBACK_PERIOD)
+    
+    for i in range(start_index, len(df_timeframe)):
+        second_point = df_timeframe.iloc[i]
+        lookback_df = df_timeframe.iloc[i - DIVERGENCE_LOOKBACK : i]
+        
+        min_rsi_idx = lookback_df['RSI'].idxmin() 
+        first_point_low = lookback_df.loc[min_rsi_idx]
+        max_rsi_idx = lookback_df['RSI'].idxmax()
+        first_point_high = lookback_df.loc[max_rsi_idx]
+
+        is_vol_high = second_point['Volume'] > (second_point['VolSMA'] * 1.5)
+        v_growth = second_point['Volume'] > first_point_low['Volume']
+
+        if second_point['RSI'] > first_point_low['RSI'] and second_point['Close'] < lookback_df['Close'].min():
+            divergences['bullish'].append({
+                'Ticker': ticker, 'Signal Date': second_point['Date'].strftime('%Y-%m-%d'), 
+                'Price P1': first_point_low['Close'], 'Price P2': second_point['Close'],
+                'RSI P1': first_point_low['RSI'], 'RSI P2': second_point['RSI'],
+                'Vol High': "Yes" if is_vol_high else "No",
+                'V Growth': "Yes" if v_growth else "No",
+                'Trend': "Bullish" if second_point['Close'] >= second_point['EMA8'] else "Weak"
+            })
+
+        if second_point['RSI'] < first_point_high['RSI'] and second_point['Close'] > lookback_df['Close'].max():
+            divergences['bearish'].append({
+                'Ticker': ticker, 'Signal Date': second_point['Date'].strftime('%Y-%m-%d'),
+                'Price P1': first_point_high['Close'], 'Price P2': second_point['Close'],
+                'RSI P1': first_point_high['RSI'], 'RSI P2': second_point['RSI'],
+                'Vol High': "Yes" if is_vol_high else "No",
+                'V Growth': "Yes" if v_growth else "No",
+                'Trend': "Bearish" if second_point['Close'] <= second_point['EMA21'] else "Weak"
+            })
+    return divergences
+
+# --- Data Loading ---
+
+@st.cache_data(ttl=3600, show_spinner="Crunching numbers...")
+def load_large_data(url):
     try:
-        # If the file is small enough, direct CSV read via export link works best
-        # Replace the 'open?id=' part of your drive link with 'uc?export=download&id='
-        df = pd.read_csv(url)
+        direct_url = get_direct_url(url)
+        if not direct_url:
+            return pd.DataFrame()
+        
+        dtype_dict = {'Ticker': 'category', 'Close': 'float32', 'Open': 'float32', 'High': 'float32', 'Low': 'float32', 'Volume': 'float32'}
+        df = pd.read_csv(direct_url, dtype=dtype_dict)
         df['Date'] = pd.to_datetime(df['Date'])
         return df
     except Exception as e:
-        st.error(f"Error loading data: {e}")
+        st.error(f"Error loading file. Verify your Streamlit Secrets and Drive permissions.")
         return pd.DataFrame()
 
-# Placeholder URLs - Replace these with your actual "Direct Download" Google Drive links
-DIVERGENCE_DATA_URL = st.sidebar.text_input("Divergences CSV Link", placeholder="Paste Drive direct download link here")
+# --- App UI ---
 
-if DIVERGENCE_DATA_URL:
-    with st.spinner("Fetching data from Drive..."):
-        df_div = load_data(DIVERGENCE_DATA_URL)
+st.title("📉 RSI Divergences Live")
 
-    if not df_div.empty:
-        # --- Sidebar Filters ---
-        st.sidebar.header("Filters")
-        all_tickers = sorted(df_div['Ticker'].unique())
-        selected_ticker = st.sidebar.selectbox("Select Ticker", all_tickers)
+# Pull URLs exclusively from Secrets
+# Keys expected: URL_DIVERGENCES, URL_MIDCAP, URL_SP500
+PRESETS = {
+    "Divergences": st.secrets.get("URL_DIVERGENCES"),
+    "Midcap": st.secrets.get("URL_MIDCAP"),
+    "S&P 500": st.secrets.get("URL_SP500")
+}
+
+# Remove entries that aren't configured in secrets
+AVAILABLE_DATASETS = {k: v for k, v in PRESETS.items() if v is not None}
+
+if not AVAILABLE_DATASETS:
+    st.error("No data sources configured. Please add URL_DIVERGENCES, URL_MIDCAP, and URL_SP500 to your Streamlit Secrets.")
+    st.stop()
+
+st.sidebar.header("Data Configuration")
+dataset_choice = st.sidebar.selectbox("Choose Dataset", list(AVAILABLE_DATASETS.keys()))
+
+final_url = AVAILABLE_DATASETS[dataset_choice]
+
+if final_url:
+    raw_df = load_large_data(final_url)
+
+    if not raw_df.empty:
+        st.sidebar.divider()
+        view_mode = st.sidebar.radio("View Mode", ["Summary Dashboard", "Ticker Detail"])
         
-        date_range = st.sidebar.slider(
-            "Select Date Range",
-            min_value=df_div['Date'].min().to_pydatetime(),
-            max_value=df_div['Date'].max().to_pydatetime(),
-            value=(df_div['Date'].max() - timedelta(days=90)).to_pydatetime()
-        )
-
-        # --- Filter Data ---
-        ticker_data = df_div[df_div['Ticker'] == selected_ticker].copy()
-        ticker_data = ticker_data[ticker_data['Date'] >= date_range]
-
-        # --- Visualizations ---
-        col1, col2 = st.columns([3, 1])
-
-        with col1:
-            st.subheader(f"Price & RSI Analysis: {selected_ticker}")
+        if view_mode == "Summary Dashboard":
+            st.header(f"System-Wide Scanner: {dataset_choice}")
+            all_bullish, all_bearish = [], []
+            unique_tickers = raw_df['Ticker'].unique()
             
-            # Create subplots manually with Plotly
+            scan_progress = st.progress(0)
+            for idx, ticker in enumerate(unique_tickers):
+                t_df = raw_df[raw_df['Ticker'] == ticker].sort_values('Date')
+                t_df = process_ticker_indicators(t_df)
+                divs = find_divergences(t_df, ticker)
+                all_bullish.extend(divs['bullish'])
+                all_bearish.extend(divs['bearish'])
+                scan_progress.progress((idx + 1) / len(unique_tickers))
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                st.subheader("🟢 Bullish Divergences")
+                if all_bullish: st.dataframe(pd.DataFrame(all_bullish), use_container_width=True)
+                else: st.write("None detected.")
+            with col2:
+                st.subheader("🔴 Bearish Divergences")
+                if all_bearish: st.dataframe(pd.DataFrame(all_bearish), use_container_width=True)
+                else: st.write("None detected.")
+
+        else:
+            ticker_list = sorted(raw_df['Ticker'].unique())
+            selected_ticker = st.sidebar.selectbox("Select Ticker", ticker_list)
+            ticker_df = raw_df[raw_df['Ticker'] == selected_ticker].sort_values('Date')
+            ticker_df = process_ticker_indicators(ticker_df)
+            
+            st.subheader(f"Analysis: {selected_ticker}")
             fig = go.Figure()
-
-            # Price Chart
-            fig.add_trace(go.Scatter(
-                x=ticker_data['Date'], y=ticker_data['Close'],
-                name="Price", line=dict(color='royalblue', width=2)
-            ))
-
-            # Add RSI to a second Y-axis or separate section
-            # For brevity in this example, we'll focus on the data table if columns aren't present
+            fig.add_trace(go.Scatter(x=ticker_df['Date'], y=ticker_df['Close'], name="Price", line=dict(color='white')))
+            fig.add_trace(go.Scatter(x=ticker_df['Date'], y=ticker_df['EMA8'], name="EMA 8", line=dict(color='cyan', dash='dot')))
+            fig.add_trace(go.Scatter(x=ticker_df['Date'], y=ticker_df['EMA21'], name="EMA 21", line=dict(color='magenta', dash='dot')))
+            fig.update_layout(height=500, template="plotly_dark")
             st.plotly_chart(fig, use_container_width=True)
-
-        with col2:
-            st.subheader("Stats")
-            last_price = ticker_data['Close'].iloc[-1]
-            st.metric("Last Price", f"${last_price:.2f}")
-            st.write(f"Data points: {len(ticker_data)}")
-
-        # --- Data Table ---
-        with st.expander("View Raw Data Table"):
-            st.dataframe(ticker_data, use_container_width=True)
+            
+            fig_rsi = go.Figure()
+            fig_rsi.add_trace(go.Scatter(x=ticker_df['Date'], y=ticker_df['RSI'], name="RSI", line=dict(color='yellow')))
+            fig_rsi.add_hline(y=70, line_dash="dash", line_color="red")
+            fig_rsi.add_hline(y=30, line_dash="dash", line_color="green")
+            fig_rsi.update_layout(height=300, title="RSI", template="plotly_dark")
+            st.plotly_chart(fig_rsi, use_container_width=True)
     else:
-        st.info("Please enter a valid Google Drive CSV direct download link in the sidebar.")
+        st.warning("Data not accessible. Verify Streamlit Secrets match your Google Drive permissions.")
 else:
-    st.info("Waiting for data link...")
-
-# --- Footer ---
-st.divider()
-st.caption(f"Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    st.info("Select a dataset to begin.")
