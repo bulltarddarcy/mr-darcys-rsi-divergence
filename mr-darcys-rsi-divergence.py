@@ -70,13 +70,15 @@ def process_ticker_indicators(df, timeframe='Daily'):
     return df.dropna()
 
 def find_divergences(df_timeframe, ticker):
+    """Detects RSI divergences and returns only the most recent signal if active."""
     divergences = {'bullish': [], 'bearish': []}
     if len(df_timeframe) < DIVERGENCE_LOOKBACK + 1:
         return divergences
             
     start_index = max(DIVERGENCE_LOOKBACK, len(df_timeframe) - SIGNAL_LOOKBACK_PERIOD)
     
-    for i in range(start_index, len(df_timeframe)):
+    # We loop backwards from the end to find the most recent active 2nd signal
+    for i in range(len(df_timeframe) - 1, start_index - 1, -1):
         second_point = df_timeframe.iloc[i]
         lookback_df = df_timeframe.iloc[i - DIVERGENCE_LOOKBACK : i]
         
@@ -88,25 +90,39 @@ def find_divergences(df_timeframe, ticker):
         is_vol_high = second_point['Volume'] > (second_point['VolSMA'] * 1.5)
         v_growth = second_point['Volume'] > first_point_low['Volume']
 
-        if second_point['RSI'] > first_point_low['RSI'] and second_point['Close'] < lookback_df['Close'].min():
-            divergences['bullish'].append({
-                'Ticker': ticker, 'Signal Date': second_point['Date'].strftime('%Y-%m-%d'), 
-                'Price P1': first_point_low['Close'], 'Price P2': second_point['Close'],
-                'RSI P1': first_point_low['RSI'], 'RSI P2': second_point['RSI'],
-                'Vol High': "Yes" if is_vol_high else "No",
-                'V Growth': "Yes" if v_growth else "No",
-                'Trend': "Bullish" if second_point['Close'] >= second_point['EMA8'] else "Weak"
-            })
+        # Formatting Tags
+        tags = []
+        if is_vol_high: tags.append("VOL_HIGH")
+        if v_growth: tags.append("V_GROWTH")
 
-        if second_point['RSI'] < first_point_high['RSI'] and second_point['Close'] > lookback_df['Close'].max():
-            divergences['bearish'].append({
-                'Ticker': ticker, 'Signal Date': second_point['Date'].strftime('%Y-%m-%d'),
-                'Price P1': first_point_high['Close'], 'Price P2': second_point['Close'],
-                'RSI P1': first_point_high['RSI'], 'RSI P2': second_point['RSI'],
-                'Vol High': "Yes" if is_vol_high else "No",
-                'V Growth': "Yes" if v_growth else "No",
-                'Trend': "Bearish" if second_point['Close'] <= second_point['EMA21'] else "Weak"
+        # Standard Bullish
+        if second_point['RSI'] > first_point_low['RSI'] and second_point['Close'] < lookback_df['Close'].min():
+            if second_point['Close'] >= second_point['EMA8']: tags.append("EMA8")
+            divergences['bullish'].append({
+                'Ticker': ticker,
+                'Tags': " ".join(tags),
+                'First Date': first_point_low['Date'].strftime('%Y-%m-%d'),
+                'Signal Date': second_point['Date'].strftime('%Y-%m-%d'),
+                'RSI': f"{int(first_point_low['RSI'])} → {int(second_point['RSI'])}",
+                'Price 1': round(float(first_point_low['Close']), 2),
+                'Price 2': round(float(second_point['Close']), 2)
             })
+            break # Found the most recent 2nd signal for this ticker
+
+        # Standard Bearish
+        if second_point['RSI'] < first_point_high['RSI'] and second_point['Close'] > lookback_df['Close'].max():
+            if second_point['Close'] <= second_point['EMA21']: tags.append("EMA21")
+            divergences['bearish'].append({
+                'Ticker': ticker,
+                'Tags': " ".join(tags),
+                'First Date': first_point_high['Date'].strftime('%Y-%m-%d'),
+                'Signal Date': second_point['Date'].strftime('%Y-%m-%d'),
+                'RSI': f"{int(first_point_high['RSI'])} → {int(second_point['RSI'])}",
+                'Price 1': round(float(first_point_high['Close']), 2),
+                'Price 2': round(float(second_point['Close']), 2)
+            })
+            break # Found the most recent 2nd signal for this ticker
+            
     return divergences
 
 # --- Data Loading ---
@@ -131,7 +147,6 @@ def load_large_data(url):
 st.title("📉 RSI Divergences Live")
 
 # Pull URLs exclusively from Secrets
-# Renamed "Divergences" to "Darcy's List" as requested
 PRESETS = {
     "Darcy's List": st.secrets.get("URL_DIVERGENCES"),
     "Midcap": st.secrets.get("URL_MIDCAP"),
@@ -174,7 +189,6 @@ if final_url:
             scan_progress = st.progress(0)
             for idx, ticker in enumerate(unique_tickers):
                 t_df = raw_df[raw_df['Ticker'] == ticker].sort_values('Date')
-                # Apply indicators and optional resampling
                 t_df = process_ticker_indicators(t_df, timeframe)
                 divs = find_divergences(t_df, ticker)
                 all_bullish.extend(divs['bullish'])
@@ -184,12 +198,16 @@ if final_url:
             col1, col2 = st.columns(2)
             with col1:
                 st.subheader("🟢 Bullish Divergences")
-                if all_bullish: st.dataframe(pd.DataFrame(all_bullish), use_container_width=True)
-                else: st.write("None detected.")
+                if all_bullish: 
+                    st.dataframe(pd.DataFrame(all_bullish), use_container_width=True, hide_index=True)
+                else: 
+                    st.write("None detected.")
             with col2:
                 st.subheader("🔴 Bearish Divergences")
-                if all_bearish: st.dataframe(pd.DataFrame(all_bearish), use_container_width=True)
-                else: st.write("None detected.")
+                if all_bearish: 
+                    st.dataframe(pd.DataFrame(all_bearish), use_container_width=True, hide_index=True)
+                else: 
+                    st.write("None detected.")
 
         else:
             ticker_list = sorted(raw_df['Ticker'].unique())
