@@ -64,7 +64,7 @@ st.title("📈 RSI Divergence Scanner")
 # --- Sidebar: Dataset Selection ---
 data_option = st.sidebar.selectbox(
     "Select Dataset to Analyze",
-    ("Darcy Data", "S&P 100 Data", "NQ 100 Data")
+    ("Darcy Data", "S&P 100 Data", "NQ 100 Data", "Sectors Data")
 )
 
 # --- Sidebar: Logic & Tags Summary ---
@@ -90,10 +90,12 @@ try:
         target_url = st.secrets["URL_DARCY"]
     elif data_option == "S&P 100 Data":
         target_url = st.secrets["URL_SP100"]
-    else: # NQ 100 Data
+    elif data_option == "NQ 100 Data":
         target_url = st.secrets["URL_NQ100"]
+    elif data_option == "Sectors Data":
+        target_url = st.secrets["URL_SECTORS"]
 except KeyError as e:
-    st.error(f"Secret key {e} not found. Please ensure URL_DARCY, URL_SP100, and URL_NQ100 are set.")
+    st.error(f"Secret key {e} not found. Please ensure URL_DARCY, URL_SP100, URL_NQ100, and URL_SECTORS are set.")
     st.stop()
 
 # --- Logic Functions ---
@@ -238,7 +240,6 @@ elif csv_buffer:
                 st.markdown(f"---")
                 st.header(f"📅 {tf} Divergence Analysis")
                 
-                # New Note Added specifically for Weekly section
                 if tf == 'Weekly':
                     st.caption("Note: The 2nd signal is based off the week's close, but the 2nd signal date is the first trading day of the week to align with how chart candles are labeled.")
                 
