@@ -61,13 +61,30 @@ EMA21_PERIOD = 21
 st.set_page_config(page_title="RSI Divergence Scanner", layout="wide")
 st.title("📈 RSI Divergence Scanner")
 
-# Updated Dataset Selection: "Divergences" replaced with "Darcy"
+# --- Sidebar: Dataset Selection ---
 data_option = st.sidebar.selectbox(
     "Select Dataset to Analyze",
     ("Darcy Data", "S&P 100 Data", "NQ 100 Data")
 )
 
-# Secrets Mapping for datasets: URL_DIVERGENCES replaced with URL_DARCY
+# --- Sidebar: Logic & Tags Summary ---
+st.sidebar.markdown("---")
+st.sidebar.header("📝 Strategy Logic")
+st.sidebar.markdown("""
+* **Bullish Divergence**: Price hits a new 90-day low, but RSI is higher than its previous low (fading downward momentum).
+* **Bearish Divergence**: Price hits a new 90-day high, but RSI is lower than its previous high (fading upward momentum).
+* **RSI Filter**: RSI must not have crossed the 50-level mid-point between the two points to ensure a continuous move.
+* **Signal Window**: Scans for signals that triggered within the last 25 periods.
+""")
+
+st.sidebar.header("🏷️ Tags Explained")
+st.sidebar.markdown("""
+* **EMA8 / EMA21**: Price is holding above (Bullish) or below (Bearish) the respective EMA, showing trend alignment.
+* **VOL_HIGH**: Volume is at least 150% of the 30-day average volume (high conviction).
+* **V_GROWTH**: Volume on the Signal Date is higher than the volume on the first point (P1).
+""")
+
+# Secrets Mapping for datasets
 try:
     if data_option == "Darcy Data":
         target_url = st.secrets["URL_DARCY"]
