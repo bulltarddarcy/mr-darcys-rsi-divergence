@@ -95,7 +95,8 @@ def find_divergences(df_tf, ticker, timeframe):
     if len(df_tf) < DIVERGENCE_LOOKBACK + 1: return divergences
 
     def get_date_str(point):
-        return df_tf.loc[point.name, 'ChartDate'].strftime('%Y-%m-%d') if timeframe == 'Weekly' else point.name.strftime('%Y-%m-%d')
+        # Timeframe comparison is now case-insensitive to ensure correct Weekly date display
+        return df_tf.loc[point.name, 'ChartDate'].strftime('%Y-%m-%d') if timeframe.lower() == 'weekly' else point.name.strftime('%Y-%m-%d')
             
     start_idx = max(DIVERGENCE_LOOKBACK, len(df_tf) - SIGNAL_LOOKBACK_PERIOD)
     
@@ -177,7 +178,9 @@ try:
     if raw_results:
         res_df = pd.DataFrame(raw_results)
         res_df = res_df.sort_values(by='Signal Date', ascending=False)
-        consolidated_df = res_df.drop_duplicates(subset=['Ticker', 'Type', 'Timeframe'], keep='first')
+        
+        # FIXED: Use groupby to keep the latest signal for BOTH types per ticker
+        consolidated_df = res_df.groupby(['Ticker', 'Type', 'Timeframe']).head(1)
         
         for timeframe in ['Daily', 'Weekly']:
             st.markdown(f"## {timeframe} Analysis")
