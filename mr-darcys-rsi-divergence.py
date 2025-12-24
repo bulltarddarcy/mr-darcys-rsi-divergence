@@ -1,18 +1,40 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import requests
+from io import StringIO
 import os
-import json
 from datetime import datetime
 
-# --- Secrets & Path Configuration ---
-def get_gdrive_download_url(url):
-    """Converts a standard Google Drive view URL into a direct download URL."""
+# --- Improved Data Fetching (Bypasses Large File Warnings) ---
+def download_gdrive_csv(url):
+    """Downloads a CSV from Google Drive, handling virus scan warnings for large files."""
     try:
+        # 1. Extract File ID
         file_id = url.split('/')[-2]
-        return f'https://drive.google.com/uc?export=download&id={file_id}'
-    except Exception:
-        return url
+        download_url = "https://docs.google.com/uc?export=download"
+        
+        session = requests.Session()
+        # Initial request
+        response = session.get(download_url, params={'id': file_id}, stream=True)
+        
+        # Check for Google's 'confirm' token in cookies/HTML (required for >100MB files)
+        token = None
+        for key, value in response.cookies.items():
+            if key.startswith('download_warning'):
+                token = value
+                break
+        
+        if token:
+            # If token found, make a second request with confirmation
+            params = {'id': file_id, 'confirm': token}
+            response = session.get(download_url, params=params, stream=True)
+            
+        # Return as a string buffer for pandas
+        return StringIO(response.text)
+    except Exception as e:
+        st.error(f"Failed to fetch data: {e}")
+        return None
 
 # --- Logic Constants (Synced with Source of Truth) ---
 VOL_SMA_PERIOD = 30
@@ -35,15 +57,14 @@ data_option = st.sidebar.selectbox(
 # Accessing secrets
 try:
     if data_option == "Divergences Data":
-        raw_url = st.secrets["URL_DIVERGENCES"]
+        DATA_URL = st.secrets["URL_DIVERGENCES"]
     else:
-        raw_url = st.secrets["URL_SP500"]
-    DATA_URL = get_gdrive_download_url(raw_url)
+        DATA_URL = st.secrets["URL_SP500"]
 except KeyError:
     st.error("Secrets not found. Please ensure URL_DIVERGENCES and URL_SP500 are set in Streamlit Secrets.")
     st.stop()
 
-# --- Core Functions ---
+# --- Core Logic Functions ---
 
 def prepare_data(df):
     """Clean and map columns from the combined master CSV. Sync with SOT logic."""
@@ -61,7 +82,6 @@ def prepare_data(df):
     w_ema8_col, w_ema21_col = 'W_EMA_8', 'W_EMA_21'
     w_high_col, w_low_col = 'W_HIGH', 'W_LOW'
 
-    # Strict check: High, Low, and Volume are required for SOT logic
     if not all([date_col, close_col, vol_col, high_col, low_col]):
         return None, None
 
@@ -102,106 +122,90 @@ def find_divergences(df_tf, ticker, timeframe):
     for i in range(start_idx, len(df_tf)):
         p2 = df_tf.iloc[i]
         lookback = df_tf.iloc[i - DIVERGENCE_LOOKBACK : i]
-        
         is_vol_high = int(p2['Volume'] > (p2['VolSMA'] * 1.5))
         
-        # --- Standard Bullish (Low) ---
+        # Bullish
         if p2['Low'] < lookback['Low'].min():
             p1 = lookback.loc[lookback['RSI'].idxmin()]
             if p2['RSI'] > (p1['RSI'] + RSI_DIFF_THRESHOLD):
-                # Bullish Invalidation: RSI peaks > 50 between P1 and P2
                 if not (df_tf.loc[p1.name : p2.name, 'RSI'] > 50).any():
-                    # Post-Signal Invalidation
                     post_signal_df = df_tf.iloc[i + 1 :]
                     if not (not post_signal_df.empty and (post_signal_df['RSI'] <= p1['RSI']).any()):
                         tags = []
                         if p2['Price'] >= p2['EMA8']: tags.append(f"EMA{EMA_PERIOD}")
                         if is_vol_high: tags.append("VOL_HIGH")
                         if p2['Volume'] > p1['Volume']: tags.append("V_GROWTH")
-                        
                         divergences.append({
                             'Ticker': ticker, 'Type': 'Bullish', 'Timeframe': timeframe,
-                            'Tags': ", ".join(tags),
-                            'P1 Date': get_date_str(p1), 'Signal Date': get_date_str(p2),
+                            'Tags': ", ".join(tags), 'P1 Date': get_date_str(p1), 'Signal Date': get_date_str(p2),
                             'RSI': f"{int(round(p1['RSI']))} → {int(round(p2['RSI']))}",
-                            'P1 Price': f"${p1['Low']:,.2f}",
-                            'P2 Price': f"${p2['Low']:,.2f}"
+                            'P1 Price': f"${p1['Low']:,.2f}", 'P2 Price': f"${p2['Low']:,.2f}"
                         })
 
-        # --- Standard Bearish (High) ---
+        # Bearish
         if p2['High'] > lookback['High'].max():
             p1 = lookback.loc[lookback['RSI'].idxmax()]
             if p2['RSI'] < (p1['RSI'] - RSI_DIFF_THRESHOLD):
-                # Bearish Invalidation: RSI drops below 50 between P1 and P2
                 if not (df_tf.loc[p1.name : p2.name, 'RSI'] < 50).any():
-                    # Post-Signal Invalidation
                     post_signal_df = df_tf.iloc[i + 1 :]
                     if not (not post_signal_df.empty and (post_signal_df['RSI'] >= p1['RSI']).any()):
                         tags = []
                         if p2['Price'] <= p2['EMA21']: tags.append(f"EMA{EMA21_PERIOD}")
                         if is_vol_high: tags.append("VOL_HIGH")
                         if p2['Volume'] > p1['Volume']: tags.append("V_GROWTH")
-
                         divergences.append({
                             'Ticker': ticker, 'Type': 'Bearish', 'Timeframe': timeframe,
-                            'Tags': ", ".join(tags),
-                            'P1 Date': get_date_str(p1), 'Signal Date': get_date_str(p2),
+                            'Tags': ", ".join(tags), 'P1 Date': get_date_str(p1), 'Signal Date': get_date_str(p2),
                             'RSI': f"{int(round(p1['RSI']))} → {int(round(p2['RSI']))}",
-                            'P1 Price': f"${p1['High']:,.2f}",
-                            'P2 Price': f"${p2['High']:,.2f}"
+                            'P1 Price': f"${p1['High']:,.2f}", 'P2 Price': f"${p2['High']:,.2f}"
                         })
     return divergences
 
 # --- Execution ---
 
-st.info(f"Connecting to data source...")
-try:
-    master = pd.read_csv(DATA_URL)
-    
-    # Robust ticker column detection to prevent 'TICKER' KeyErrors
-    t_col = None
-    for col in master.columns:
-        if col.strip().upper() in ['TICKER', 'SYMBOL', 'SYM', 'CODE']:
-            t_col = col
-            break
+st.info(f"Connecting to data source (handling large file bypass)...")
+csv_buffer = download_gdrive_csv(DATA_URL)
+
+if csv_buffer:
+    try:
+        master = pd.read_csv(csv_buffer)
+        t_col = None
+        for col in master.columns:
+            if col.strip().upper() in ['TICKER', 'SYMBOL', 'SYM', 'CODE']:
+                t_col = col
+                break
+        
+        if not t_col:
+            st.error(f"Could not find a ticker/symbol column. Available: {', '.join(master.columns)}")
+            st.stop()
+
+        all_tickers = master[t_col].unique()
+        raw_results = []
+        progress_bar = st.progress(0)
+
+        for i, ticker in enumerate(all_tickers):
+            df_t = master[master[t_col] == ticker].copy()
+            d_d, d_w = prepare_data(df_t)
+            if d_d is not None: raw_results.extend(find_divergences(d_d, ticker, 'Daily'))
+            if d_w is not None: raw_results.extend(find_divergences(d_w, ticker, 'Weekly'))
+            progress_bar.progress((i + 1) / len(all_tickers))
+
+        if raw_results:
+            res_df = pd.DataFrame(raw_results)
+            res_df = res_df.sort_values(by='Signal Date', ascending=False)
+            consolidated_df = res_df.groupby(['Ticker', 'Type', 'Timeframe']).head(1)
             
-    if not t_col:
-        st.error(f"Could not find a ticker or symbol column. Available: {', '.join(master.columns)}")
-        st.stop()
-
-    all_tickers = master[t_col].unique()
-    raw_results = []
-    progress_bar = st.progress(0)
-
-    for i, ticker in enumerate(all_tickers):
-        df_t = master[master[t_col] == ticker].copy()
-        d_d, d_w = prepare_data(df_t)
-        
-        if d_d is not None:
-            raw_results.extend(find_divergences(d_d, ticker, 'Daily'))
-        if d_w is not None:
-            raw_results.extend(find_divergences(d_w, ticker, 'Weekly'))
-        
-        progress_bar.progress((i + 1) / len(all_tickers))
-
-    if raw_results:
-        res_df = pd.DataFrame(raw_results)
-        res_df = res_df.sort_values(by='Signal Date', ascending=False)
-        
-        # Ensures both Bullish and Bearish signals are kept for a ticker
-        consolidated_df = res_df.groupby(['Ticker', 'Type', 'Timeframe']).head(1)
-        
-        for timeframe in ['Daily', 'Weekly']:
-            st.markdown(f"## {timeframe} Analysis")
-            for s_type, emoji in [('Bullish', '🟢'), ('Bearish', '🔴')]:
-                st.markdown(f"### {emoji} {timeframe} {s_type} Signals")
-                tbl_df = consolidated_df[(consolidated_df['Type'] == s_type) & (consolidated_df['Timeframe'] == timeframe)]
-                if not tbl_df.empty:
-                    st.table(tbl_df.drop(columns=['Type', 'Timeframe']))
-                else:
-                    st.write(f"No {timeframe.lower()} {s_type.lower()} signals found.")
-            st.divider()
-    else:
-        st.write("No divergences found.")
-except Exception as e:
-    st.error(f"Error loading data: {e}")
+            for timeframe in ['Daily', 'Weekly']:
+                st.markdown(f"## {timeframe} Analysis")
+                for s_type, emoji in [('Bullish', '🟢'), ('Bearish', '🔴')]:
+                    st.markdown(f"### {emoji} {timeframe} {s_type} Signals")
+                    tbl_df = consolidated_df[(consolidated_df['Type'] == s_type) & (consolidated_df['Timeframe'] == timeframe)]
+                    if not tbl_df.empty:
+                        st.table(tbl_df.drop(columns=['Type', 'Timeframe']))
+                    else:
+                        st.write(f"No {timeframe.lower()} {s_type.lower()} signals found.")
+                st.divider()
+        else:
+            st.write("No divergences found.")
+    except Exception as e:
+        st.error(f"Error parsing CSV: {e}")
