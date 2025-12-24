@@ -54,10 +54,8 @@ def prepare_data(df):
     high_col = next((col for col in df.columns if 'HIGH' in col and 'W_' not in col), None)
     low_col = next((col for col in df.columns if 'LOW' in col and 'W_' not in col), None)
     
-    # Define Daily Column Names
+    # Define Column Names
     d_rsi_col, d_ema8_col, d_ema21_col = 'RSI_14', 'EMA_8', 'EMA_21'
-    
-    # Define Weekly Column Names
     w_close_col, w_vol_col, w_rsi_col = 'W_CLOSE', 'W_VOLUME', 'W_RSI_14'
     w_ema8_col, w_ema21_col = 'W_EMA_8', 'W_EMA_21'
     w_high_col, w_low_col = 'W_HIGH', 'W_LOW'
@@ -103,7 +101,7 @@ def find_divergences(df_tf, ticker, timeframe):
         p2 = df_tf.iloc[i]
         lookback = df_tf.iloc[i - DIVERGENCE_LOOKBACK : i]
         
-        # Bullish (Using Candle Low)
+        # Bullish (Low)
         if p2['Low'] < lookback['Low'].min():
             p1 = lookback.loc[lookback['RSI'].idxmin()]
             if p2['RSI'] > (p1['RSI'] + RSI_DIFF_THRESHOLD):
@@ -114,7 +112,7 @@ def find_divergences(df_tf, ticker, timeframe):
                         'P1 RSI': round(p1['RSI'], 1), 'P2 RSI': round(p2['RSI'], 1),
                         'P1 Price': round(p1['Low'], 2), 'P2 Price': round(p2['Low'], 2)
                     })
-        # Bearish (Using Candle High)
+        # Bearish (High)
         if p2['High'] > lookback['High'].max():
             p1 = lookback.loc[lookback['RSI'].idxmax()]
             if p2['RSI'] < (p1['RSI'] - RSI_DIFF_THRESHOLD):
@@ -135,7 +133,7 @@ try:
     t_col = next((c for c in master.columns if 'TICKER' in c.upper()), 'TICKER')
     all_tickers = master[t_col].unique()
 
-    all_results = []
+    raw_results = []
     progress_bar = st.progress(0)
 
     for i, ticker in enumerate(all_tickers):
@@ -143,37 +141,41 @@ try:
         d_d, d_w = prepare_data(df_t)
         
         if d_d is not None:
-            all_results.extend(find_divergences(d_d, ticker, 'Daily'))
+            raw_results.extend(find_divergences(d_d, ticker, 'Daily'))
         if d_w is not None:
-            all_results.extend(find_divergences(d_w, ticker, 'Weekly'))
+            raw_results.extend(find_divergences(d_w, ticker, 'Weekly'))
         
         progress_bar.progress((i + 1) / len(all_tickers))
 
-    if all_results:
-        res_df = pd.DataFrame(all_results)
+    if raw_results:
+        # CONSOLIDATION LOGIC: Keep only the latest signal per ticker/type/timeframe
+        res_df = pd.DataFrame(raw_results)
+        # Sort by Signal Date descending to ensure the latest is on top
+        res_df = res_df.sort_values(by='Signal Date', ascending=False)
+        # Drop duplicates based on the unique combination of ticker, type, and timeframe
+        consolidated_df = res_df.drop_duplicates(subset=['Ticker', 'Type', 'Timeframe'], keep='first')
         
         # --- Stacked Layout (Full Width) ---
-        # Stacks tables on top of each other for better readability on mobile/web
         for timeframe in ['Daily', 'Weekly']:
             st.markdown(f"## {timeframe} Analysis")
             
             # Bullish Table
             st.markdown(f"### 🟢 {timeframe} Bullish Signals")
-            bull_df = res_df[(res_df['Type'] == 'Bullish') & (res_df['Timeframe'] == timeframe)]
+            bull_df = consolidated_df[(consolidated_df['Type'] == 'Bullish') & (consolidated_df['Timeframe'] == timeframe)]
             if not bull_df.empty:
-                st.table(bull_df.drop(columns=['Type', 'Timeframe'])) # Drop redundant columns for display
+                st.table(bull_df.drop(columns=['Type', 'Timeframe']))
             else:
                 st.write(f"No {timeframe.lower()} bullish signals found.")
             
             # Bearish Table
             st.markdown(f"### 🔴 {timeframe} Bearish Signals")
-            bear_df = res_df[(res_df['Type'] == 'Bearish') & (res_df['Timeframe'] == timeframe)]
+            bear_df = consolidated_df[(consolidated_df['Type'] == 'Bearish') & (consolidated_df['Timeframe'] == timeframe)]
             if not bear_df.empty:
                 st.table(bear_df.drop(columns=['Type', 'Timeframe']))
             else:
                 st.write(f"No {timeframe.lower()} bearish signals found.")
             
-            st.divider() # Visual separator between Daily and Weekly
+            st.divider()
     else:
         st.write("No divergences found.")
 except Exception as e:
