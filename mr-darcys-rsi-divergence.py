@@ -79,9 +79,9 @@ st.sidebar.markdown("""
 
 st.sidebar.header("🏷️ Tags Explained")
 st.sidebar.markdown("""
-* **EMA8 / EMA21**: Price is holding above (Bullish) or below (Bearish) the respective EMA, showing trend alignment.
-* **VOL_HIGH**: Volume is at least 150% of the 30-day average volume (high conviction).
-* **V_GROWTH**: Volume on the Signal Date is higher than the volume on the first point (P1).
+* **EMA8 / EMA21 (Dynamic)**: Price is **currently** holding above (Bullish) or below (Bearish) the EMA in the most recent data, regardless of when the signal triggered.
+* **VOL_HIGH**: Volume on the Signal Date was at least 150% of the 30-day average volume.
+* **V_GROWTH**: Volume on the Signal Date was higher than the volume on the first point (P1).
 """)
 
 # Secrets Mapping for datasets
@@ -147,9 +147,12 @@ def prepare_data(df):
     return df_d, df_w
 
 def find_divergences(df_tf, ticker, timeframe):
-    """Detection logic."""
+    """Detection logic with dynamic EMA tags."""
     divergences = []
     if len(df_tf) < DIVERGENCE_LOOKBACK + 1: return divergences
+
+    # Get the latest row available in the dataset for dynamic status checks
+    latest_p = df_tf.iloc[-1]
 
     def get_date_str(p):
         return df_tf.loc[p.name, 'ChartDate'].strftime('%Y-%m-%d') if timeframe.lower() == 'weekly' else p.name.strftime('%Y-%m-%d')
@@ -169,9 +172,14 @@ def find_divergences(df_tf, ticker, timeframe):
                     post_df = df_tf.iloc[i + 1 :]
                     if not (not post_df.empty and (post_df['RSI'] <= p1['RSI']).any()):
                         tags = []
-                        if 'EMA8' in p2 and p2['Price'] >= p2['EMA8']: tags.append(f"EMA{EMA_PERIOD}")
+                        
+                        # DYNAMIC TAG: Check if current (latest) price is above EMA8
+                        if 'EMA8' in latest_p and latest_p['Price'] >= latest_p['EMA8']: 
+                            tags.append(f"EMA{EMA_PERIOD}")
+                        
                         if is_vol_high: tags.append("VOL_HIGH")
                         if p2['Volume'] > p1['Volume']: tags.append("V_GROWTH")
+                        
                         divergences.append({
                             'Ticker': ticker, 'Type': 'Bullish', 'Timeframe': timeframe, 'Tags': ", ".join(tags),
                             'P1 Date': get_date_str(p1), 'Signal Date': get_date_str(p2),
@@ -187,9 +195,14 @@ def find_divergences(df_tf, ticker, timeframe):
                     post_df = df_tf.iloc[i + 1 :]
                     if not (not post_df.empty and (post_df['RSI'] >= p1['RSI']).any()):
                         tags = []
-                        if 'EMA21' in p2 and p2['Price'] <= p2['EMA21']: tags.append(f"EMA{EMA21_PERIOD}")
+                        
+                        # DYNAMIC TAG: Check if current (latest) price is below EMA21
+                        if 'EMA21' in latest_p and latest_p['Price'] <= latest_p['EMA21']: 
+                            tags.append(f"EMA{EMA21_PERIOD}")
+                            
                         if is_vol_high: tags.append("VOL_HIGH")
                         if p2['Volume'] > p1['Volume']: tags.append("V_GROWTH")
+                        
                         divergences.append({
                             'Ticker': ticker, 'Type': 'Bearish', 'Timeframe': timeframe, 'Tags': ", ".join(tags),
                             'P1 Date': get_date_str(p1), 'Signal Date': get_date_str(p2),
