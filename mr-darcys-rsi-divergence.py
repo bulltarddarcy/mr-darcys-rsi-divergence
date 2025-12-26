@@ -75,19 +75,16 @@ EMA21_PERIOD = 21
 # --- Streamlit UI Setup ---
 st.set_page_config(page_title="RSI Divergence Scanner", layout="wide")
 
-# Custom CSS to change the st.pills highlight color from red to a neutral Slate Blue
+# FIX: Changed unsafe_allow_Costs to unsafe_allow_html
 st.markdown("""
     <style>
-    /* Change background of selected pill */
-    button[data-baseweb="tab"], .st-emotion-cache-12w0qcf {
-        border-radius: 20px;
-    }
     div[data-testid="stPills"] button[aria-checked="true"] {
         background-color: #475569 !important;
         color: white !important;
+        border-color: #475569 !important;
     }
     </style>
-    """, unsafe_allow_Costs=True)
+    """, unsafe_allow_html=True)
 
 st.title("📈 RSI Divergence Scanner")
 
@@ -151,6 +148,7 @@ def find_divergences(df_tf, ticker, timeframe):
         lookback = df_tf.iloc[i - DIVERGENCE_LOOKBACK : i]
         is_vol_high = int(p2['Volume'] > (p2['VolSMA'] * 1.5)) if not pd.isna(p2['VolSMA']) else 0
         
+        # Bullish
         if p2['Low'] < lookback['Low'].min():
             p1 = lookback.loc[lookback['RSI'].idxmin()]
             if p2['RSI'] > (p1['RSI'] + RSI_DIFF_THRESHOLD):
@@ -168,6 +166,7 @@ def find_divergences(df_tf, ticker, timeframe):
                             'P1 Price': f"${p1['Low']:,.2f}", 'P2 Price': f"${p2['Low']:,.2f}"
                         })
 
+        # Bearish
         if p2['High'] > lookback['High'].max():
             p1 = lookback.loc[lookback['RSI'].idxmax()]
             if p2['RSI'] < (p1['RSI'] - RSI_DIFF_THRESHOLD):
@@ -220,13 +219,12 @@ elif csv_buffer:
             st.error(f"Ticker column not found.")
             st.stop()
 
-        # --- VIEW SCANNED TICKERS (The "Low Overhead" approach) ---
+        # --- VIEW SCANNED TICKERS ---
         all_tickers = sorted(master[t_col].unique())
         with st.expander(f"🔍 View Scanned Tickers ({len(all_tickers)} symbols)"):
             search_query = st.text_input("Filter ticker list...", placeholder="Type symbol here...").upper()
             filtered_tickers = [t for t in all_tickers if search_query in t]
             
-            # Show in 6 columns for clean layout
             cols = st.columns(6)
             for idx, ticker in enumerate(filtered_tickers):
                 cols[idx % 6].write(ticker)
@@ -265,18 +263,18 @@ elif csv_buffer:
         with col1:
             st.subheader("📝 Strategy Logic")
             st.markdown(f"""
-            * **Signal Window**: The scanner looks for valid divergences occurring within the last **{SIGNAL_LOOKBACK_PERIOD} periods** from the most recent data point.
-            * **Lookback Window**: For every point in the Signal Window, the scanner checks the preceding **{DIVERGENCE_LOOKBACK} periods** to establish price highs/lows and RSI extremes.
-            * **Bullish Divergence**: Price hits a new low relative to the Lookback Window, but RSI is higher than the previous RSI low found in that window.
-            * **Bearish Divergence**: Price hits a new high relative to the Lookback Window, but RSI is lower than the previous RSI high found in that window.
+            * **Signal Window**: The scanner checks for divergences occurring within the last **{SIGNAL_LOOKBACK_PERIOD} periods** from the most recent available data point.
+            * **Lookback Window**: For each potential signal, the scanner searches the preceding **{DIVERGENCE_LOOKBACK} periods** to identify the historical price and RSI reference points.
+            * **Bullish Divergence**: Price reaches a new low relative to its Lookback Window, but the RSI remains higher than its own previous low within that same window.
+            * **Bearish Divergence**: Price reaches a new high relative to its Lookback Window, but the RSI remains lower than its own previous high within that same window.
             """)
         with col2:
             st.subheader("🏷️ Tags Explained")
             st.markdown(f"""
-            * **EMA{EMA_PERIOD} (Bullish)**: Price is currently holding **above** the {EMA_PERIOD}-period EMA.
-            * **EMA{EMA21_PERIOD} (Bearish)**: Price is currently holding **below** the {EMA21_PERIOD}-period EMA.
-            * **VOL_HIGH**: Volume on the Signal Date was >150% of the **{VOL_SMA_PERIOD}-period** average.
-            * **V_GROW**: Volume on the Signal Date is higher than the volume on the first divergence point (P1).
+            * **EMA{EMA_PERIOD}**: Added to **Bullish** signals if the current price is holding **above** the {EMA_PERIOD}-period EMA.
+            * **EMA{EMA21_PERIOD}**: Added to **Bearish** signals if the current price is holding **below** the {EMA21_PERIOD}-period EMA.
+            * **VOL_HIGH**: Volume on the Signal Date was at least 150% of the **{VOL_SMA_PERIOD}-period** average.
+            * **V_GROW**: Volume on the Signal Date is higher than the volume recorded at the first divergence point (P1).
             """)
 
     except Exception as e:
