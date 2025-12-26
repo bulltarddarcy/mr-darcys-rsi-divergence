@@ -1,4 +1,7 @@
-pandas
 streamlit
+pandas
+numpy
+yfinance
+requests
 plotly
 tqdm
