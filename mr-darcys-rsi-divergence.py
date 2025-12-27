@@ -87,15 +87,16 @@ st.markdown("""
     table { width: 100%; border-collapse: collapse; table-layout: fixed; margin-bottom: 2rem; }
     thead tr th { background-color: #f0f2f6 !important; color: #31333f !important; padding: 12px !important; border-bottom: 2px solid #dee2e6; }
     
-    th:nth-child(1) { width: 8%; }  
-    th:nth-child(2) { width: 22%; } 
-    th:nth-child(3) { width: 10%; }  
-    th:nth-child(4) { width: 10%; }  
-    th:nth-child(5) { width: 8%; }  
-    th:nth-child(6) { width: 10%; }  
-    th:nth-child(7) { width: 10%; }  
-    th:nth-child(8) { width: 11%; } 
-    th:nth-child(9) { width: 11%; } 
+    th:nth-child(1) { width: 7%; }  
+    th:nth-child(2) { width: 15%; } 
+    th:nth-child(3) { width: 9%; }  
+    th:nth-child(4) { width: 9%; }  
+    th:nth-child(5) { width: 7%; }  
+    th:nth-child(6) { width: 9%; }  
+    th:nth-child(7) { width: 9%; }  
+    th:nth-child(8) { width: 9%; } 
+    th:nth-child(9) { width: 13%; } 
+    th:nth-child(10) { width: 13%; }
     
     tbody tr td { padding: 10px !important; border-bottom: 1px solid #eee; word-wrap: break-word; font-size: 14px; }
     .align-left { text-align: left !important; }
@@ -191,7 +192,7 @@ def find_divergences(df_tf, ticker, timeframe):
             if trigger:
                 post_df = df_tf.iloc[i + 1 :]
                 valid = True
-                if s_type == 'Bullish' and not post_df.empty and (post_df['RSI'] <= p1['RSI']).any(): valid = False
+                if s_type == 'Bullish' and not post_df.empty$ and (post_df['RSI'] <= p1['RSI']).any(): valid = False
                 if s_type == 'Bearish' and not post_df.empty and (post_df['RSI'] >= p1['RSI']).any(): valid = False
                 if valid:
                     tags = []
@@ -208,7 +209,7 @@ def find_divergences(df_tf, ticker, timeframe):
                         'P1 Date': get_date_str(p1), 'Signal Date': get_date_str(p2),
                         'RSI': f"{int(round(p1['RSI']))} → {int(round(p2['RSI']))}",
                         'P1 Price': f"${p1['Low' if s_type=='Bullish' else 'High']:,.2f}", 
-                        'P2 Price': f"${p2['Low' if s_type=='Bullish' else 'High']:,.2f}",
+                        'P2 Price': f"${p2['Low' if s_type=='Bullish' else 'High']:,.2f}", 'Current Price': f"${latest_p['Price']:,.2f}",
                         'ev30_raw': ev30, 'ev90_raw': ev90
                     })
     return divergences
@@ -255,7 +256,7 @@ if data_option:
                         st.subheader(f"{emoji} {s_type} Signals")
                         tbl_df = consolidated[(consolidated['Type']==s_type) & (consolidated['Timeframe']==tf)].copy()
                         if not tbl_df.empty:
-                            html = '<table><thead><tr><th>Ticker</th><th>Tags</th><th>P1 Date</th><th>Signal Date</th><th>RSI</th><th>P1 Price</th><th>P2 Price</th><th>EV 30p</th><th>EV 90p</th></tr></thead><tbody>'
+                            html = '<table><thead><tr><th>Ticker</th><th>Tags</th><th>P1 Date</th><th>Signal Date</th><th>RSI</th><th>P1 Price</th><th>P2 Price</th><th>Current Price</th><th>EV 30p</th><th>EV 90p</th></tr></thead><tbody>'
                             for _, row in tbl_df.iterrows():
                                 html += '<tr>'
                                 html += f'<td class="align-left"><b>{row["Ticker"]}</b></td>'
@@ -265,6 +266,7 @@ if data_option:
                                 html += f'<td class="align-center">{row["RSI"]}</td>'
                                 html += f'<td class="align-left">{row["P1 Price"]}</td>'
                                 html += f'<td class="align-left">{row["P2 Price"]}</td>'
+                                html += f'<td class="align-left">{row["Current Price"]}</td>'
                                 for ev_key in ['ev30_raw', 'ev90_raw']:
                                     data = row[ev_key]
                                     if data:
@@ -310,3 +312,5 @@ if data_option:
                 * **V_GROW**: Triggered if volume at the current signal point (P2) is higher than the volume at the previous extreme (P1).
                 """)
     except Exception as e: st.error(f"Error: {e}")
+
+}
