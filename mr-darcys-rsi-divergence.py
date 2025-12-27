@@ -4,7 +4,7 @@ import numpy as np
 import requests
 import re
 from io import StringIO
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # --- Secrets & Path Configuration ---
 def get_confirmed_gdrive_data(url):
@@ -68,89 +68,77 @@ SIGNAL_LOOKBACK_PERIOD = 25
 RSI_DIFF_THRESHOLD = 2
 EMA8_PERIOD = 8
 EMA21_PERIOD = 21
+EV_LOOKBACK_YEARS = 10
 
 # --- Streamlit UI Setup ---
 st.set_page_config(page_title="RSI Divergence Scanner", layout="wide")
 
 st.markdown("""
     <style>
-    /* Table layout fixed ensures consistent column widths across all tables */
-    table { 
-        width: 100%; 
-        border-collapse: collapse; 
-        table-layout: fixed; 
-        margin-bottom: 2rem;
-    }
+    table { width: 100%; border-collapse: collapse; table-layout: fixed; margin-bottom: 2rem; }
+    thead tr th { background-color: #f0f2f6 !important; color: #31333f !important; padding: 12px !important; border-bottom: 2px solid #dee2e6; }
     
-    /* Header Styling and Alignment */
-    thead tr th {
-        background-color: #f0f2f6 !important;
-        color: #31333f !important;
-        padding: 12px !important;
-        border-bottom: 2px solid #dee2e6;
-    }
+    th:nth-child(1) { width: 8%; }  /* Ticker */
+    th:nth-child(2) { width: 22%; } /* Tags */
+    th:nth-child(3) { width: 10%; } /* P1 Date */
+    th:nth-child(4) { width: 10%; } /* Signal Date */
+    th:nth-child(5) { width: 8%; }  /* RSI */
+    th:nth-child(6) { width: 10%; } /* P1 Price */
+    th:nth-child(7) { width: 10%; } /* P2 Price */
+    th:nth-child(8) { width: 11%; } /* EV 30p */
+    th:nth-child(9) { width: 11%; } /* EV 90p */
     
-    /* Specific Fixed Widths for consistency */
-    th:nth-child(1) { width: 10%; } /* Ticker */
-    th:nth-child(2) { width: 32%; } /* Tags */
-    th:nth-child(3) { width: 12%; } /* P1 Date */
-    th:nth-child(4) { width: 12%; } /* Signal Date */
-    th:nth-child(5) { width: 10%; } /* RSI */
-    th:nth-child(6) { width: 12%; } /* P1 Price */
-    th:nth-child(7) { width: 12%; } /* P2 Price */
-    
-    /* Body Cell Padding and wrapping */
-    tbody tr td { 
-        padding: 10px !important; 
-        border-bottom: 1px solid #eee; 
-        word-wrap: break-word;
-    }
-
-    /* Alignment Rules */
+    tbody tr td { padding: 10px !important; border-bottom: 1px solid #eee; word-wrap: break-word; }
     .align-left { text-align: left !important; }
     .align-center { text-align: center !important; }
+    
+    /* Gentle Color Shades for EV */
+    .ev-positive { background-color: #e6f4ea !important; color: #1e7e34; font-weight: 500; }
+    .ev-negative { background-color: #fce8e6 !important; color: #c5221f; font-weight: 500; }
+    .ev-neutral { color: #5f6368; }
 
-    /* Tag Bubble Styling */
-    .tag-bubble {
-        display: inline-block;
-        padding: 2px 10px;
-        border-radius: 12px;
-        font-size: 14px;
-        font-weight: 600;
-        margin: 2px 4px 2px 0;
-        color: white;
-        white-space: nowrap;
-    }
-
-    /* Custom Grey Note Styling */
-    .grey-note {
-        color: #888888;
-        font-size: 16px;
-        margin-bottom: 20px;
-    }
+    .tag-bubble { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 13px; font-weight: 600; margin: 2px 4px 2px 0; color: white; white-space: nowrap; }
+    .grey-note { color: #888888; font-size: 16px; margin-bottom: 5px; }
+    .update-note { color: #555555; font-size: 14px; margin-bottom: 20px; font-weight: bold; }
     </style>
     """, unsafe_allow_html=True)
 
 st.title("📈 RSI Divergence Scanner")
 
-# Replaced st.info with a light grey markdown note
-st.markdown('<div class="grey-note">ℹ️ See bottom of page for strategy logic and tag explanations.</div>', unsafe_allow_html=True)
-
 # --- Helpers ---
 def style_tags(tag_str):
     if not tag_str: return ''
     tags = tag_str.split(", ")
+    colors = {f"EMA{EMA8_PERIOD}": "#4a90e2", f"EMA{EMA21_PERIOD}": "#9b59b6", "VOL_HIGH": "#e67e22", "V_GROW": "#27ae60"}
     html_str = ''
-    colors = {
-        f"EMA{EMA8_PERIOD}": "#4a90e2", 
-        f"EMA{EMA21_PERIOD}": "#9b59b6", 
-        "VOL_HIGH": "#e67e22",        
-        "V_GROW": "#27ae60"           
-    }
     for t in tags:
         color = colors.get(t, "#7f8c8d")
         html_str += f'<span class="tag-bubble" style="background-color: {color};">{t}</span>'
     return html_str
+
+def calculate_ev_data(df, target_rsi, periods, current_price):
+    """Calculates EV by averaging historical % returns for similar RSI levels."""
+    if df.empty or pd.isna(target_rsi):
+        return None
+    
+    cutoff_date = df.index.max() - timedelta(days=365 * EV_LOOKBACK_YEARS)
+    hist_df = df[df.index >= cutoff_date].copy()
+    mask = (hist_df['RSI'] >= target_rsi - 2) & (hist_df['RSI'] <= target_rsi + 2)
+    indices = np.where(mask)[0]
+    
+    returns = []
+    for idx in indices:
+        if idx + periods < len(hist_df):
+            entry_p = hist_df.iloc[idx]['Price']
+            exit_p = hist_df.iloc[idx + periods]['Price']
+            if entry_p > 0: returns.append((exit_p - entry_p) / entry_p)
+    
+    if not returns: return None
+    
+    # We use the Mean (Average) to capture the true mathematical Expected Value
+    avg_ret = np.mean(returns)
+    ev_price = current_price * (1 + avg_ret)
+    return {"price": ev_price, "n": len(returns), "return": avg_ret}
 
 # --- Logic Functions ---
 def prepare_data(df):
@@ -172,24 +160,17 @@ def prepare_data(df):
     df = df.sort_index()
     
     df_d = df[[close_col, vol_col, high_col, low_col, d_rsi_col, d_ema8_col, d_ema21_col]].copy()
-    df_d.rename(columns={
-        close_col: 'Price', vol_col: 'Volume', high_col: 'High', low_col: 'Low',
-        d_rsi_col: 'RSI', d_ema8_col: 'EMA8', d_ema21_col: 'EMA21'
-    }, inplace=True)
+    df_d.rename(columns={close_col: 'Price', vol_col: 'Volume', high_col: 'High', low_col: 'Low', d_rsi_col: 'RSI', d_ema8_col: 'EMA8', d_ema21_col: 'EMA21'}, inplace=True)
     df_d['VolSMA'] = df_d['Volume'].rolling(window=VOL_SMA_PERIOD).mean()
     df_d = df_d.dropna(subset=['Price', 'RSI'])
 
     if all(c in df.columns for c in [w_close_col, w_vol_col, w_high_col, w_low_col, w_rsi_col]):
         df_w = df[[w_close_col, w_vol_col, w_high_col, w_low_col, w_rsi_col, w_ema8_col, w_ema21_col]].copy()
-        df_w.rename(columns={
-            w_close_col: 'Price', w_vol_col: 'Volume', w_high_col: 'High', w_low_col: 'Low',
-            w_rsi_col: 'RSI', w_ema8_col: 'EMA8', w_ema21_col: 'EMA21'
-        }, inplace=True)
+        df_w.rename(columns={w_close_col: 'Price', w_vol_col: 'Volume', w_high_col: 'High', w_low_col: 'Low', w_rsi_col: 'RSI', w_ema8_col: 'EMA8', w_ema21_col: 'EMA21'}, inplace=True)
         df_w['VolSMA'] = df_w['Volume'].rolling(window=VOL_SMA_PERIOD).mean()
         df_w['ChartDate'] = df_w.index - pd.Timedelta(days=4)
         df_w = df_w.dropna(subset=['Price', 'RSI'])
-    else:
-        df_w = None
+    else: df_w = None
     
     return df_d, df_w
 
@@ -197,10 +178,11 @@ def find_divergences(df_tf, ticker, timeframe):
     divergences = []
     if len(df_tf) < DIVERGENCE_LOOKBACK + 1: return divergences
     latest_p = df_tf.iloc[-1]
+    
+    ev30 = calculate_ev_data(df_tf, latest_p['RSI'], 30, latest_p['Price'])
+    ev90 = calculate_ev_data(df_tf, latest_p['RSI'], 90, latest_p['Price'])
 
-    def get_date_str(p):
-        return df_tf.loc[p.name, 'ChartDate'].strftime('%Y-%m-%d') if timeframe.lower() == 'weekly' else p.name.strftime('%Y-%m-%d')
-            
+    def get_date_str(p): return df_tf.loc[p.name, 'ChartDate'].strftime('%Y-%m-%d') if timeframe.lower() == 'weekly' else p.name.strftime('%Y-%m-%d')
     start_idx = max(DIVERGENCE_LOOKBACK, len(df_tf) - SIGNAL_LOOKBACK_PERIOD)
     
     for i in range(start_idx, len(df_tf)):
@@ -208,142 +190,137 @@ def find_divergences(df_tf, ticker, timeframe):
         lookback = df_tf.iloc[i - DIVERGENCE_LOOKBACK : i]
         is_vol_high = int(p2['Volume'] > (p2['VolSMA'] * 1.5)) if not pd.isna(p2['VolSMA']) else 0
         
-        # Bullish Divergence
-        if p2['Low'] < lookback['Low'].min():
-            p1 = lookback.loc[lookback['RSI'].idxmin()]
-            if p2['RSI'] > (p1['RSI'] + RSI_DIFF_THRESHOLD):
-                if not (df_tf.loc[p1.name : p2.name, 'RSI'] > 50).any():
-                    post_df = df_tf.iloc[i + 1 :]
-                    if not (not post_df.empty and (post_df['RSI'] <= p1['RSI']).any()):
-                        tags = []
-                        # Bullish: Above EMA
-                        if 'EMA8' in latest_p and latest_p['Price'] >= latest_p['EMA8']: tags.append(f"EMA{EMA8_PERIOD}")
-                        if 'EMA21' in latest_p and latest_p['Price'] >= latest_p['EMA21']: tags.append(f"EMA{EMA21_PERIOD}")
-                        if is_vol_high: tags.append("VOL_HIGH")
-                        if p2['Volume'] > p1['Volume']: tags.append("V_GROW")
-                        divergences.append({
-                            'Ticker': ticker, 'Type': 'Bullish', 'Timeframe': timeframe, 'Tags': ", ".join(tags),
-                            'P1 Date': get_date_str(p1), 'Signal Date': get_date_str(p2),
-                            'RSI': f"{int(round(p1['RSI']))} → {int(round(p2['RSI']))}",
-                            'P1 Price': f"${p1['Low']:,.2f}", 'P2 Price': f"${p2['Low']:,.2f}"
-                        })
-
-        # Bearish Divergence
-        if p2['High'] > lookback['High'].max():
-            p1 = lookback.loc[lookback['RSI'].idxmax()]
-            if p2['RSI'] < (p1['RSI'] - RSI_DIFF_THRESHOLD):
-                if not (df_tf.loc[p1.name : p2.name, 'RSI'] < 50).any():
-                    post_df = df_tf.iloc[i + 1 :]
-                    if not (not post_df.empty and (post_df['RSI'] >= p1['RSI']).any()):
-                        tags = []
-                        # Bearish: Below EMA
-                        if 'EMA8' in latest_p and latest_p['Price'] <= latest_p['EMA8']: tags.append(f"EMA{EMA8_PERIOD}")
-                        if 'EMA21' in latest_p and latest_p['Price'] <= latest_p['EMA21']: tags.append(f"EMA{EMA21_PERIOD}")
-                        if is_vol_high: tags.append("VOL_HIGH")
-                        if p2['Volume'] > p1['Volume']: tags.append("V_GROW")
-                        divergences.append({
-                            'Ticker': ticker, 'Type': 'Bearish', 'Timeframe': timeframe, 'Tags': ", ".join(tags),
-                            'P1 Date': get_date_str(p1), 'Signal Date': get_date_str(p2),
-                            'RSI': f"{int(round(p1['RSI']))} → {int(round(p2['RSI']))}",
-                            'P1 Price': f"${p1['High']:,.2f}", 'P2 Price': f"${p2['High']:,.2f}"
-                        })
+        for s_type in ['Bullish', 'Bearish']:
+            trigger = False
+            if s_type == 'Bullish' and p2['Low'] < lookback['Low'].min():
+                p1 = lookback.loc[lookback['RSI'].idxmin()]
+                if p2['RSI'] > (p1['RSI'] + RSI_DIFF_THRESHOLD) and not (df_tf.loc[p1.name : p2.name, 'RSI'] > 50).any(): trigger = True
+            elif s_type == 'Bearish' and p2['High'] > lookback['High'].max():
+                p1 = lookback.loc[lookback['RSI'].idxmax()]
+                if p2['RSI'] < (p1['RSI'] - RSI_DIFF_THRESHOLD) and not (df_tf.loc[p1.name : p2.name, 'RSI'] < 50).any(): trigger = True
+            
+            if trigger:
+                post_df = df_tf.iloc[i + 1 :]
+                valid = True
+                if s_type == 'Bullish' and not post_df.empty and (post_df['RSI'] <= p1['RSI']).any(): valid = False
+                if s_type == 'Bearish' and not post_df.empty and (post_df['RSI'] >= p1['RSI']).any(): valid = False
+                
+                if valid:
+                    tags = []
+                    if s_type == 'Bullish':
+                        if latest_p['Price'] >= latest_p.get('EMA8', 0): tags.append(f"EMA{EMA8_PERIOD}")
+                        if latest_p['Price'] >= latest_p.get('EMA21', 0): tags.append(f"EMA{EMA21_PERIOD}")
+                    else:
+                        if latest_p['Price'] <= latest_p.get('EMA8', 999999): tags.append(f"EMA{EMA8_PERIOD}")
+                        if latest_p['Price'] <= latest_p.get('EMA21', 999999): tags.append(f"EMA{EMA21_PERIOD}")
+                    if is_vol_high: tags.append("VOL_HIGH")
+                    if p2['Volume'] > p1['Volume']: tags.append("V_GROW")
+                    
+                    divergences.append({
+                        'Ticker': ticker, 'Type': s_type, 'Timeframe': timeframe, 'Tags': ", ".join(tags),
+                        'P1 Date': get_date_str(p1), 'Signal Date': get_date_str(p2),
+                        'RSI': f"{int(round(p1['RSI']))} → {int(round(p2['RSI']))}",
+                        'P1 Price': f"${p1['Low' if s_type=='Bullish' else 'High']:,.2f}", 
+                        'P2 Price': f"${p2['Low' if s_type=='Bullish' else 'High']:,.2f}",
+                        'ev30_raw': ev30, 'ev90_raw': ev90
+                    })
     return divergences
 
 # --- App Logic ---
 dataset_map = load_dataset_config()
 data_option = st.pills("Select Dataset", options=list(dataset_map.keys()), selection_mode="single", default=list(dataset_map.keys())[0])
 
-if not data_option:
-    st.warning("Please select a dataset.")
-    st.stop()
-
-try:
-    secret_key_name = dataset_map[data_option]
-    target_url = st.secrets[secret_key_name]
-except KeyError:
-    st.error("Secret error.")
-    st.stop()
-
-csv_buffer = get_confirmed_gdrive_data(target_url)
-
-if csv_buffer and csv_buffer != "HTML_ERROR":
+if data_option:
     try:
-        master = pd.read_csv(csv_buffer)
-        t_col = next((c for c in master.columns if c.strip().upper() in ['TICKER', 'SYMBOL']), None)
-        all_tickers = sorted(master[t_col].unique())
-        
-        with st.expander(f"🔍 View Scanned Tickers ({len(all_tickers)} symbols)"):
-            sq = st.text_input("Filter...").upper()
-            ft = [t for t in all_tickers if sq in t]
-            cols = st.columns(6)
-            for i, ticker in enumerate(ft): cols[i % 6].write(ticker)
-
-        raw_results = []
-        progress_bar = st.progress(0, text="Scanning...")
-        grouped = master.groupby(t_col)
-        for i, (ticker, group) in enumerate(grouped):
-            d_d, d_w = prepare_data(group.copy())
-            if d_d is not None: raw_results.extend(find_divergences(d_d, ticker, 'Daily'))
-            if d_w is not None: raw_results.extend(find_divergences(d_w, ticker, 'Weekly'))
-            progress_bar.progress((i + 1) / len(grouped))
-
-        if raw_results:
-            res_df = pd.DataFrame(raw_results).sort_values(by='Signal Date', ascending=False)
-            consolidated = res_df.groupby(['Ticker', 'Type', 'Timeframe']).head(1)
+        target_url = st.secrets[dataset_map[data_option]]
+        csv_buffer = get_confirmed_gdrive_data(target_url)
+        if csv_buffer and csv_buffer != "HTML_ERROR":
+            master = pd.read_csv(csv_buffer)
             
-            for tf in ['Daily', 'Weekly']:
-                st.divider()
-                st.header(f"📅 {tf} Divergence Analysis")
-                for s_type, emoji in [('Bullish', '🟢'), ('Bearish', '🔴')]:
-                    st.subheader(f"{emoji} {s_type} Signals")
-                    tbl_df = consolidated[(consolidated['Type']==s_type) & (consolidated['Timeframe']==tf)].copy()
-                    if not tbl_df.empty:
-                        display_df = tbl_df.drop(columns=['Type', 'Timeframe'])
-                        
-                        align_map = {
-                            'Ticker': 'align-left', 'Tags': 'align-left',
-                            'P1 Price': 'align-left', 'P2 Price': 'align-left',
-                            'P1 Date': 'align-center', 'Signal Date': 'align-center', 'RSI': 'align-center'
-                        }
+            # (1) Handle "Last Updated" Date
+            date_col = next((col for col in master.columns if 'DATE' in col.upper()), None)
+            last_updated_str = "Unknown"
+            if date_col:
+                last_updated_str = pd.to_datetime(master[date_col]).max().strftime('%Y-%m-%d')
+            
+            st.markdown('<div class="grey-note">ℹ️ See bottom of page for strategy logic and tag explanations.</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="update-note">📅 Last Updated: {last_updated_str}</div>', unsafe_allow_html=True)
 
-                        html = '<table><thead><tr>'
-                        for col in display_df.columns:
-                            cls = align_map.get(col, 'align-center')
-                            html += f'<th class="{cls}">{col}</th>'
-                        html += '</tr></thead><tbody>'
-                        
-                        for _, row in display_df.iterrows():
-                            html += '<tr>'
-                            html += f'<td class="align-left"><b>{row["Ticker"]}</b></td>'
-                            html += f'<td class="align-left">{style_tags(row["Tags"])}</td>'
-                            html += f'<td class="align-center">{row["P1 Date"]}</td>'
-                            html += f'<td class="align-center">{row["Signal Date"]}</td>'
-                            html += f'<td class="align-center">{row["RSI"]}</td>'
-                            html += f'<td class="align-left">{row["P1 Price"]}</td>'
-                            html += f'<td class="align-left">{row["P2 Price"]}</td>'
-                            html += '</tr>'
-                        html += '</tbody></table>'
-                        
-                        st.markdown(html, unsafe_allow_html=True)
-                    else: st.write("No signals.")
-        else: st.warning("No signals.")
+            t_col = next((c for c in master.columns if c.strip().upper() in ['TICKER', 'SYMBOL']), None)
+            all_tickers = sorted(master[t_col].unique())
+            
+            with st.expander(f"🔍 View Scanned Tickers ({len(all_tickers)} symbols)"):
+                sq = st.text_input("Filter...").upper()
+                ft = [t for t in all_tickers if sq in t]
+                cols = st.columns(6)
+                for i, ticker in enumerate(ft): cols[i % 6].write(ticker)
 
-        # --- Footer Logic ---
-        st.divider()
-        col1, col2 = st.columns(2)
-        with col1:
-            st.subheader("📝 Strategy Logic")
-            st.markdown(f"""
-            * **Signal Window**: Scans signals within the last **{SIGNAL_LOOKBACK_PERIOD} periods**.
-            * **Lookback Window**: Searches preceding **{DIVERGENCE_LOOKBACK} periods** for extremes.
-            * **Bullish Divergence**: New price low, but RSI is higher than previous low.
-            * **Bearish Divergence**: New price high, but RSI is lower than previous high.
-            """)
-        with col2:
-            st.subheader("🏷️ Tags Explained")
-            st.markdown(f"""
-            * **EMA{EMA8_PERIOD} / EMA{EMA21_PERIOD}**: Added if current price is holding **above** (Bullish) or **below** (Bearish) these levels.
-            * **VOL_HIGH**: Volume > 150% of {VOL_SMA_PERIOD}-day average.
-            * **V_GROW**: Signal Volume > P1 Volume.
-            """)
+            raw_results = []
+            progress_bar = st.progress(0, text="Scanning...")
+            grouped = master.groupby(t_col)
+            for i, (ticker, group) in enumerate(grouped):
+                d_d, d_w = prepare_data(group.copy())
+                if d_d is not None: raw_results.extend(find_divergences(d_d, ticker, 'Daily'))
+                if d_w is not None: raw_results.extend(find_divergences(d_w, ticker, 'Weekly'))
+                progress_bar.progress((i + 1) / len(grouped))
+
+            if raw_results:
+                res_df = pd.DataFrame(raw_results).sort_values(by='Signal Date', ascending=False)
+                consolidated = res_df.groupby(['Ticker', 'Type', 'Timeframe']).head(1)
+                
+                for tf in ['Daily', 'Weekly']:
+                    st.divider()
+                    st.header(f"📅 {tf} Divergence Analysis")
+                    for s_type, emoji in [('Bullish', '🟢'), ('Bearish', '🔴')]:
+                        st.subheader(f"{emoji} {s_type} Signals")
+                        tbl_df = consolidated[(consolidated['Type']==s_type) & (consolidated['Timeframe']==tf)].copy()
+                        if not tbl_df.empty:
+                            html = '<table><thead><tr><th>Ticker</th><th>Tags</th><th>P1 Date</th><th>Signal Date</th><th>RSI</th><th>P1 Price</th><th>P2 Price</th><th>EV 30p</th><th>EV 90p</th></tr></thead><tbody>'
+                            for _, row in tbl_df.iterrows():
+                                html += '<tr>'
+                                html += f'<td class="align-left"><b>{row["Ticker"]}</b></td>'
+                                html += f'<td class="align-left">{style_tags(row["Tags"])}</td>'
+                                html += f'<td class="align-center">{row["P1 Date"]}</td>'
+                                html += f'<td class="align-center">{row["Signal Date"]}</td>'
+                                html += f'<td class="align-center">{row["RSI"]}</td>'
+                                html += f'<td class="align-left">{row["P1 Price"]}</td>'
+                                html += f'<td class="align-left">{row["P2 Price"]}</td>'
+                                
+                                for ev_key in ['ev30_raw', 'ev90_raw']:
+                                    data = row[ev_key]
+                                    if data:
+                                        is_pos = data['return'] > 0
+                                        cls = ""
+                                        if s_type == 'Bullish': cls = "ev-positive" if is_pos else "ev-negative"
+                                        else: cls = "ev-positive" if not is_pos else "ev-negative"
+                                        html += f'<td class="{cls}">${data["price"]:,.2f} <br><small>(N={data["n"]})</small></td>'
+                                    else: html += '<td class="ev-neutral">N/A</td>'
+                                
+                                html += '</tr>'
+                            html += '</tbody></table>'
+                            st.markdown(html, unsafe_allow_html=True)
+                        else: st.write("No signals.")
+            else: st.warning("No signals.")
+            
+            # (2) Footer with expanded EV logic
+            st.divider()
+            col1, col2 = st.columns(2)
+            with col1:
+                st.subheader("📝 Strategy Logic")
+                st.markdown(f"""
+                * **Signal Window**: Scans signals within the last **{SIGNAL_LOOKBACK_PERIOD} periods**.
+                * **Lookback Window**: Searches preceding **{DIVERGENCE_LOOKBACK} periods** for extremes.
+                * **Expected Value (EV)**: Projects the price 30 and 90 periods out based on the **Average (Mean)** historical return of every instance where RSI was within $\pm 2$ of current levels (max 10yr lookback).
+                * **Sample Size (N)**: Indicates the number of historical matches found. Higher $N$ suggests higher statistical significance.
+                * **Profitability Coloring**: 
+                    * 🟢 **Green**: EV supports the trade (Bullish EV > Price / Bearish EV < Price).
+                    * 🔴 **Red**: EV contradicts the trade direction.
+                """)
+            with col2:
+                st.subheader("🏷️ Tags Explained")
+                st.markdown(f"""
+                * **EMA{EMA8_PERIOD} / EMA{EMA21_PERIOD}**: Added if current price is holding **above** (Bullish) or **below** (Bearish) these levels.
+                * **VOL_HIGH**: Volume > 150% of {VOL_SMA_PERIOD}-day average.
+                * **V_GROW**: Signal Volume > P1 Volume.
+                """)
     except Exception as e: st.error(f"Error: {e}")
