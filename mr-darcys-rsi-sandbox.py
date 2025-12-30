@@ -776,37 +776,18 @@ def run_rankings_app(df):
         return
     tab_rank, tab_ideas, tab_vol = st.tabs(["🧠 Smart Money", "💡 Top 3", "🤡 Bulltard"])
     mc_thresh = {"0B":0, "2B":2e9, "10B":1e10, "50B":5e10, "100B":1e11}.get(min_mkt_cap_rank, 1e10)
-    # NOTE: calculate_smart_money_score wasn't in the provided code, so assuming it was removed or needs re-adding.
-    # However, the user provided code didn't have it. I will mock it to avoid crashing if it's missing, 
-    # but based on the code provided, I can only work with what's there. 
-    # WAIT: The code provided in the prompt calls calculate_smart_money_score but doesn't define it.
-    # Since I am fixing bugs, I will add a placeholder for it to prevent crash, or check if it was missed.
-    # Actually, looking at the code provided, calculate_smart_money_score IS called in run_rankings_app.
-    # If it's not defined, that's another bug. I will define a simple version based on context.
     
-    # Adding missing function calculate_smart_money_score locally or helper
-    # Since I cannot see the original implementation, I will implement a logic matching the usage.
+    # --- HELPER FOR RANKINGS ---
     def calculate_smart_money_score(df, start, end, mc_thresh, filter_ema, limit):
-         # This is a reconstruction based on usage in run_rankings_app
-         # Returns top_bulls, top_bears, valid_data
-         # Logic: Score based on unique trades, volume, and consistency
          mask = (df["Trade Date"].dt.date >= start) & (df["Trade Date"].dt.date <= end)
          d = df[mask].copy()
          if d.empty: return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
-         
-         # Filter MC
          unique_syms = d["Symbol"].unique()
          mcs = fetch_market_caps_batch(unique_syms)
          d["MC"] = d["Symbol"].map(mcs).fillna(0)
          d = d[d["MC"] >= mc_thresh]
+         if d.empty: return pd.DataFrame(), pd.DataFrame(), d
          
-         # Scoring logic (simplified)
-         # Bullish: Calls Bought + Puts Sold
-         # Bearish: Puts Bought
-         # Score = (Bull Vol - Bear Vol) normalized?
-         # Or Smart Money usually means large notionals.
-         
-         # Let's just group by symbol and sum dollars for now as a proxy
          gr = d.groupby(["Symbol", "Order Type"])["Dollars"].sum().unstack(fill_value=0)
          if "Calls Bought" not in gr.columns: gr["Calls Bought"] = 0
          if "Puts Sold" not in gr.columns: gr["Puts Sold"] = 0
@@ -816,25 +797,19 @@ def run_rankings_app(df):
          gr["Bear_Flow"] = gr["Puts Bought"]
          gr["Net_Flow"] = gr["Bull_Flow"] - gr["Bear_Flow"]
          
-         # Score 0-100 based on rank
          gr["Score"] = pd.qcut(gr["Net_Flow"].rank(method='first'), 100, labels=False) + 1
          
-         # Prepare result
-         gr = gr.reset_index()
-         gr["Qty"] = d.groupby("Symbol")["Contracts"].sum().values
-         gr["Last"] = d.groupby("Symbol")["Trade Date"].max().dt.strftime("%Y-%m-%d").values
+         # Align by Symbol index
+         gr["Trade_Count"] = d.groupby("Symbol")["Contracts"].sum()
+         gr["Last Trade"] = d.groupby("Symbol")["Trade Date"].max().dt.strftime("%Y-%m-%d")
          
+         gr = gr.reset_index()
          bulls = gr.sort_values("Score", ascending=False).head(limit)
          bears = gr.sort_values("Score", ascending=True).head(limit)
-         
-         # Fix columns for display
-         bulls = bulls.rename(columns={"Last": "Last Trade"})
-         bears = bears.rename(columns={"Last": "Last Trade"})
-         
          return bulls, bears, d
+    # ---------------------------
 
     top_bulls, top_bears, valid_data = calculate_smart_money_score(df, rank_start, rank_end, mc_thresh, filter_ema, limit)
-    
     with tab_rank:
         if valid_data.empty:
             st.warning("Not enough data for Smart Money scores.")
@@ -982,7 +957,7 @@ def run_pivot_tables_app(df):
     st.markdown('<div class="light-note" style="margin-top: 5px;">ℹ️ Market Cap filtering can be buggy. If empty, reset \'Mkt Cap Min\' to 0B.</div>', unsafe_allow_html=True)
     st.markdown('<div class="light-note" style="margin-top: 5px;">ℹ️ Scroll down to see the Risk Reversals table.</div>', unsafe_allow_html=True)
     
-    # --- INSERTED FIX: apply_f definition inside scope ---
+    # --- HELPER INSIDE SCOPE ---
     def apply_f(df_in):
         if df_in.empty: return df_in
         tmp = df_in.copy()
@@ -1001,7 +976,7 @@ def run_pivot_tables_app(df):
              keep_syms = [s for s in unique_syms if s in techs and techs[s][0] is not None and techs[s][2] is not None and techs[s][0] > techs[s][2]]
              tmp = tmp[tmp["Symbol"].isin(keep_syms)]
         return tmp
-    # -----------------------------------------------------
+    # ---------------------------
 
     d_range = df[(df["Trade Date"].dt.date >= td_start) & (df["Trade Date"].dt.date <= td_end)].copy()
     if d_range.empty: return
@@ -1033,9 +1008,7 @@ def run_pivot_tables_app(df):
         ps_pool = filter_out_matches(ps_pool, rr_matches)
     else:
         df_rr = pd.DataFrame(columns=['Symbol', 'Trade Date', 'Expiry_DT', 'Contracts', 'Dollars', 'Strike', 'Pair_ID', 'Pair_Side'])
-    
     df_cb_f, df_ps_f, df_pb_f, df_rr_f = apply_f(cb_pool), apply_f(ps_pool), apply_f(pb_pool), apply_f(df_rr)
-    
     def get_p(data, is_rr=False):
         if data.empty: return pd.DataFrame(columns=["Symbol", "Strike", "Expiry_Table", "Contracts", "Dollars"])
         sr = data.groupby("Symbol")["Dollars"].sum().rename("Total_Sym_Dollars")
