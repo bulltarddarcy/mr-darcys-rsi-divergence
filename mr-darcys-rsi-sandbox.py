@@ -14,7 +14,7 @@ from io import StringIO
 import altair as alt
 import google.generativeai as genai
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from scipy.signal import argrelextrema # Added for fast divergence scanning
+from scipy.signal import argrelextrema 
 
 # --- 0. PAGE CONFIGURATION (MUST BE FIRST) ---
 st.set_page_config(page_title="Trading Toolbox", layout="wide", page_icon="💎")
@@ -1099,7 +1099,7 @@ def run_strike_zones_app(df):
             "Include": st.column_config.CheckboxColumn("Include", default=True),
             "Trade Date": st.column_config.DateColumn("Trade Date", format="DD MMM YY"),
             "Expiry_DT": st.column_config.DateColumn("Expiry", format="DD MMM YY"),
-            "Dollars": st.column_config.NumberColumn("Dollars", format="$%d"), # FORMAT STRING APPLIED HERE
+            "Dollars": st.column_config.NumberColumn("Dollars", format="$%d"),
             "Contracts": st.column_config.NumberColumn("Qty", format="%d"),
             order_type_col: st.column_config.TextColumn("Order Type"),
             "Symbol": st.column_config.TextColumn("Symbol"),
@@ -1237,14 +1237,21 @@ def run_rsi_scanner_app(df_global):
                         for p in periods:
                             valid_indices = match_indices[match_indices + p < total_len]
                             if len(valid_indices) == 0:
-                                results.append({"Days": p, "Win Rate": np.nan, "Avg Ret": np.nan, "Count": 0})
+                                results.append({"Days": p, "Win Rate": np.nan, "Avg Ret": np.nan, "Count": 0, "Profit Factor": np.nan})
                                 continue
                             entry_prices = full_close[valid_indices]
                             exit_prices = full_close[valid_indices + p]
                             returns = (exit_prices - entry_prices) / entry_prices
-                            win_rate = np.mean(returns > 0) * 100
+                            wins = returns[returns > 0]
+                            losses = returns[returns <= 0]
+                            n_wins = len(wins)
+                            n_total = len(returns)
+                            win_rate = (n_wins / n_total) * 100
                             avg_ret = np.mean(returns) * 100
-                            results.append({"Days": p, "Win Rate": win_rate, "Avg Ret": avg_ret, "Count": len(valid_indices)})
+                            gross_profit = np.sum(wins)
+                            gross_loss = np.abs(np.sum(losses)) if len(losses) > 0 else 0
+                            profit_factor = gross_profit / gross_loss if gross_loss != 0 else 99.9
+                            results.append({"Days": p, "Win Rate": win_rate, "Avg Ret": avg_ret, "Count": len(valid_indices), "Profit Factor": profit_factor})
                         res_df = pd.DataFrame(results)
                         with c_right:
                             if matches.empty: st.warning(f"No historical periods found where RSI was between {rsi_min:.2f} and {rsi_max:.2f}.")
@@ -1264,7 +1271,7 @@ def run_rsi_scanner_app(df_global):
                                     return f'color: {color}; font-weight: bold;'
                                 format_func = lambda x: f"{x:+.2f}%" if pd.notnull(x) else "—"
                                 format_wr = lambda x: f"{x:.1f}%" if pd.notnull(x) else "—"
-                                st.dataframe(res_df.style.format({"Win Rate": format_wr, "Avg Ret": format_func}).map(highlight_ret, subset=["Avg Ret"]).apply(highlight_best, axis=1).set_table_styles([dict(selector="th", props=[("font-weight", "bold"), ("background-color", "#f0f2f6")])]),use_container_width=False,column_config={"Days": st.column_config.NumberColumn("Days", width=60),"Win Rate": st.column_config.TextColumn("Win Rate", width=80),"Avg Ret": st.column_config.TextColumn("Avg Ret", width=80),"Count": st.column_config.NumberColumn("Count", width=60)},hide_index=True)
+                                st.dataframe(res_df.style.format({"Win Rate": format_wr, "Avg Ret": format_func}).map(highlight_ret, subset=["Avg Ret"]).apply(highlight_best, axis=1).set_table_styles([dict(selector="th", props=[("font-weight", "bold"), ("background-color", "#f0f2f6")])]),use_container_width=False,column_config={"Days": st.column_config.NumberColumn("Days", width=60),"Win Rate": st.column_config.TextColumn("Win Rate", width=80),"Avg Ret": st.column_config.TextColumn("Avg Ret", width=80),"Count": st.column_config.NumberColumn("Count", width=60),"Profit Factor": st.column_config.NumberColumn("Profit Factor", format="%.2f")},hide_index=True)
                         st.markdown("<br><br><br>", unsafe_allow_html=True)
     with tab_div:
         data_option_div = st.pills("Dataset", options=options, selection_mode="single", default=options[0] if options else None, label_visibility="collapsed", key="rsi_div_pills")
@@ -1274,8 +1281,8 @@ def run_rsi_scanner_app(df_global):
                 st.markdown('<div class="footer-header">📉 SIGNAL LOGIC</div>', unsafe_allow_html=True)
                 st.markdown(f"""* **Identification**: Scans for **True Pivots** over a **{SIGNAL_LOOKBACK_PERIOD}-period** window.\n* **Divergence**: \n    * **Bullish**: Price makes a Lower Low, but RSI makes a Higher Low.\n    * **Bearish**: Price makes a Higher High, but RSI makes a Lower High.\n* **Invalidation**: If RSI crosses the 50 midline between pivots, the setup is reset.""")
             with f_col2:
-                st.markdown('<div class="footer-header">🔮 EV ANALYSIS</div>', unsafe_allow_html=True)
-                st.markdown(f"""* **Data Pool**: Analyzes 10 years of history (where available).\n* **Method**: Finds all historical instances where RSI was within **±2 points** of the signal candle.\n* **Metric**: Calculates the **Mean % Return** after 30 and 90 trading days.\n* **Base Price**: Returns and Implied Prices are calculated off the **Signal Day Close** (not the Pivot Low/High).\n* **Constraint**: Requires **N ≥ 5** historical matches to display.""")
+                st.markdown('<div class="footer-header">HISTORICAL OPTIMIZATION</div>', unsafe_allow_html=True)
+                st.markdown(f"""* **Signal-Based**: The system finds every matching historical signal (e.g. every Bullish Divergence in history).\n* **Hold Periods**: It tests forward returns for 10, 30, 60, 90, and 180 days.\n* **Selection**: The table displays the "Best Period" which had the highest Profit Factor historically.\n* **Profit Factor**: (Sum of Wins / Sum of Losses). A PF > 1.5 is generally considered good.""")
             with f_col3:
                 st.markdown('<div class="footer-header">🏷️ TAGS</div>', unsafe_allow_html=True)
                 st.markdown(f"""* **EMA{EMA8_PERIOD}**: Bullish (Price > EMA8) or Bearish (Price < EMA8).\n* **EMA{EMA21_PERIOD}**: Bullish (Price > EMA21) or Bearish (Price < EMA21).\n* **VOL_HIGH**: Signal candle volume is > 150% of the 30-day average.\n* **VOL_GROW**: Volume on the second pivot (P2) is higher than the first pivot (P1).""")
@@ -1343,7 +1350,7 @@ def run_rsi_scanner_app(df_global):
     with tab_pct:
         data_option_pct = st.pills("Dataset", options=options, selection_mode="single", default=options[0] if options else None, label_visibility="collapsed", key="rsi_pct_pills")
         with st.expander("ℹ️ Page Notes: Percentile Strategy Logic"):
-             st.markdown("""* **Historical Context**: 10-year daily price history analysis.\n* **Signal Trigger**: RSI crosses **ABOVE Low Percentile** (Leaving Low) or **BELOW High Percentile** (Leaving High).\n* **RSI Display**: Shows the **Threshold RSI** (e.g. 10) → **Signal Day RSI**.\n* **EV 30p / 90p**: Expected return 30/90 trading days later based on matches (10-year lookback).\n* **Base Price**: EV calculations are based on the **Signal Day Close**.\n* **Color Logic**: 🟢 Green = Historical profitability (Longs > 0, Shorts < 0). 🔴 Red = Historical loss.\n* **Filter**: Requires >= 5 historical matches.""")
+             st.markdown("""* **Historical Context**: 10-year daily price history analysis.\n* **Signal Trigger**: RSI crosses **ABOVE Low Percentile** (Leaving Low) or **BELOW High Percentile** (Leaving High).\n* **Historical Optimization**: The system scans every historical instance of this percentile crossover and tests 10, 30, 60, 90, 180 day holds.\n* **Best Period**: The holding period that historically produced the highest Profit Factor.\n* **Base Price**: EV calculations are based on the **Signal Day Close**.\n* **Color Logic**: 🟢 Green = Historical profitability (Longs > 0, Shorts < 0). 🔴 Red = Historical loss.\n* **Filter**: Requires >= 5 historical matches.""")
         if data_option_pct:
             try:
                 target_url = st.secrets[dataset_map[data_option_pct]]
