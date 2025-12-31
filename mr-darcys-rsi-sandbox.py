@@ -587,7 +587,7 @@ def prepare_data(df):
         
     return df_d, df_w
 
-def find_divergences(df_tf, ticker, timeframe, min_n=1):
+def find_divergences(df_tf, ticker, timeframe, min_n=0):
     divergences = []
     n_rows = len(df_tf)
     
@@ -609,11 +609,7 @@ def find_divergences(df_tf, ticker, timeframe, min_n=1):
     
     # ---------------------------------------------------------
     # PASS 1: SCAN FULL HISTORY (Requirements A & C)
-    # We scan the entire dataset to build the 'history lists'.
-    # This ensures the 'Profit Factor' and 'Win Rate' are calculated
-    # using ALL historical data, not just the recent window.
     # ---------------------------------------------------------
-    
     bullish_signal_indices = []
     bearish_signal_indices = []
     potential_signals = [] 
@@ -634,86 +630,57 @@ def find_divergences(df_tf, ticker, timeframe, min_n=1):
         
         is_vol_high = int(p2_vol > (p2_volsma * 1.5)) if not np.isnan(p2_volsma) else 0
         
-        # --- Bullish Divergence Logic (Identical to Database) ---
+        # Bullish Logic
         if p2_low < np.min(lb_low):
             p1_idx_rel = np.argmin(lb_rsi)
             p1_rsi = lb_rsi[p1_idx_rel]
-            
             if p2_rsi > (p1_rsi + RSI_DIFF_THRESHOLD):
                 idx_p1_abs = lb_start + p1_idx_rel
                 subset_rsi = rsi_vals[idx_p1_abs : i + 1]
-                
-                # Invalidation: RSI must stay below 50 between pivots
                 if not np.any(subset_rsi > 50): 
                     valid = True
-                    # Forward Invalidation check (ensure next candle doesn't break pivot RSI immediately)
                     if i < n_rows - 1:
                         post_rsi = rsi_vals[i+1:]
                         if np.any(post_rsi <= p1_rsi): valid = False
-                    
                     if valid:
                         bullish_signal_indices.append(i)
-                        potential_signals.append({
-                            "index": i, "type": "Bullish", "p1_idx": idx_p1_abs,
-                            "vol_high": is_vol_high
-                        })
+                        potential_signals.append({"index": i, "type": "Bullish", "p1_idx": idx_p1_abs, "vol_high": is_vol_high})
         
-        # --- Bearish Divergence Logic (Identical to Database) ---
+        # Bearish Logic
         elif p2_high > np.max(lb_high):
             p1_idx_rel = np.argmax(lb_rsi)
             p1_rsi = lb_rsi[p1_idx_rel]
-            
             if p2_rsi < (p1_rsi - RSI_DIFF_THRESHOLD):
                 idx_p1_abs = lb_start + p1_idx_rel
                 subset_rsi = rsi_vals[idx_p1_abs : i + 1]
-                
-                # Invalidation: RSI must stay above 50 between pivots
                 if not np.any(subset_rsi < 50): 
                     valid = True
                     if i < n_rows - 1:
                         post_rsi = rsi_vals[i+1:]
                         if np.any(post_rsi >= p1_rsi): valid = False
-                        
                     if valid:
                         bearish_signal_indices.append(i)
-                        potential_signals.append({
-                            "index": i, "type": "Bearish", "p1_idx": idx_p1_abs,
-                            "vol_high": is_vol_high
-                        })
+                        potential_signals.append({"index": i, "type": "Bearish", "p1_idx": idx_p1_abs, "vol_high": is_vol_high})
 
     # ---------------------------------------------------------
-    # PASS 2: REPORT & BACKTEST (Requirement B)
-    # We iterate through the signals we found, but we ONLY show
-    # the ones that occurred in the last 'SIGNAL_LOOKBACK_PERIOD'
-    # (25 candles), matching the Database visibility.
+    # PASS 2: REPORT & BACKTEST
     # ---------------------------------------------------------
-    
-    # Calculate the index threshold for display
-    # Any signal index below this number is "History" (used for stats) 
-    # but not "Active" (displayed in table).
     display_threshold_idx = n_rows - SIGNAL_LOOKBACK_PERIOD
     
     for sig in potential_signals:
         i = sig["index"]
         
-        # [cite_start]--- FILTER: Only show signals from the last 25 periods [cite: 1] ---
+        # Limit display to the last 25 periods 
         if i < display_threshold_idx:
             continue
 
         s_type = sig["type"]
         idx_p1_abs = sig["p1_idx"]
-            
-        p2_rsi = rsi_vals[i]
-        p2_low = low_vals[i]
-        p2_high = high_vals[i]
-        p2_vol = vol_vals[i]
-        
         latest_p = df_tf.iloc[-1] 
         
         # Tags Generation
         tags = []
         row_at_sig = df_tf.iloc[i]
-        
         if s_type == 'Bullish':
             if row_at_sig['Price'] >= row_at_sig.get('EMA8', 0): tags.append(f"EMA{EMA8_PERIOD}")
             if row_at_sig['Price'] >= row_at_sig.get('EMA21', 0): tags.append(f"EMA{EMA21_PERIOD}")
@@ -722,46 +689,30 @@ def find_divergences(df_tf, ticker, timeframe, min_n=1):
             if row_at_sig['Price'] <= row_at_sig.get('EMA21', 999999): tags.append(f"EMA{EMA21_PERIOD}")
         
         if sig["vol_high"]: tags.append("VOL_HIGH")
-        if p2_vol > vol_vals[idx_p1_abs]: tags.append("VOL_GROW")
+        if vol_vals[i] > vol_vals[idx_p1_abs]: tags.append("VOL_GROW")
         
-        # Display Strings
+        # Display Data
         sig_date_iso = get_date_str(i, '%Y-%m-%d')
-        p1_date_fmt = get_date_str(idx_p1_abs, '%b %d')
-        sig_date_fmt = get_date_str(i, '%b %d')
-        date_display = f"{p1_date_fmt} → {sig_date_fmt}"
+        date_display = f"{get_date_str(idx_p1_abs, '%b %d')} → {get_date_str(i, '%b %d')}"
+        rsi_display = f"{int(round(rsi_vals[idx_p1_abs]))} {'↗' if rsi_vals[i] > rsi_vals[idx_p1_abs] else '↘'} {int(round(rsi_vals[i]))}"
         
-        rsi_p1 = rsi_vals[idx_p1_abs]
-        rsi_display = f"{int(round(rsi_p1))} ↗ {int(round(p2_rsi))}" if p2_rsi > rsi_p1 else f"{int(round(rsi_p1))} ↘ {int(round(p2_rsi))}"
-        
-        price_p1 = low_vals[idx_p1_abs] if s_type=='Bullish' else high_vals[idx_p1_abs]
-        price_p2 = p2_low if s_type=='Bullish' else p2_high
-        price_display = f"${price_p1:,.2f} ↗ ${price_p2:,.2f}" if price_p2 > price_p1 else f"${price_p1:,.2f} ↘ ${price_p2:,.2f}"
-
-        # OPTIMAL TIME PERIOD CALCULATION (Requirement C)
-        # We pass the FULL list of historical signals (e.g. bullish_signal_indices)
-        # to the stats calculator. This allows us to see how this signal performed in the past 10 years.
+        # Optimal Period Calculation
         hist_list = bullish_signal_indices if s_type == 'Bullish' else bearish_signal_indices
         best_stats = calculate_optimal_signal_stats(hist_list, close_vals, i)
         
         if best_stats is None:
              best_stats = {"Best Period": "—", "Profit Factor": 0.0, "Win Rate": 0.0, "EV": 0.0, "N": 0}
         
+        # UPDATED: Allows signals with N=0 to show in the table 
         if best_stats["N"] < min_n:
             continue
             
         divergences.append({
             'Ticker': ticker, 'Type': s_type, 'Timeframe': timeframe, 
-            'Tags': tags, 
-            'Signal_Date_ISO': sig_date_iso, 
-            'Date_Display': date_display,
-            'RSI_Display': rsi_display,
-            'Price_Display': price_display,
-            'Last_Close': f"${latest_p['Price']:,.2f}", 
-            'Best Period': best_stats['Best Period'],
-            'Profit Factor': best_stats['Profit Factor'],
-            'Win Rate': best_stats['Win Rate'],
-            'EV': best_stats['EV'],
-            'N': best_stats['N']
+            'Tags': tags, 'Signal_Date_ISO': sig_date_iso, 'Date_Display': date_display,
+            'RSI_Display': rsi_display, 'Last_Close': f"${latest_p['Price']:,.2f}", 
+            'Best Period': best_stats['Best Period'], 'Profit Factor': best_stats['Profit Factor'],
+            'Win Rate': best_stats['Win Rate'], 'EV': best_stats['EV'], 'N': best_stats['N']
         })
             
     return divergences
