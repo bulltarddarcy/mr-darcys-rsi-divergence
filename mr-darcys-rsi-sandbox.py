@@ -1636,7 +1636,7 @@ def run_rsi_scanner_app(df_global):
         <style>
         .top-note { color: #888888; font-size: 14px; margin-bottom: 2px; font-family: inherit; }
         .footer-header { color: #31333f; margin-top: 1.5rem; border-bottom: 1px solid #ddd; padding-bottom: 5px; font-weight: bold; }
-        [data-testid=\"stDataFrame\"] th { font-weight: 900 !important; }
+        [data-testid="stDataFrame"] th { font-weight: 900 !important; }
         </style>
         """, unsafe_allow_html=True)
     
@@ -1705,7 +1705,7 @@ def run_rsi_scanner_app(df_global):
                         current_row = df.iloc[-1]
                         current_rsi = current_row[rsi_col]
                         
-                        rsi_metric_container.markdown(f"""<div style=\"margin-top: 10px; font-size: 0.9rem; color: #666;\">Current RSI</div><div style=\"font-size: 1.5rem; font-weight: 600; margin-bottom: 15px;\">{current_rsi:.2f}</div>""", unsafe_allow_html=True)
+                        rsi_metric_container.markdown(f"""<div style="margin-top: 10px; font-size: 0.9rem; color: #666;">Current RSI</div><div style="font-size: 1.5rem; font-weight: 600; margin-bottom: 15px;">{current_rsi:.2f}</div>""", unsafe_allow_html=True)
                         
                         rsi_min = current_rsi - rsi_tol
                         rsi_max = current_rsi + rsi_tol
@@ -1781,7 +1781,7 @@ def run_rsi_scanner_app(df_global):
                                     .format({"Win Rate": format_wr, "EV": format_func, "Profit Factor": format_pf})
                                     .map(highlight_ret, subset=["EV"])
                                     .apply(highlight_best, axis=1)
-                                    .set_table_styles([dict(selector="th", props=[("font-weight", \"bold\"), (\"background-color\", \"#f0f2f6\")])]),
+                                    .set_table_styles([dict(selector="th", props=[("font-weight", "bold"), ("background-color", "#f0f2f6")])]),
                                     use_container_width=False,
                                     column_config={
                                         "Days": st.column_config.NumberColumn("Days", width=60),
@@ -1827,14 +1827,14 @@ def run_rsi_scanner_app(df_global):
                 * <b>Profit Factor</b>: Gross Wins / Gross Losses. Measures efficiency.
                     * **Bullish Table**: Win = Price went **UP**.
                     * **Bearish Table**: Win = Price went **DOWN**.
-                * <b>Win Rate</b>: Percentage of historical trades that resulted in a \"Win\" (based on signal type above).
+                * <b>Win Rate</b>: Percentage of historical trades that resulted in a "Win" (based on signal type above).
                 * <b>EV</b>: Expected Value. Average return per trade.
                     * **Bullish Table**: Positive EV means the stock historically **rose**.
                     * **Bearish Table**: Positive EV means the stock historically **fell** (profitable for shorts/puts).
                 * <b>N</b>: Total historical instances used for the stats in the Winning Period.
                 """, unsafe_allow_html=True)
             with f_col4:
-                st.markdown('<div class=\"footer-header\">🏷️ TAGS</div>', unsafe_allow_html=True)
+                st.markdown('<div class="footer-header">🏷️ TAGS</div>', unsafe_allow_html=True)
                 st.markdown(f"""
                 * **EMA{EMA8_PERIOD}**: Bullish (Price > EMA8) or Bearish (Price < EMA8).
                 * **EMA{EMA21_PERIOD}**: Bullish (Price > EMA21) or Bearish (Price < EMA21).
@@ -1859,15 +1859,15 @@ def run_rsi_scanner_app(df_global):
                         target_highlight_weekly = (max_dt_obj - timedelta(days=days_to_subtract)).strftime('%Y-%m-%d')
                     
                     all_tickers = sorted(master[t_col].unique())
-                    with st.expander(f\"🔍 View Scanned Tickers ({len(all_tickers)} symbols)\"):
-                        sq_div = st.text_input(\"Filter...\", key=\"rsi_div_filter_ticker\").upper()
-                        min_n_div = st.number_input(\"Minimum N\", min_value=0, value=0, step=1, key=\"rsi_div_min_n\")
+                    with st.expander(f"🔍 View Scanned Tickers ({len(all_tickers)} symbols)"):
+                        sq_div = st.text_input("Filter...", key="rsi_div_filter_ticker").upper()
+                        min_n_div = st.number_input("Minimum N", min_value=0, value=0, step=1, key="rsi_div_min_n")
                         ft_div = [t for t in all_tickers if sq_div in t]
                         cols = st.columns(6)
                         for i, ticker in enumerate(ft_div): cols[i % 6].write(ticker)
 
                     raw_results_div = []
-                    progress_bar = st.progress(0, text=\"Scanning Divergences...\")
+                    progress_bar = st.progress(0, text="Scanning Divergences...")
                     grouped = master.groupby(t_col)
                     grouped_list = list(grouped)
                     total_groups = len(grouped_list)
@@ -1886,13 +1886,13 @@ def run_rsi_scanner_app(df_global):
                         
                         for tf in ['Daily', 'Weekly']:
                             target_highlight = target_highlight_weekly if tf == 'Weekly' else target_highlight_daily
-                            date_header = \"Week Δ\" if tf == 'Weekly' else \"Day Δ\"
+                            date_header = "Week Δ" if tf == 'Weekly' else "Day Δ"
                             
                             for s_type, emoji in [('Bullish', '🟢'), ('Bearish', '🔴')]:
-                                st.subheader(f\"{emoji} {tf} {s_type} Signals\")
+                                st.subheader(f"{emoji} {tf} {s_type} Signals")
                                 tbl_df = consolidated[(consolidated['Type']==s_type) & (consolidated['Timeframe']==tf)].copy()
                                 
-                                price_header = \"Low Price Δ\" if s_type == 'Bullish' else \"High Price Δ\"
+                                price_header = "Low Price Δ" if s_type == 'Bullish' else "High Price Δ"
                                 
                                 if not tbl_df.empty:
                                     def style_div_df(df_in):
@@ -1917,50 +1917,50 @@ def run_rsi_scanner_app(df_global):
                                     st.dataframe(
                                         style_div_df(tbl_df),
                                         column_config={
-                                            \"Ticker\": st.column_config.TextColumn(\"Ticker\"),
-                                            \"Tags\": st.column_config.ListColumn(\"Tags\", width=\"medium\"), # ListColumn for Bubbles
-                                            \"Date_Display\": st.column_config.TextColumn(date_header),
-                                            \"RSI_Display\": st.column_config.TextColumn(\"RSI Δ\"),
-                                            \"Price_Display\": st.column_config.TextColumn(price_header),
-                                            \"Last_Close\": st.column_config.TextColumn(\"Last Close\"),
-                                            \"Best Period\": st.column_config.TextColumn(\"Best Period\"),
-                                            \"Profit Factor\": st.column_config.NumberColumn(\"Profit Factor\", format=\"%.2f\"),
-                                            \"Win Rate\": st.column_config.NumberColumn(\"Win Rate\", format=\"%.1f%%\"),
-                                            \"EV\": st.column_config.NumberColumn(\"EV\", format=\"%.1f%%\"),
-                                            \"N\": st.column_config.NumberColumn(\"N\"),
+                                            "Ticker": st.column_config.TextColumn("Ticker"),
+                                            "Tags": st.column_config.ListColumn("Tags", width="medium"), # ListColumn for Bubbles
+                                            "Date_Display": st.column_config.TextColumn(date_header),
+                                            "RSI_Display": st.column_config.TextColumn("RSI Δ"),
+                                            "Price_Display": st.column_config.TextColumn(price_header),
+                                            "Last_Close": st.column_config.TextColumn("Last Close"),
+                                            "Best Period": st.column_config.TextColumn("Best Period"),
+                                            "Profit Factor": st.column_config.NumberColumn("Profit Factor", format="%.2f"),
+                                            "Win Rate": st.column_config.NumberColumn("Win Rate", format="%.1f%%"),
+                                            "EV": st.column_config.NumberColumn("EV", format="%.1f%%"),
+                                            "N": st.column_config.NumberColumn("N"),
                                             # Hide raw cols
-                                            \"Signal_Date_ISO\": None, \"Type\": None, \"Timeframe\": None
+                                            "Signal_Date_ISO": None, "Type": None, "Timeframe": None
                                         },
                                         hide_index=True,
                                         use_container_width=True,
                                         height=get_table_height(tbl_df, max_rows=50) # <--- INCREASED HEIGHT
                                     )
-                                else: st.info(\"No signals.\")
-                    else: st.warning(\"No Divergence signals found.\")
-            except Exception as e: st.error(f\"Analysis failed: {e}\")
+                                else: st.info("No signals.")
+                    else: st.warning("No Divergence signals found.")
+            except Exception as e: st.error(f"Analysis failed: {e}")
 
     with tab_pct:
-        data_option_pct = st.pills(\"Dataset\", options=options, selection_mode=\"single\", default=options[0] if options else None, label_visibility=\"collapsed\", key=\"rsi_pct_pills\")
+        data_option_pct = st.pills("Dataset", options=options, selection_mode="single", default=options[0] if options else None, label_visibility="collapsed", key="rsi_pct_pills")
         
-        with st.expander(\"ℹ️ Page Notes: Percentile Strategy Logic\"):
+        with st.expander("ℹ️ Page Notes: Percentile Strategy Logic"):
             c1, c2, c3 = st.columns(3)
             with c1:
-                 st.markdown(\"\"\"
-                <div class=\"footer-header\">⚙️ STRATEGY</div>
+                 st.markdown("""
+                <div class="footer-header">⚙️ STRATEGY</div>
                 * **Signal Trigger**: RSI crosses **ABOVE Low Percentile** (Leaving Low) or **BELOW High Percentile** (Leaving High).
-                * **Signal-Based Optimization**: Instead of matching RSI values, this backtester finds all historical instances where the stock \"Left the Low/High\" and calculates performance.
+                * **Signal-Based Optimization**: Instead of matching RSI values, this backtester finds all historical instances where the stock "Left the Low/High" and calculates performance.
                 * **Optimization Loop**: Calculates returns for **10, 30, 60, 90, 180** days (or weeks) and selects the Winner based on **Profit Factor**.
                 * **Data Constraint**: This scanner utilizes up to 10 years of data if provided in the source file.
-                \"\"\", unsafe_allow_html=True)
+                """, unsafe_allow_html=True)
             with c2:
-                st.markdown(\"\"\"
-                <div class=\"footer-header\">🔢 PERCENTILE DEFINITION</div>
+                st.markdown("""
+                <div class="footer-header">🔢 PERCENTILE DEFINITION</div>
                 * **Low/High Percentile**: Calculated based on the full history (up to 10 years). 
                 * <b>Example</b>: If RSI < 10th Percentile, it means the current RSI is lower than it has been 90% of the time historically. This adapts to each stock's unique personality better than fixed 30/70 levels.
-                \"\"\", unsafe_allow_html=True)
+                """, unsafe_allow_html=True)
             with c3:
-                st.markdown(\"\"\"
-                <div class=\"footer-header\">📊 TABLE COLUMNS</div>
+                st.markdown("""
+                <div class="footer-header">📊 TABLE COLUMNS</div>
                 * <b>Date</b>: The date the signal fired (Left Low/High).
                 * <b>RSI Δ</b>: RSI movement (e.g., 10th-Pct ↗ Current-RSI).
                 * <b>Signal Close</b>: Price when signal fired.
@@ -1968,19 +1968,19 @@ def run_rsi_scanner_app(df_global):
                 * <b>Profit Factor</b>: Gross Wins / Gross Losses. 
                     * **Leaving Low**: Win = Price went **UP**.
                     * **Leaving High**: Win = Price went **DOWN**.
-                * <b>Win Rate</b>: Percentage of historical trades that resulted in a \"Win\" (based on action type above).
+                * <b>Win Rate</b>: Percentage of historical trades that resulted in a "Win" (based on action type above).
                 * <b>EV</b>: Expected Value. Average return per trade.
                     * **Leaving Low**: Positive EV = Price historically **rose**.
                     * **Leaving High**: Positive EV = Price historically **fell** (Profitable for shorts).
                 * <b>N</b>: Total historical instances used for the stats in the Winning Period.
-                \"\"\", unsafe_allow_html=True)
+                """, unsafe_allow_html=True)
         
         if data_option_pct:
             try:
                 target_url = st.secrets[dataset_map[data_option_pct]]
                 csv_buffer = get_confirmed_gdrive_data(target_url)
                 
-                if csv_buffer and csv_buffer != \"HTML_ERROR\":
+                if csv_buffer and csv_buffer != "HTML_ERROR":
                     master = pd.read_csv(csv_buffer)
                     t_col = next((c for c in master.columns if c.strip().upper() in ['TICKER', 'SYMBOL']), None)
                     date_col_raw = next((c for c in master.columns if 'DATE' in c.upper()), None)
@@ -1990,28 +1990,28 @@ def run_rsi_scanner_app(df_global):
                         max_date_in_set = max_dt_obj.date()
 
                     all_tickers = sorted(master[t_col].unique())
-                    with st.expander(f\"🔍 View Scanned Tickers ({len(all_tickers)} symbols)\"):
-                        sq_pct = st.text_input(\"Filter...\", key=\"rsi_pct_filter_ticker\").upper()
+                    with st.expander(f"🔍 View Scanned Tickers ({len(all_tickers)} symbols)"):
+                        sq_pct = st.text_input("Filter...", key="rsi_pct_filter_ticker").upper()
                         ft_pct = [t for t in all_tickers if sq_pct in t]
                         cols = st.columns(6)
                         for i, ticker in enumerate(ft_pct): cols[i % 6].write(ticker)
 
                     c_p1, c_p2, c_p3, c_p4, c_p5 = st.columns(5)
-                    with c_p1: in_low = st.number_input(\"RSI Low Percentile (%)\", min_value=1, max_value=49, value=10, step=1, key=\"rsi_pct_low\")
-                    with c_p2: in_high = st.number_input(\"RSI High Percentile (%)\", min_value=51, max_value=99, value=90, step=1, key=\"rsi_pct_high\")
-                    with c_p3: show_filter = st.selectbox(\"Actions to Show\", [\"Everything\", \"Leaving High\", \"Leaving Low\"], index=0, key=\"rsi_pct_show\")
+                    with c_p1: in_low = st.number_input("RSI Low Percentile (%)", min_value=1, max_value=49, value=10, step=1, key="rsi_pct_low")
+                    with c_p2: in_high = st.number_input("RSI High Percentile (%)", min_value=51, max_value=99, value=90, step=1, key="rsi_pct_high")
+                    with c_p3: show_filter = st.selectbox("Actions to Show", ["Everything", "Leaving High", "Leaving Low"], index=0, key="rsi_pct_show")
                     
-                    if not df_global.empty and \"Trade Date\" in df_global.columns:
-                        ref_date = df_global[\"Trade Date\"].max().date()
+                    if not df_global.empty and "Trade Date" in df_global.columns:
+                        ref_date = df_global["Trade Date"].max().date()
                     else:
                         ref_date = date.today()
                     default_start = ref_date - timedelta(days=14)
                     
-                    with c_p4: filter_date = st.date_input(\"Latest Date\", value=default_start, key=\"rsi_pct_date\")
-                    with c_p5: min_n_pct = st.number_input(\"Minimum N\", min_value=1, value=1, step=1, key=\"rsi_pct_min_n\")
+                    with c_p4: filter_date = st.date_input("Latest Date", value=default_start, key="rsi_pct_date")
+                    with c_p5: min_n_pct = st.number_input("Minimum N", min_value=1, value=1, step=1, key="rsi_pct_min_n")
 
                     raw_results_pct = []
-                    progress_bar = st.progress(0, text=\"Scanning Percentiles...\")
+                    progress_bar = st.progress(0, text="Scanning Percentiles...")
                     grouped = master.groupby(t_col)
                     grouped_list = list(grouped)
                     total_groups = len(grouped_list)
@@ -2029,9 +2029,9 @@ def run_rsi_scanner_app(df_global):
                     if raw_results_pct:
                         res_pct_df = pd.DataFrame(raw_results_pct).sort_values(by='Date_Obj', ascending=False)
                         
-                        if show_filter == \"Leaving High\":
+                        if show_filter == "Leaving High":
                             res_pct_df = res_pct_df[res_pct_df['Signal_Type'] == 'Bearish']
-                        elif show_filter == \"Leaving Low\":
+                        elif show_filter == "Leaving Low":
                             res_pct_df = res_pct_df[res_pct_df['Signal_Type'] == 'Bullish']
                             
                         def style_pct_df(df_in):
@@ -2056,60 +2056,60 @@ def run_rsi_scanner_app(df_global):
                         st.dataframe(
                             style_pct_df(res_pct_df),
                             column_config={
-                                \"Ticker\": st.column_config.TextColumn(\"Ticker\"),
-                                \"Date\": st.column_config.TextColumn(\"Date\"),
-                                \"Action\": st.column_config.TextColumn(\"Action\"),
-                                \"RSI_Display\": st.column_config.TextColumn(\"RSI Δ\"),
-                                \"Signal_Price\": st.column_config.TextColumn(\"Signal Close\"),
-                                \"Last_Close\": st.column_config.TextColumn(\"Last Close\"), 
-                                \"Best Period\": st.column_config.TextColumn(\"Best Period\"),
-                                \"Profit Factor\": st.column_config.NumberColumn(\"Profit Factor\", format=\"%.2f\"),
-                                \"Win Rate\": st.column_config.NumberColumn(\"Win Rate\", format=\"%.1f%%\"),
-                                \"EV\": st.column_config.NumberColumn(\"EV\", format=\"%.1f%%\"),
-                                \"N\": st.column_config.NumberColumn(\"N\"),
+                                "Ticker": st.column_config.TextColumn("Ticker"),
+                                "Date": st.column_config.TextColumn("Date"),
+                                "Action": st.column_config.TextColumn("Action"),
+                                "RSI_Display": st.column_config.TextColumn("RSI Δ"),
+                                "Signal_Price": st.column_config.TextColumn("Signal Close"),
+                                "Last_Close": st.column_config.TextColumn("Last Close"), 
+                                "Best Period": st.column_config.TextColumn("Best Period"),
+                                "Profit Factor": st.column_config.NumberColumn("Profit Factor", format="%.2f"),
+                                "Win Rate": st.column_config.NumberColumn("Win Rate", format="%.1f%%"),
+                                "EV": st.column_config.NumberColumn("EV", format="%.1f%%"),
+                                "N": st.column_config.NumberColumn("N"),
                                 # Hide raw
-                                \"Signal_Type\": None, \"Date_Obj\": None
+                                "Signal_Type": None, "Date_Obj": None
                             },
                             hide_index=True,
                             use_container_width=True,
                             height=get_table_height(res_pct_df, max_rows=50) # <--- INCREASED HEIGHT
                         )
 
-                    else: st.info(f\"No Percentile signals found (Crossing {in_low}th/{in_high}th percentile).\")
+                    else: st.info(f"No Percentile signals found (Crossing {in_low}th/{in_high}th percentile).")
 
-            except Exception as e: st.error(f\"Analysis failed: {e}\")
+            except Exception as e: st.error(f"Analysis failed: {e}")
 
 def run_trade_ideas_app(df_global):
-    st.title(\"🤖 AI Macro Portfolio Manager\")
-    st.caption(\"This module ingests the Darcy, SP100, NQ100, and Macro datasets to generate a comprehensive strategy report.\")
+    st.title("🤖 AI Macro Portfolio Manager")
+    st.caption("This module ingests the Darcy, SP100, NQ100, and Macro datasets to generate a comprehensive strategy report.")
     
-    if st.button(\"Run Global Macro Scan\"):
-        if \"GOOGLE_API_KEY\" not in st.secrets:
-            st.error(\"Missing GOOGLE_API_KEY in secrets.toml\")
-        elif \"URL_Prompt\" not in st.secrets:
-            st.error(\"Missing URL_Prompt in secrets.toml\")
+    if st.button("Run Global Macro Scan"):
+        if "GOOGLE_API_KEY" not in st.secrets:
+            st.error("Missing GOOGLE_API_KEY in secrets.toml")
+        elif "URL_Prompt" not in st.secrets:
+            st.error("Missing URL_Prompt in secrets.toml")
         else:
             try:
-                genai.configure(api_key=st.secrets[\"GOOGLE_API_KEY\"])
+                genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
                 
-                with st.spinner(\"Step 1/3: Fetching System Prompt...\"):
-                    prompt_buffer = get_confirmed_gdrive_data(st.secrets[\"URL_Prompt\"])
-                    if not prompt_buffer or prompt_buffer == \"HTML_ERROR\":
-                        st.error(\"Failed to load prompt.\")
+                with st.spinner("Step 1/3: Fetching System Prompt..."):
+                    prompt_buffer = get_confirmed_gdrive_data(st.secrets["URL_Prompt"])
+                    if not prompt_buffer or prompt_buffer == "HTML_ERROR":
+                        st.error("Failed to load prompt.")
                         st.stop()
                     system_prompt = prompt_buffer.getvalue()
 
-                with st.spinner(\"Step 2/3: Ingesting Datasets...\"):
-                    context_data = \"\"
-                    context_data += fetch_and_prepare_ai_context(st.secrets[\"URL_DARCY\"], \"DARCY WATCHLIST\", 90)
-                    context_data += fetch_and_prepare_ai_context(st.secrets[\"URL_SP100\"], \"S&P 100\", 90)
-                    context_data += fetch_and_prepare_ai_context(st.secrets[\"URL_NQ100\"], \"NASDAQ 100\", 90)
-                    context_data += fetch_and_prepare_ai_context(st.secrets[\"URL_MACRO\"], \"MACRO INDICATORS\", 90)
+                with st.spinner("Step 2/3: Ingesting Datasets..."):
+                    context_data = ""
+                    context_data += fetch_and_prepare_ai_context(st.secrets["URL_DARCY"], "DARCY WATCHLIST", 90)
+                    context_data += fetch_and_prepare_ai_context(st.secrets["URL_SP100"], "S&P 100", 90)
+                    context_data += fetch_and_prepare_ai_context(st.secrets["URL_NQ100"], "NASDAQ 100", 90)
+                    context_data += fetch_and_prepare_ai_context(st.secrets["URL_MACRO"], "MACRO INDICATORS", 90)
                     
-                    full_prompt = f\"{system_prompt}\\n\\n==========\\nLIVE DATA CONTEXT:\\n{context_data}\\n==========\"
+                    full_prompt = f"{system_prompt}\n\n==========\nLIVE DATA CONTEXT:\n{context_data}\n=========="
 
-                with st.spinner(\"Step 3/3: AI Analysis (may take 60s)...\"):
-                    candidate_models = [\"gemini-1.5-pro\", \"gemini-1.5-flash\"]
+                with st.spinner("Step 3/3: AI Analysis (may take 60s)..."):
+                    candidate_models = ["gemini-1.5-pro", "gemini-1.5-flash"]
                     response = None
                     for model_name in candidate_models:
                         try:
@@ -2120,16 +2120,16 @@ def run_trade_ideas_app(df_global):
                             continue 
                     
                     if response:
-                        st.success(\"Analysis Complete!\")
-                        st.markdown(\"---\")
+                        st.success("Analysis Complete!")
+                        st.markdown("---")
                         st.markdown(response.text)
                     else:
-                        st.error(\"AI models failed. Check API Quota.\")
+                        st.error("AI models failed. Check API Quota.")
                     
             except Exception as e:
-                st.error(f\"AI Pipeline Failed: {e}\")
+                st.error(f"AI Pipeline Failed: {e}")
 
-st.markdown(\"\"\"<style>
+st.markdown("""<style>
 .block-container{padding-top:3.5rem;padding-bottom:1rem;}
 .zones-panel{padding:14px 0; border-radius:10px;}
 .zone-row{display:flex; align-items:center; gap:10px; margin:8px 0;}
@@ -2168,7 +2168,7 @@ st.markdown(\"\"\"<style>
     text-shadow: 0 0 4px rgba(255,255,255,0.8);
 }
 .price-divider { display: flex; align-items: center; justify-content: center; position: relative; margin: 24px 0; width: 100%; }
-.price-divider::before, .price-divider::after { content: \"\"; flex-grow: 1; height: 2px; background: #66b7ff; opacity: 0.4; }
+.price-divider::before, .price-divider::after { content: ""; flex-grow: 1; height: 2px; background: #66b7ff; opacity: 0.4; }
 .price-badge { background: rgba(102, 183, 255, 0.1); color: #66b7ff; border: 1px solid rgba(102, 183, 255, 0.5); border-radius: 16px; padding: 6px 14px; font-weight: 800; font-size: 12px; letter-spacing: 0.5px; white-space: nowrap; margin: 0 12px; z-index: 1; }
 .metric-row{display:flex;gap:10px;flex-wrap:wrap;margin:.35rem 0 .75rem 0}
 .badge{background: rgba(128, 128, 128, 0.08); border: 1px solid rgba(128, 128, 128, 0.2); border-radius:18px; padding:6px 10px; font-weight:700}
@@ -2176,29 +2176,29 @@ st.markdown(\"\"\"<style>
 .light-note { opacity: 0.7; font-size: 14px; margin-bottom: 10px; }
 
 /* BACKTESTER BOLD HEADERS */
-[data-testid=\"stDataFrame\"] th {
+[data-testid="stDataFrame"] th {
     font-weight: 900 !important;
 }
-</style>\"\"\", unsafe_allow_html=True)
+</style>""", unsafe_allow_html=True)
 
 try:
-    sheet_url = st.secrets[\"GSHEET_URL\"]
+    sheet_url = st.secrets["GSHEET_URL"]
     df_global = load_and_clean_data(sheet_url)
-    last_updated_date = df_global[\"Trade Date\"].max().strftime(\"%d %b %y\")
+    last_updated_date = df_global["Trade Date"].max().strftime("%d %b %y")
 
     pg = st.navigation([
-        st.Page(lambda: run_database_app(df_global), title=\"Database\", icon=\"📂\", url_path=\"options_db\", default=True),
-        st.Page(lambda: run_rankings_app(df_global), title=\"Rankings\", icon=\"🏆\", url_path=\"rankings\"),
-        st.Page(lambda: run_pivot_tables_app(df_global), title=\"Pivot Tables\", icon=\"🎯\", url_path=\"pivot_tables\"),
-        st.Page(lambda: run_strike_zones_app(df_global), title=\"Strike Zones\", icon=\"📊\", url_path=\"strike_zones\"),
-        st.Page(lambda: run_rsi_scanner_app(df_global), title=\"RSI Scanner\", icon=\"📈\", url_path=\"rsi_scanner\"), 
-        st.Page(lambda: run_trade_ideas_app(df_global), title=\"Trade Ideas\", icon=\"💡\", url_path=\"trade_ideas\"),
+        st.Page(lambda: run_database_app(df_global), title="Database", icon="📂", url_path="options_db", default=True),
+        st.Page(lambda: run_rankings_app(df_global), title="Rankings", icon="🏆", url_path="rankings"),
+        st.Page(lambda: run_pivot_tables_app(df_global), title="Pivot Tables", icon="🎯", url_path="pivot_tables"),
+        st.Page(lambda: run_strike_zones_app(df_global), title="Strike Zones", icon="📊", url_path="strike_zones"),
+        st.Page(lambda: run_rsi_scanner_app(df_global), title="RSI Scanner", icon="📈", url_path="rsi_scanner"), 
+        st.Page(lambda: run_trade_ideas_app(df_global), title="Trade Ideas", icon="💡", url_path="trade_ideas"),
     ])
 
-    st.sidebar.caption(\"🖥️ Everything is best viewed with a wide desktop monitor in light mode.\")
-    st.sidebar.caption(f\"📅 **Last Updated:** {last_updated_date}\")
+    st.sidebar.caption("🖥️ Everything is best viewed with a wide desktop monitor in light mode.")
+    st.sidebar.caption(f"📅 **Last Updated:** {last_updated_date}")
     
     pg.run()
     
 except Exception as e: 
-    st.error(f\"Error initializing dashboard: {e}\")
+    st.error(f"Error initializing dashboard: {e}")
