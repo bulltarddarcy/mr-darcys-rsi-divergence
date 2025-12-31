@@ -590,10 +590,9 @@ def prepare_data(df):
 def find_divergences(df_tf, ticker, timeframe, min_n=1):
     divergences = []
     n_rows = len(df_tf)
-    if n_rows < DIVERGENCE_LOOKBACK + 1: return divergences
     
-    # We scan the WHOLE dataset (within lookback limit) to find ALL signals
-    # because the backtest needs the full history of signals.
+    # 1. Setup & Safety Check
+    if n_rows < DIVERGENCE_LOOKBACK + 1: return divergences
     
     rsi_vals = df_tf['RSI'].values
     low_vals = df_tf['Low'].values
@@ -608,22 +607,17 @@ def find_divergences(df_tf, ticker, timeframe, min_n=1):
              return df_tf.iloc[idx]['ChartDate'].strftime(fmt)
         return ts.strftime(fmt)
     
-    # 1. First Pass: Identify ALL Divergence Indices
+    # ---------------------------------------------------------
+    # PASS 1: SCAN FULL HISTORY (Requirements A & C)
+    # We scan the entire dataset to build the 'history lists'.
+    # This ensures the 'Profit Factor' and 'Win Rate' are calculated
+    # using ALL historical data, not just the recent window.
+    # ---------------------------------------------------------
+    
     bullish_signal_indices = []
     bearish_signal_indices = []
-    
-    # We can just iterate once.
-    # Note: We start looking for signals after DIVERGENCE_LOOKBACK
-    
-    # To properly "scan" for recent ones but use ALL history, we essentially need 
-    # to know for every index 'i', is it a divergence?
-    
-    # Let's map index -> signal type
-    # 0 = None, 1 = Bullish, 2 = Bearish
-    
     potential_signals = [] 
 
-    # We start from DIVERGENCE_LOOKBACK
     start_search = DIVERGENCE_LOOKBACK
     
     for i in range(start_search, n_rows):
@@ -640,7 +634,7 @@ def find_divergences(df_tf, ticker, timeframe, min_n=1):
         
         is_vol_high = int(p2_vol > (p2_volsma * 1.5)) if not np.isnan(p2_volsma) else 0
         
-        # Check Bullish
+        # --- Bullish Divergence Logic (Identical to Database) ---
         if p2_low < np.min(lb_low):
             p1_idx_rel = np.argmin(lb_rsi)
             p1_rsi = lb_rsi[p1_idx_rel]
@@ -648,11 +642,11 @@ def find_divergences(df_tf, ticker, timeframe, min_n=1):
             if p2_rsi > (p1_rsi + RSI_DIFF_THRESHOLD):
                 idx_p1_abs = lb_start + p1_idx_rel
                 subset_rsi = rsi_vals[idx_p1_abs : i + 1]
-                # Invalidation logic
+                
+                # Invalidation: RSI must stay below 50 between pivots
                 if not np.any(subset_rsi > 50): 
-                    # VALID BULLISH
-                    # Check forward invalidation (next candles)
                     valid = True
+                    # Forward Invalidation check (ensure next candle doesn't break pivot RSI immediately)
                     if i < n_rows - 1:
                         post_rsi = rsi_vals[i+1:]
                         if np.any(post_rsi <= p1_rsi): valid = False
@@ -664,7 +658,7 @@ def find_divergences(df_tf, ticker, timeframe, min_n=1):
                             "vol_high": is_vol_high
                         })
         
-        # Check Bearish
+        # --- Bearish Divergence Logic (Identical to Database) ---
         elif p2_high > np.max(lb_high):
             p1_idx_rel = np.argmax(lb_rsi)
             p1_rsi = lb_rsi[p1_idx_rel]
@@ -672,9 +666,9 @@ def find_divergences(df_tf, ticker, timeframe, min_n=1):
             if p2_rsi < (p1_rsi - RSI_DIFF_THRESHOLD):
                 idx_p1_abs = lb_start + p1_idx_rel
                 subset_rsi = rsi_vals[idx_p1_abs : i + 1]
-                # Invalidation logic
+                
+                # Invalidation: RSI must stay above 50 between pivots
                 if not np.any(subset_rsi < 50): 
-                    # VALID BEARISH
                     valid = True
                     if i < n_rows - 1:
                         post_rsi = rsi_vals[i+1:]
@@ -687,35 +681,37 @@ def find_divergences(df_tf, ticker, timeframe, min_n=1):
                             "vol_high": is_vol_high
                         })
 
-    # 2. Second Pass: Calculate stats for signals that are within the reporting window
-    # Usually we want to report all found signals that we just scanned.
-    # But strictly speaking the "Scanner" usually shows signals from the last X days.
-    # The instruction implies scanning "scanned tickers" which usually means recent history.
-    # However, standard practice in this script has been scanning the full provided DF (usually 3 years).
-    # So we iterate through 'potential_signals' which contains all found divergences.
+    # ---------------------------------------------------------
+    # PASS 2: REPORT & BACKTEST (Requirement B)
+    # We iterate through the signals we found, but we ONLY show
+    # the ones that occurred in the last 'SIGNAL_LOOKBACK_PERIOD'
+    # (25 candles), matching the Database visibility.
+    # ---------------------------------------------------------
     
-    cutoff_date = df_tf.index.max() - timedelta(days=365 * EV_LOOKBACK_YEARS)
+    # Calculate the index threshold for display
+    # Any signal index below this number is "History" (used for stats) 
+    # but not "Active" (displayed in table).
+    display_threshold_idx = n_rows - SIGNAL_LOOKBACK_PERIOD
     
     for sig in potential_signals:
         i = sig["index"]
+        
+        # [cite_start]--- FILTER: Only show signals from the last 25 periods [cite: 1] ---
+        if i < display_threshold_idx:
+            continue
+
         s_type = sig["type"]
         idx_p1_abs = sig["p1_idx"]
-        
-        # Date check - strictly we only show signals within the EV_LOOKBACK_YEARS window
-        # But we used the FULL history (if available) for the 'N' backtest.
-        if df_tf.index[i] < cutoff_date:
-            continue
             
         p2_rsi = rsi_vals[i]
         p2_low = low_vals[i]
         p2_high = high_vals[i]
         p2_vol = vol_vals[i]
         
-        latest_p = df_tf.iloc[-1] # For 'Last Close' column logic (current price of stock)
+        latest_p = df_tf.iloc[-1] 
         
-        # TAGS
+        # Tags Generation
         tags = []
-        # Need the row at 'i' for tags
         row_at_sig = df_tf.iloc[i]
         
         if s_type == 'Bullish':
@@ -728,6 +724,7 @@ def find_divergences(df_tf, ticker, timeframe, min_n=1):
         if sig["vol_high"]: tags.append("VOL_HIGH")
         if p2_vol > vol_vals[idx_p1_abs]: tags.append("VOL_GROW")
         
+        # Display Strings
         sig_date_iso = get_date_str(i, '%Y-%m-%d')
         p1_date_fmt = get_date_str(idx_p1_abs, '%b %d')
         sig_date_fmt = get_date_str(i, '%b %d')
@@ -740,14 +737,15 @@ def find_divergences(df_tf, ticker, timeframe, min_n=1):
         price_p2 = p2_low if s_type=='Bullish' else p2_high
         price_display = f"${price_p1:,.2f} ↗ ${price_p2:,.2f}" if price_p2 > price_p1 else f"${price_p1:,.2f} ↘ ${price_p2:,.2f}"
 
-        # OPTIMAL TIME PERIOD CALCULATION
+        # OPTIMAL TIME PERIOD CALCULATION (Requirement C)
+        # We pass the FULL list of historical signals (e.g. bullish_signal_indices)
+        # to the stats calculator. This allows us to see how this signal performed in the past 10 years.
         hist_list = bullish_signal_indices if s_type == 'Bullish' else bearish_signal_indices
         best_stats = calculate_optimal_signal_stats(hist_list, close_vals, i)
         
         if best_stats is None:
              best_stats = {"Best Period": "—", "Profit Factor": 0.0, "Win Rate": 0.0, "EV": 0.0, "N": 0}
         
-        # Filter by Min N
         if best_stats["N"] < min_n:
             continue
             
