@@ -2136,35 +2136,34 @@ def run_rsi_scanner_app(df_global):
         with st.expander("ℹ️ Page Notes: Percentile Strategy Logic"):
             c1, c2, c3 = st.columns(3)
             with c1:
+                 st.markdown('<div class="footer-header">⚙️ STRATEGY</div>', unsafe_allow_html=True)
                  st.markdown("""
-                <div class="footer-header">⚙️ STRATEGY</div>
                 * **Signal Trigger**: RSI crosses **ABOVE Low Percentile** (Leaving Low) or **BELOW High Percentile** (Leaving High).
                 * **Signal-Based Optimization**: Instead of matching RSI values, this backtester finds all historical instances where the stock "Left the Low/High" and calculates performance.
                 * **Optimization Loop**: Calculates returns for **10, 30, 60, 90, 180** days (or weeks) and selects the Winner based on **Profit Factor**.
                 * **Data Constraint**: This scanner utilizes up to 10 years of data if provided in the source file.
-                """, unsafe_allow_html=True)
+                """)
             with c2:
+                st.markdown('<div class="footer-header">🔢 PERCENTILE DEFINITION</div>', unsafe_allow_html=True)
                 st.markdown("""
-                <div class="footer-header">🔢 PERCENTILE DEFINITION</div>
                 * **Low/High Percentile**: Calculated based on the full history (up to 10 years). 
-                * <b>Example</b>: If RSI < 10th Percentile, it means the current RSI is lower than it has been 90% of the time historically. This adapts to each stock's unique personality better than fixed 30/70 levels.
-                """, unsafe_allow_html=True)
+                * **Example**: If RSI < 10th Percentile, it means the current RSI is lower than it has been 90% of the time historically. This adapts to each stock's unique personality better than fixed 30/70 levels.
+                """)
             with c3:
+                st.markdown('<div class="footer-header">📊 TABLE COLUMNS</div>', unsafe_allow_html=True)
                 st.markdown("""
-                <div class="footer-header">📊 TABLE COLUMNS</div>
-                * <b>Date</b>: The date the signal fired (Left Low/High).
-                * <b>RSI Δ</b>: RSI movement (e.g., 10th-Pct ↗ Current-RSI).
-                * <b>Signal Close</b>: Price when signal fired.
-                * <b>Best Period</b>: The historical holding period (e.g., 30d/30w) that produced the best Profit Factor.
-                * <b>Profit Factor</b>: Gross Wins / Gross Losses. 
+                * **Date**: The date the signal fired (Left Low/High).
+                * **RSI Δ**: RSI movement (e.g., 10th-Pct ↗ Current-RSI).
+                * **Signal Close**: Price when signal fired.
+                * **Best Period**: The historical holding period (e.g., 30d/30w) that produced the best Profit Factor.
+                * **Profit Factor**: Gross Wins / Gross Losses. 
                     * **Leaving Low**: Win = Price went **UP**.
                     * **Leaving High**: Win = Price went **DOWN**.
-                * <b>Win Rate</b>: Percentage of historical trades that resulted in a "Win" (based on action type above).
-                * <b>EV</b>: Expected Value. Average return per trade.
-                    * **Leaving Low**: Positive EV = Price historically **rose**.
-                    * **Leaving High**: Positive EV = Price historically **fell** (Profitable for shorts).
-                * <b>N</b>: Total historical instances used for the stats in the Winning Period.
-                """, unsafe_allow_html=True)
+                * **Win Rate**: Percentage of historical trades that resulted in a "Win".
+                * **EV**: Expected Value. Average return per trade.
+                * **EV Target**: Signal Close × (1 + EV).
+                * **N**: Total historical instances used for the stats in the Winning Period.
+                """)
         
         if data_option_pct:
             try:
