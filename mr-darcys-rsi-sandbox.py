@@ -1825,6 +1825,7 @@ def run_pivot_tables_app(df):
     tbl_rr = get_p(df_rr_f, is_rr=True)
     if not tbl_rr.empty: 
         st.dataframe(tbl_rr.style.format(fmt).map(highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=get_table_height(tbl_rr, max_rows=50), column_config=COLUMN_CONFIG_PIVOT)
+        st.markdown("<br><br>", unsafe_allow_html=True)
     else: st.caption("No matched RR pairs found.")
 
 def run_rsi_scanner_app(df_global):
