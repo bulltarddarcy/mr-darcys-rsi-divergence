@@ -760,7 +760,7 @@ def prepare_data(df):
         
     return df_d, df_w
 
-def find_divergences(df_tf, ticker, timeframe, min_n=0, periods_input=None):
+def find_divergences(df_tf, ticker, timeframe, min_n=0, periods_input=None, optimize_for='PF'):
     divergences = []
     n_rows = len(df_tf)
     
@@ -885,7 +885,7 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0, periods_input=None):
         price_display = f"${price_p1:,.2f} ↗ ${price_p2:,.2f}" if price_p2 > price_p1 else f"${price_p1:,.2f} ↘ ${price_p2:,.2f}"
 
         hist_list = bullish_signal_indices if s_type == 'Bullish' else bearish_signal_indices
-        best_stats = calculate_optimal_signal_stats(hist_list, close_vals, i, signal_type=s_type, timeframe=timeframe, periods_input=periods_input)
+        best_stats = calculate_optimal_signal_stats(hist_list, close_vals, i, signal_type=s_type, timeframe=timeframe, periods_input=periods_input, optimize_for=optimize_for)
         
         if best_stats is None:
              best_stats = {"Best Period": "—", "Profit Factor": 0.0, "Win Rate": 0.0, "EV": 0.0, "N": 0}
@@ -912,7 +912,8 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0, periods_input=None):
             'Best Period': best_stats['Best Period'], 'Profit Factor': best_stats['Profit Factor'],
             'Win Rate': best_stats['Win Rate'], 'EV': best_stats['EV'], 
             'EV Target': ev_price, 
-            'N': best_stats['N']
+            'N': best_stats['N'],
+            'SQN': best_stats.get('SQN', 0.0) # Added SQN just in case
         })
             
     return divergences
