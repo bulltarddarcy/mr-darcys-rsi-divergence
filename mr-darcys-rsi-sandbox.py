@@ -33,44 +33,7 @@ SIGNAL_LOOKBACK_PERIOD = 25
 RSI_DIFF_THRESHOLD = 2
 EMA8_PERIOD = 8
 EMA21_PERIOD = 21
-EV_LOOKBACK_YEARS = 3
-URL_TICKER_MAP_DEFAULT = "https://drive.google.com/file/d/1MlVp6yF7FZjTdRFMpYCxgF-ezyKvO4gG/view?usp=sharing"
-
-# --- DATASET KEYS (PARQUET) ---
-def get_parquet_config():
-    """
-    Loads dataset configuration from st.secrets['PARQUET_CONFIG'].
-    Format expected in secrets:
-    Display Name,SECRET_KEY
-    Display Name 2,SECRET_KEY_2
-    """
-    config = {}
-    try:
-        raw_config = st.secrets.get("PARQUET_CONFIG", "")
-        if raw_config:
-            lines = raw_config.strip().split('\n')
-            for line in lines:
-                parts = line.split(',')
-                if len(parts) >= 2:
-                    name = parts[0].strip()
-                    key = parts[1].strip()
-                    config[name] = key
-    except Exception as e:
-        print(f"Error parsing PARQUET_CONFIG: {e}")
-    
-    # Fallback to hardcoded defaults if secret is missing or parsing failed
-    if not config:
-        config = {
-            "Darcy List": "PARQUET_DARCY",
-            "NQ100": "PARQUET_NQ100",
-            "SP100": "PARQUET_SP100",
-            "Sectors": "PARQUET_SECTORS",
-            "Macro": "PARQUET_MACRO",
-            "MidCaps SP400": "PARQUET_MIDCAP"
-        }
-    return config
-
-DATA_KEYS_PARQUET = get_parquet_config()
+URL_TICKER_MAP_DEFAULT = None
 
 @st.cache_data(ttl=600, show_spinner="Updating Data...")
 def load_and_clean_data(url: str) -> pd.DataFrame:
@@ -309,6 +272,62 @@ def get_confirmed_gdrive_data(url):
     except Exception as e:
         return None
 
+@st.cache_data(ttl=3600)
+def get_parquet_config():
+    """
+    Loads dataset configuration. 
+    Priority 1: Text file in Google Drive (URL defined in secrets as URL_PARQUET_LIST)
+    Priority 2: String in secrets (PARQUET_CONFIG)
+    
+    If neither is found, it renders an error and stops execution.
+    """
+    config = {}
+    
+    # 1. Try loading from Google Drive Text File
+    url_list = st.secrets.get("URL_PARQUET_LIST", "")
+    if url_list:
+        try:
+            buffer = get_confirmed_gdrive_data(url_list)
+            if buffer and buffer != "HTML_ERROR":
+                content = buffer.getvalue()
+                lines = content.strip().split('\n')
+                for line in lines:
+                    if not line.strip(): continue
+                    parts = line.split(',')
+                    if len(parts) >= 2:
+                        name = parts[0].strip()
+                        # Clean up "" prefix if present
+                        name = re.sub(r'\\s*', '', name)
+                        key = parts[1].strip()
+                        config[name] = key
+        except Exception as e:
+            print(f"Error loading external config: {e}")
+
+    # 2. Fallback to secrets string if file failed or variable not set
+    if not config:
+        try:
+            raw_config = st.secrets.get("PARQUET_CONFIG", "")
+            if raw_config:
+                lines = raw_config.strip().split('\n')
+                for line in lines:
+                    parts = line.split(',')
+                    if len(parts) >= 2:
+                        name = parts[0].strip()
+                        key = parts[1].strip()
+                        config[name] = key
+        except Exception:
+            pass
+    
+    # 3. Final Validation - Error if empty
+    if not config:
+        st.error("⛔ CRITICAL ERROR: No dataset configuration found. Please check 'URL_PARQUET_LIST' in your secrets.toml.")
+        st.stop() # Stops the script immediately so it doesn't crash later
+        
+    return config
+
+# Initialize the config AFTER the function is defined
+DATA_KEYS_PARQUET = get_parquet_config()
+
 def get_gdrive_binary_data(url):
     """
     Downloads binary data (like Parquet) from Google Drive.
@@ -390,7 +409,13 @@ def load_parquet_and_clean(url_key):
 @st.cache_data(ttl=3600)
 def load_ticker_map():
     try:
+        # Defaults to None if key is missing in secrets
         url = st.secrets.get("URL_TICKER_MAP", URL_TICKER_MAP_DEFAULT)
+        
+        # Safety check: If url is None or empty, stop here
+        if not url: 
+            return {}
+
         buffer = get_confirmed_gdrive_data(url)
         if buffer and buffer != "HTML_ERROR":
             df = pd.read_csv(buffer)
