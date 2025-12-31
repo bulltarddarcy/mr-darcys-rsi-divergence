@@ -2005,7 +2005,7 @@ def run_rsi_scanner_app(df_global):
                 * <b>EV</b>: Expected Value. Average return per trade.
                     * **Bullish Table**: Positive EV means the stock historically **rose**.
                     * **Bearish Table**: Positive EV means the stock historically **fell** (profitable for shorts/puts).
-                * <b>EV Target</b>: Signal Price x (1+EV).
+                * <b>EV Target</b>: Signal Price CLOSE x (1+EV).
                 * <b>N</b>: Total historical instances used for the stats in the Winning Period.
                 """, unsafe_allow_html=True)
             with f_col4:
