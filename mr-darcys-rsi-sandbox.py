@@ -196,7 +196,6 @@ def is_above_ema21(symbol: str) -> bool:
         return True
 
 @st.cache_data(ttl=300)
-@st.cache_data(ttl=300)
 def get_stock_indicators(sym: str):
     try:
         ticker_obj = yf.Ticker(sym)
