@@ -862,21 +862,21 @@ def find_rsi_percentile_signals(df, ticker, pct_low=0.10, pct_high=0.90, min_n=1
     p10 = hist_df['RSI'].quantile(pct_low)
     p90 = hist_df['RSI'].quantile(pct_high)
     
-    rsi_vals = hist_df['RSI'].values
+    rsi_series = hist_df['RSI']
+    rsi_vals = rsi_series.values # Keep as numpy array for fast indexing later
     price_vals = hist_df['Price'].values
     
-    # 1. Identify ALL Signal Indices in the full history
-    bullish_signal_indices = []
-    bearish_signal_indices = []
+    # 1. Identify ALL Signal Indices (Vectorized)
+    # Shift RSI to compare previous candle vs current candle in one pass
+    prev_rsi = rsi_series.shift(1)
     
-    for i in range(1, len(hist_df)):
-        prev_rsi = rsi_vals[i-1]
-        curr_rsi = rsi_vals[i]
-        
-        if prev_rsi < p10 and curr_rsi >= (p10 + 1.0):
-            bullish_signal_indices.append(i)
-        elif prev_rsi > p90 and curr_rsi <= (p90 - 1.0):
-            bearish_signal_indices.append(i)
+    # Create Boolean Masks (NaNs from shift automatically evaluate to False)
+    bull_mask = (prev_rsi < p10) & (rsi_series >= (p10 + 1.0))
+    bear_mask = (prev_rsi > p90) & (rsi_series <= (p90 - 1.0))
+    
+    # Convert True locations to integer indices
+    bullish_signal_indices = np.where(bull_mask)[0].tolist()
+    bearish_signal_indices = np.where(bear_mask)[0].tolist()
             
     # 2. Filter and Optimize
     latest_close = df['Price'].iloc[-1] 
