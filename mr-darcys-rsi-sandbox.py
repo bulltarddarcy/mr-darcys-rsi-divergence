@@ -500,6 +500,13 @@ def calculate_optimal_signal_stats(history_indices, price_array, current_idx, si
         win_rate = (len(wins) / n) * 100
         avg_ret = np.mean(period_returns) * 100
         
+        # --- SQN Calculation ---
+        std_dev = np.std(period_returns)
+        if std_dev > 0 and n > 0:
+            sqn = (np.mean(period_returns) / std_dev) * np.sqrt(n)
+        else:
+            sqn = 0.0
+        
         if pf > best_pf:
             best_pf = pf
             best_stats = {
@@ -507,7 +514,8 @@ def calculate_optimal_signal_stats(history_indices, price_array, current_idx, si
                 "Profit Factor": pf,
                 "Win Rate": win_rate,
                 "EV": avg_ret,
-                "N": n
+                "N": n,
+                "SQN": sqn
             }
             
     return best_stats
@@ -954,7 +962,7 @@ def find_rsi_percentile_signals(df, ticker, pct_low=0.10, pct_high=0.90, min_n=1
         best_stats = calculate_optimal_signal_stats(hist_list, price_vals, i, signal_type=s_type, timeframe=timeframe, periods_input=periods_input)
         
         if best_stats is None:
-             best_stats = {"Best Period": "—", "Profit Factor": 0.0, "Win Rate": 0.0, "EV": 0.0, "N": 0}
+             best_stats = {"Best Period": "—", "Profit Factor": 0.0, "Win Rate": 0.0, "EV": 0.0, "N": 0, "SQN": 0.0}
              
         if best_stats["N"] < min_n:
             continue
@@ -989,7 +997,8 @@ def find_rsi_percentile_signals(df, ticker, pct_low=0.10, pct_high=0.90, min_n=1
             'Win Rate': best_stats['Win Rate'],
             'EV': best_stats['EV'],
             'EV Target': ev_price,
-            'N': best_stats['N']
+            'N': best_stats['N'],
+            'SQN': best_stats.get('SQN', 0.0)
         })
             
     return signals
@@ -1959,7 +1968,9 @@ def run_rsi_scanner_app(df_global):
     with tab_div:
         data_option_div = st.pills("Dataset", options=options, selection_mode="single", default=options[0] if options else None, label_visibility="collapsed", key="rsi_div_pills")
         
-        # [CHANGE 2] Moved Page Notes here (Order: Logic -> Tickers -> Inputs)
+        # Use session state for display text to allow rendering before input widget
+        periods_div_display = parse_periods(st.session_state.saved_rsi_div_periods)
+        
         with st.expander("ℹ️ Page Notes: Divergence Strategy Logic"):
             f_col1, f_col2, f_col3, f_col4 = st.columns(4)
             with f_col1:
@@ -1975,7 +1986,7 @@ def run_rsi_scanner_app(df_global):
                 st.markdown('<div class="footer-header">🔮 SIGNAL-BASED OPTIMIZATION</div>', unsafe_allow_html=True)
                 st.markdown(f"""
                 * **New Methodology**: Instead of just looking at RSI levels, this tool looks back at **Every Historical Occurrence** of the specific signal type (e.g., Daily Bullish Divergence) for the ticker.
-                * **Optimization Loop**: It calculates the forward returns for **{st.session_state.saved_rsi_div_periods}** trading days for each historical signal.
+                * **Optimization Loop**: It calculates the forward returns for **{','.join(map(str, periods_div_display))}** trading days for each historical signal.
                 * **Selection**: It compares these holding periods and selects the **Optimal Time Period** based on the highest **Profit Factor**.
                 * **Data Constraint**: This scanner utilizes up to 10 years of data if provided in the source file.
                 """)
@@ -2004,7 +2015,7 @@ def run_rsi_scanner_app(df_global):
                 * **V_HI**: Signal candle volume is > 150% of the 30-day average.
                 * **V_GROW**: Volume on the second pivot (P2) is higher than the first pivot (P1).
                 """)
-
+        
         if data_option_div:
             try:
                 key = dataset_map[data_option_div]
@@ -2027,7 +2038,6 @@ def run_rsi_scanner_app(df_global):
                         cols = st.columns(6)
                         for i, ticker in enumerate(ft_div): cols[i % 6].write(ticker)
 
-                    # [CHANGE 2] Inputs moved here (below ticker expander)
                     c_d1, c_d2 = st.columns(2)
                     with c_d1:
                          min_n_div = st.number_input("Minimum N", min_value=0, value=st.session_state.saved_rsi_div_min_n, step=1, key="rsi_div_min_n", on_change=save_rsi_state, args=("rsi_div_min_n", "saved_rsi_div_min_n"))
@@ -2145,6 +2155,7 @@ def run_rsi_scanner_app(df_global):
                 * **EV**: Expected Value. Average return per trade.
                 * **EV Target**: Signal Close × (1 + EV). (If N=0, Target=0)
                 * **N**: Total historical instances used for the stats in the Winning Period.
+                * **SQN**: System Quality Number. Measures relationship between expectancy and volatility.
                 """)
         
         if data_option_pct:
@@ -2190,7 +2201,6 @@ def run_rsi_scanner_app(df_global):
                     with c_p4: filter_date = st.date_input("Latest Date", value=st.session_state.saved_rsi_pct_date, key="rsi_pct_date", on_change=save_rsi_state, args=("rsi_pct_date", "saved_rsi_pct_date"))
                     with c_p5: min_n_pct = st.number_input("Minimum N", min_value=0, value=st.session_state.saved_rsi_pct_min_n, step=1, key="rsi_pct_min_n", on_change=save_rsi_state, args=("rsi_pct_min_n", "saved_rsi_pct_min_n"))
                     with c_p6: 
-                        # [CHANGE 3] Label updated
                         periods_str_pct = st.text_input("Test Periods (days only)", value=st.session_state.saved_rsi_pct_periods, key="rsi_pct_periods", on_change=save_rsi_state, args=("rsi_pct_periods", "saved_rsi_pct_periods"))
 
                     periods_pct = parse_periods(periods_str_pct)
@@ -2242,9 +2252,9 @@ def run_rsi_scanner_app(df_global):
                                     act = row['Action']
                                     idx = df_in.columns.get_loc('Action')
                                     if "Leaving Low" in str(act):
-                                        styles[idx] = 'color: #1e7e34; font-weight: bold;' # Green
+                                        styles[idx] = 'color: #1e7e34;' # Green, no bold
                                     elif "Leaving High" in str(act):
-                                        styles[idx] = 'color: #c5221f; font-weight: bold;' # Red
+                                        styles[idx] = 'color: #c5221f;' # Red, no bold
                                 
                                 return styles
                             return df_in.style.apply(highlight_row, axis=1)
@@ -2264,6 +2274,7 @@ def run_rsi_scanner_app(df_global):
                                 "EV": st.column_config.NumberColumn("EV", format="%.1f%%"),
                                 "EV Target": st.column_config.NumberColumn("EV Target", format="$%.2f"), 
                                 "N": st.column_config.NumberColumn("N"),
+                                "SQN": st.column_config.NumberColumn("SQN", format="%.2f", help="How to Read the Score:\n< 1.6: Poor. (Hard to trade, likely barely profitable).\n1.6 - 2.0: Average. (Decent, but you might struggle during drawdowns).\n2.0 - 3.0: Good. (A solid, professional strategy).\n3.0 - 5.0: Excellent. (A compounding machine).\n> 5.0: Holy Grail. (Rare; usually means you are printing money)."),
                                 "Signal_Type": None, "Date_Obj": None
                             },
                             hide_index=True,
