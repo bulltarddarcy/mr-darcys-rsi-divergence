@@ -433,10 +433,9 @@ def get_ticker_technicals(ticker: str, mapping: dict):
             return None
     return None
 
-def calculate_optimal_signal_stats(history_indices, price_array, current_idx, signal_type='Bullish', timeframe='Daily', periods_input=None, optimize_for='PF'):
+def calculate_optimal_signal_stats(history_indices, price_array, current_idx, signal_type='Bullish', timeframe='Daily', periods_input=None):
     """
     Vectorized calculation of forward returns for multiple periods.
-    optimize_for: 'PF' (Profit Factor) or 'SQN' (System Quality Number)
     """
     # 1. Filter for valid historical indices
     hist_arr = np.array(history_indices)
@@ -476,7 +475,7 @@ def calculate_optimal_signal_stats(history_indices, price_array, current_idx, si
         strat_returns_matrix = raw_returns_matrix
 
     # 6. Calculate Stats per Period
-    best_score = -999.0
+    best_pf = -1.0
     best_stats = None
     
     for i, p in enumerate(periods):
@@ -501,18 +500,15 @@ def calculate_optimal_signal_stats(history_indices, price_array, current_idx, si
         win_rate = (len(wins) / n) * 100
         avg_ret = np.mean(period_returns) * 100
         
-        # --- SQN Calculation ---
+        # --- SQN Calculation (Merged from Previous Request) ---
         std_dev = np.std(period_returns)
         if std_dev > 0 and n > 0:
             sqn = (np.mean(period_returns) / std_dev) * np.sqrt(n)
         else:
             sqn = 0.0
         
-        # Determine Score based on optimization metric
-        current_score = pf if optimize_for == 'PF' else sqn
-        
-        if current_score > best_score:
-            best_score = current_score
+        if pf > best_pf:
+            best_pf = pf
             best_stats = {
                 "Best Period": f"{p}{unit}",
                 "Profit Factor": pf,
@@ -917,12 +913,12 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0, periods_input=None, opti
             'Win Rate': best_stats['Win Rate'], 'EV': best_stats['EV'], 
             'EV Target': ev_price, 
             'N': best_stats['N'],
-            'SQN': best_stats.get('SQN', 0.0) # Added SQN just in case
+            'SQN': best_stats.get('SQN', 0.0)
         })
             
     return divergences
 
-def find_rsi_percentile_signals(df, ticker, pct_low=0.10, pct_high=0.90, min_n=1, filter_date=None, timeframe='Daily', periods_input=None, optimize_for='SQN'):
+def find_rsi_percentile_signals(df, ticker, pct_low=0.10, pct_high=0.90, min_n=1, filter_date=None, timeframe='Daily', periods_input=None):
     signals = []
     if len(df) < 200: return signals
     
@@ -964,10 +960,10 @@ def find_rsi_percentile_signals(df, ticker, pct_low=0.10, pct_high=0.90, min_n=1
         curr_rsi_val = rsi_vals[i]
         
         hist_list = bullish_signal_indices if is_bullish else bearish_signal_indices
-        best_stats = calculate_optimal_signal_stats(hist_list, price_vals, i, signal_type=s_type, timeframe=timeframe, periods_input=periods_input, optimize_for=optimize_for)
+        best_stats = calculate_optimal_signal_stats(hist_list, price_vals, i, signal_type=s_type, timeframe=timeframe, periods_input=periods_input)
         
         if best_stats is None:
-             best_stats = {"Best Period": "—", "Profit Factor": 0.0, "Win Rate": 0.0, "EV": 0.0, "N": 0, "SQN": 0.0}
+             best_stats = {"Best Period": "—", "Profit Factor": 0.0, "Win Rate": 0.0, "EV": 0.0, "N": 0}
              
         if best_stats["N"] < min_n:
             continue
@@ -2313,3 +2309,72 @@ def run_rsi_scanner_app(df_global):
                     else: st.info(f"No Percentile signals found (Crossing {in_low}th/{in_high}th percentile).")
 
             except Exception as e: st.error(f"Analysis failed: {e}")
+
+st.markdown("""<style>
+.block-container{padding-top:3.5rem;padding-bottom:1rem;}
+.zones-panel{padding:14px 0; border-radius:10px;}
+.zone-row{display:flex; align-items:center; gap:10px; margin:8px 0;}
+.zone-label{width:90px; font-weight:700; text-align:right; flex-shrink: 0; font-size: 13px;}
+.zone-wrapper{
+    flex-grow: 1; 
+    position: relative; 
+    height: 24px; 
+    background-color: rgba(0,0,0,0.03);
+    border-radius: 4px;
+    overflow: hidden;
+}
+.zone-bar{
+    position: absolute;
+    left: 0; 
+    top: 0; 
+    bottom: 0; 
+    z-index: 1;
+    border-radius: 3px;
+    opacity: 0.65;
+}
+.zone-bull{background-color: #71d28a;}
+.zone-bear{background-color: #f29ca0;}
+.zone-value{
+    position: absolute;
+    right: 8px;
+    top: 0;
+    bottom: 0;
+    display: flex;
+    align-items: center;
+    z-index: 2;
+    font-size: 12px; 
+    font-weight: 700;
+    color: #1f1f1f;
+    white-space: nowrap;
+    text-shadow: 0 0 4px rgba(255,255,255,0.8);
+}
+.price-divider { display: flex; align-items: center; justify-content: center; position: relative; margin: 24px 0; width: 100%; }
+.price-divider::before, .price-divider::after { content: ""; flex-grow: 1; height: 2px; background: #66b7ff; opacity: 0.4; }
+.price-badge { background: rgba(102, 183, 255, 0.1); color: #66b7ff; border: 1px solid rgba(102, 183, 255, 0.5); border-radius: 16px; padding: 6px 14px; font-weight: 800; font-size: 12px; letter-spacing: 0.5px; white-space: nowrap; margin: 0 12px; z-index: 1; }
+.metric-row{display:flex;gap:10px;flex-wrap:wrap;margin:.35rem 0 .75rem 0}
+.badge{background: rgba(128, 128, 128, 0.08); border: 1px solid rgba(128, 128, 128, 0.2); border-radius:18px; padding:6px 10px; font-weight:700}
+.price-badge-header{background: rgba(102, 183, 255, 0.1); border: 1px solid #66b7ff; border-radius:18px; padding:6px 10px; font-weight:800}
+.light-note { opacity: 0.7; font-size: 14px; margin-bottom: 10px; }
+
+</style>""", unsafe_allow_html=True)
+
+try:
+    sheet_url = st.secrets["GSHEET_URL"]
+    df_global = load_and_clean_data(sheet_url)
+    last_updated_date = df_global["Trade Date"].max().strftime("%d %b %y")
+
+    pg = st.navigation([
+        st.Page(lambda: run_database_app(df_global), title="Database", icon="📂", url_path="options_db", default=True),
+        st.Page(lambda: run_rankings_app(df_global), title="Rankings", icon="🏆", url_path="rankings"),
+        st.Page(lambda: run_pivot_tables_app(df_global), title="Pivot Tables", icon="🎯", url_path="pivot_tables"),
+        st.Page(lambda: run_strike_zones_app(df_global), title="Strike Zones", icon="📊", url_path="strike_zones"),
+        st.Page(lambda: run_rsi_scanner_app(df_global), title="RSI Scanner", icon="📈", url_path="rsi_scanner"), 
+    ])
+
+    st.sidebar.caption("🖥️ Everything is best viewed with a wide desktop monitor in light mode.")
+    st.sidebar.caption(f"📅 **Last Updated:** {last_updated_date}")
+    
+    pg.run()
+    
+except Exception as e: 
+    st.error(f"Error initializing dashboard: {e}")
