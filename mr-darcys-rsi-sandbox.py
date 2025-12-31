@@ -1959,6 +1959,52 @@ def run_rsi_scanner_app(df_global):
     with tab_div:
         data_option_div = st.pills("Dataset", options=options, selection_mode="single", default=options[0] if options else None, label_visibility="collapsed", key="rsi_div_pills")
         
+        # [CHANGE 2] Moved Page Notes here (Order: Logic -> Tickers -> Inputs)
+        with st.expander("ℹ️ Page Notes: Divergence Strategy Logic"):
+            f_col1, f_col2, f_col3, f_col4 = st.columns(4)
+            with f_col1:
+                st.markdown('<div class="footer-header">📉 SIGNAL LOGIC</div>', unsafe_allow_html=True)
+                st.markdown(f"""
+                * **Identification**: Scans for **True Pivots** over a **{SIGNAL_LOOKBACK_PERIOD}-period** window.
+                * **Divergence**: 
+                    * **Bullish**: Price makes a Lower Low, but RSI makes a Higher Low.
+                    * **Bearish**: Price makes a Higher High, but RSI makes a Lower High.
+                * **Invalidation**: If RSI crosses the 50 midline between pivots, the setup is reset.
+                """)
+            with f_col2:
+                st.markdown('<div class="footer-header">🔮 SIGNAL-BASED OPTIMIZATION</div>', unsafe_allow_html=True)
+                st.markdown(f"""
+                * **New Methodology**: Instead of just looking at RSI levels, this tool looks back at **Every Historical Occurrence** of the specific signal type (e.g., Daily Bullish Divergence) for the ticker.
+                * **Optimization Loop**: It calculates the forward returns for **{st.session_state.saved_rsi_div_periods}** trading days for each historical signal.
+                * **Selection**: It compares these holding periods and selects the **Optimal Time Period** based on the highest **Profit Factor**.
+                * **Data Constraint**: This scanner utilizes up to 10 years of data if provided in the source file.
+                """)
+            with f_col3:
+                st.markdown('<div class="footer-header">📊 TABLE COLUMNS</div>', unsafe_allow_html=True)
+                st.markdown("""
+                * <b>Day/Week Δ</b>: Date the Divergence was confirmed (Pivot 2).
+                * <b>RSI Δ</b>: RSI value at Pivot 1 vs Pivot 2.
+                * <b>Price Δ</b>: Price at Pivot 1 vs Pivot 2.
+                * <b>Best Period</b>: The historical holding period (e.g., 30d/30w) that produced the best Profit Factor.
+                * <b>Profit Factor</b>: Gross Wins / Gross Losses. Measures efficiency.
+                    * **Bullish Table**: Win = Price went **UP**.
+                    * **Bearish Table**: Win = Price went **DOWN**.
+                * <b>Win Rate</b>: Percentage of historical trades that resulted in a "Win" (based on signal type above).
+                * <b>EV</b>: Expected Value. Average return per trade.
+                    * **Bullish Table**: Positive EV means the stock historically **rose**.
+                    * **Bearish Table**: Positive EV means the stock historically **fell** (profitable for shorts/puts).
+                * <b>EV Target</b>: Signal Price CLOSE x (1+EV). (If N=0, Target=0)
+                * <b>N</b>: Total historical instances used for the stats in the Winning Period.
+                """, unsafe_allow_html=True)
+            with f_col4:
+                st.markdown('<div class="footer-header">🏷️ TAGS</div>', unsafe_allow_html=True)
+                st.markdown(f"""
+                * **EMA{EMA8_PERIOD}**: Bullish (Last Close > EMA8) or Bearish (Last Close < EMA8).
+                * **EMA{EMA21_PERIOD}**: Bullish (Last Close > EMA21) or Bearish (Last Close < EMA21).
+                * **V_HI**: Signal candle volume is > 150% of the 30-day average.
+                * **V_GROW**: Volume on the second pivot (P2) is higher than the first pivot (P1).
+                """)
+
         if data_option_div:
             try:
                 key = dataset_map[data_option_div]
@@ -1981,61 +2027,15 @@ def run_rsi_scanner_app(df_global):
                         cols = st.columns(6)
                         for i, ticker in enumerate(ft_div): cols[i % 6].write(ticker)
 
-                    # --- Moved Filters Below Expander (Change a) ---
+                    # [CHANGE 2] Inputs moved here (below ticker expander)
                     c_d1, c_d2 = st.columns(2)
                     with c_d1:
-                         # Added session state (Change b)
                          min_n_div = st.number_input("Minimum N", min_value=0, value=st.session_state.saved_rsi_div_min_n, step=1, key="rsi_div_min_n", on_change=save_rsi_state, args=("rsi_div_min_n", "saved_rsi_div_min_n"))
                     with c_d2:
                          periods_str_div = st.text_input("Test Periods (days/weeks)", value=st.session_state.saved_rsi_div_periods, key="rsi_div_periods", on_change=save_rsi_state, args=("rsi_div_periods", "saved_rsi_div_periods"))
                     
                     periods_div = parse_periods(periods_str_div)
 
-                    with st.expander("ℹ️ Page Notes: Divergence Strategy Logic"):
-                        f_col1, f_col2, f_col3, f_col4 = st.columns(4)
-                        with f_col1:
-                            st.markdown('<div class="footer-header">📉 SIGNAL LOGIC</div>', unsafe_allow_html=True)
-                            st.markdown(f"""
-                            * **Identification**: Scans for **True Pivots** over a **{SIGNAL_LOOKBACK_PERIOD}-period** window.
-                            * **Divergence**: 
-                                * **Bullish**: Price makes a Lower Low, but RSI makes a Higher Low.
-                                * **Bearish**: Price makes a Higher High, but RSI makes a Lower High.
-                            * **Invalidation**: If RSI crosses the 50 midline between pivots, the setup is reset.
-                            """)
-                        with f_col2:
-                            st.markdown('<div class="footer-header">🔮 SIGNAL-BASED OPTIMIZATION</div>', unsafe_allow_html=True)
-                            st.markdown(f"""
-                            * **New Methodology**: Instead of just looking at RSI levels, this tool looks back at **Every Historical Occurrence** of the specific signal type (e.g., Daily Bullish Divergence) for the ticker.
-                            * **Optimization Loop**: It calculates the forward returns for **{','.join(map(str, periods_div))}** trading days for each historical signal.
-                            * **Selection**: It compares these holding periods and selects the **Optimal Time Period** based on the highest **Profit Factor**.
-                            * **Data Constraint**: This scanner utilizes up to 10 years of data if provided in the source file.
-                            """)
-                        with f_col3:
-                            st.markdown('<div class="footer-header">📊 TABLE COLUMNS</div>', unsafe_allow_html=True)
-                            st.markdown("""
-                            * <b>Day/Week Δ</b>: Date the Divergence was confirmed (Pivot 2).
-                            * <b>RSI Δ</b>: RSI value at Pivot 1 vs Pivot 2.
-                            * <b>Price Δ</b>: Price at Pivot 1 vs Pivot 2.
-                            * <b>Best Period</b>: The historical holding period (e.g., 30d/30w) that produced the best Profit Factor.
-                            * <b>Profit Factor</b>: Gross Wins / Gross Losses. Measures efficiency.
-                                * **Bullish Table**: Win = Price went **UP**.
-                                * **Bearish Table**: Win = Price went **DOWN**.
-                            * <b>Win Rate</b>: Percentage of historical trades that resulted in a "Win" (based on signal type above).
-                            * <b>EV</b>: Expected Value. Average return per trade.
-                                * **Bullish Table**: Positive EV means the stock historically **rose**.
-                                * **Bearish Table**: Positive EV means the stock historically **fell** (profitable for shorts/puts).
-                            * <b>EV Target</b>: Signal Price CLOSE x (1+EV). (If N=0, Target=0)
-                            * <b>N</b>: Total historical instances used for the stats in the Winning Period.
-                            """, unsafe_allow_html=True)
-                        with f_col4:
-                            st.markdown('<div class="footer-header">🏷️ TAGS</div>', unsafe_allow_html=True)
-                            st.markdown(f"""
-                            * **EMA{EMA8_PERIOD}**: Bullish (Last Close > EMA8) or Bearish (Last Close < EMA8).
-                            * **EMA{EMA21_PERIOD}**: Bullish (Last Close > EMA21) or Bearish (Last Close < EMA21).
-                            * **V_HI**: Signal candle volume is > 150% of the 30-day average.
-                            * **V_GROW**: Volume on the second pivot (P2) is higher than the first pivot (P1).
-                            """)
-        
                     raw_results_div = []
                     progress_bar = st.progress(0, text="Scanning Divergences...")
                     grouped = master.groupby(t_col)
@@ -2189,7 +2189,9 @@ def run_rsi_scanner_app(df_global):
                     c_p4, c_p5, c_p6 = st.columns(3)
                     with c_p4: filter_date = st.date_input("Latest Date", value=st.session_state.saved_rsi_pct_date, key="rsi_pct_date", on_change=save_rsi_state, args=("rsi_pct_date", "saved_rsi_pct_date"))
                     with c_p5: min_n_pct = st.number_input("Minimum N", min_value=0, value=st.session_state.saved_rsi_pct_min_n, step=1, key="rsi_pct_min_n", on_change=save_rsi_state, args=("rsi_pct_min_n", "saved_rsi_pct_min_n"))
-                    with c_p6: periods_str_pct = st.text_input("Test Periods", value=st.session_state.saved_rsi_pct_periods, key="rsi_pct_periods", on_change=save_rsi_state, args=("rsi_pct_periods", "saved_rsi_pct_periods"))
+                    with c_p6: 
+                        # [CHANGE 3] Label updated
+                        periods_str_pct = st.text_input("Test Periods (days only)", value=st.session_state.saved_rsi_pct_periods, key="rsi_pct_periods", on_change=save_rsi_state, args=("rsi_pct_periods", "saved_rsi_pct_periods"))
 
                     periods_pct = parse_periods(periods_str_pct)
 
@@ -2201,14 +2203,9 @@ def run_rsi_scanner_app(df_global):
                     
                     for i, (ticker, group) in enumerate(grouped_list):
                         d_d, d_w = prepare_data(group.copy())
-                        # Passed periods_pct. 
-                        # (c) Logic Fix: Removed the Weekly processing below so all Periods are interpreted as DAYS.
+                        
                         if d_d is not None:
                             raw_results_pct.extend(find_rsi_percentile_signals(d_d, ticker, pct_low=in_low/100.0, pct_high=in_high/100.0, min_n=min_n_pct, filter_date=filter_date, timeframe='Daily', periods_input=periods_pct))
-                        
-                        # COMMENTED OUT TO ENSURE ONLY TRADING DAYS ARE TESTED
-                        # if d_w is not None:
-                        #     raw_results_pct.extend(find_rsi_percentile_signals(d_w, ticker, pct_low=in_low/100.0, pct_high=in_high/100.0, min_n=min_n_pct, filter_date=filter_date, timeframe='Weekly', periods_input=periods_pct))
                         
                         if i % 10 == 0 or i == total_groups - 1: progress_bar.progress((i + 1) / total_groups)
                     
@@ -2222,6 +2219,7 @@ def run_rsi_scanner_app(df_global):
                         elif show_filter == "Leaving Low":
                             res_pct_df = res_pct_df[res_pct_df['Signal_Type'] == 'Bullish']
                             
+                        # [CHANGE 1] Added styling for Action column
                         def style_pct_df(df_in):
                             def highlight_row(row):
                                 styles = [''] * len(row)
@@ -2238,6 +2236,16 @@ def run_rsi_scanner_app(df_global):
                                         bg = 'background-color: #e6f4ea; color: #1e7e34;' if is_green else 'background-color: #fce8e6; color: #c5221f;'
                                         idx = df_in.columns.get_loc('EV')
                                         styles[idx] = f'{bg} font-weight: 500;'
+                                
+                                # Color Action
+                                if 'Action' in df_in.columns:
+                                    act = row['Action']
+                                    idx = df_in.columns.get_loc('Action')
+                                    if "Leaving Low" in str(act):
+                                        styles[idx] = 'color: #1e7e34; font-weight: bold;' # Green
+                                    elif "Leaving High" in str(act):
+                                        styles[idx] = 'color: #c5221f; font-weight: bold;' # Red
+                                
                                 return styles
                             return df_in.style.apply(highlight_row, axis=1)
 
