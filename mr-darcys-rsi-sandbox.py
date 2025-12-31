@@ -540,10 +540,10 @@ def prepare_data(df):
     high_col = next((c for c in cols if 'HIGH' in c and 'W_' not in c), None)
     low_col = next((c for c in cols if 'LOW' in c and 'W_' not in c), None)
     
-    # Identify RSI and EMA columns for Daily data
+    # Identify RSI and EMA columns for Daily data (More Robust Search)
     d_rsi = next((c for c in cols if 'RSI' in c and 'W_' not in c), 'RSI_14')
-    d_ema8 = 'EMA_8' if 'EMA_8' in cols else None
-    d_ema21 = 'EMA_21' if 'EMA_21' in cols else None
+    d_ema8 = next((c for c in cols if c in ['EMA_8', 'EMA8']), None)
+    d_ema21 = next((c for c in cols if c in ['EMA_21', 'EMA21']), None)
     
     if not all([date_col, close_col, vol_col, high_col, low_col]): return None, None
     
@@ -561,8 +561,8 @@ def prepare_data(df):
     # Map CSV names to internal script names used by find_divergences
     rename_dict = {close_col: 'Price', vol_col: 'Volume', high_col: 'High', low_col: 'Low'}
     if d_rsi in df_d.columns: rename_dict[d_rsi] = 'RSI'
-    if d_ema8: rename_dict[d_ema8] = 'EMA8'   # Maps EMA_8 -> EMA8
-    if d_ema21: rename_dict[d_ema21] = 'EMA21' # Maps EMA_21 -> EMA21
+    if d_ema8: rename_dict[d_ema8] = 'EMA8'   # Maps Found Column -> EMA8
+    if d_ema21: rename_dict[d_ema21] = 'EMA21' # Maps Found Column -> EMA21
     
     df_d.rename(columns=rename_dict, inplace=True)
     df_d['VolSMA'] = df_d['Volume'].rolling(window=VOL_SMA_PERIOD).mean()
@@ -580,7 +580,10 @@ def prepare_data(df):
     # Identify Weekly columns
     w_close, w_vol, w_rsi = 'W_CLOSE', 'W_VOLUME', 'W_RSI_14'
     w_high, w_low = 'W_HIGH', 'W_LOW'
-    w_ema8, w_ema21 = 'W_EMA_8', 'W_EMA_21'
+    
+    # Robust Weekly EMA Search
+    w_ema8 = next((c for c in cols if c in ['W_EMA_8', 'W_EMA8']), 'W_EMA_8')
+    w_ema21 = next((c for c in cols if c in ['W_EMA_21', 'W_EMA21']), 'W_EMA_21')
     
     # Build Weekly Dataframe
     if all(c in df.columns for c in [w_close, w_vol, w_high, w_low, w_rsi]):
@@ -592,8 +595,8 @@ def prepare_data(df):
         
         # Map Weekly CSV names to internal names
         w_rename = {w_close: 'Price', w_vol: 'Volume', w_high: 'High', w_low: 'Low', w_rsi: 'RSI'}
-        if w_ema8 in df.columns: w_rename[w_ema8] = 'EMA8'   # Maps W_EMA_8 -> EMA8
-        if w_ema21 in df.columns: w_rename[w_ema21] = 'EMA21' # Maps W_EMA_21 -> EMA21
+        if w_ema8 in df.columns: w_rename[w_ema8] = 'EMA8'
+        if w_ema21 in df.columns: w_rename[w_ema21] = 'EMA21'
         
         df_w.rename(columns=w_rename, inplace=True)
         df_w['VolSMA'] = df_w['Volume'].rolling(window=VOL_SMA_PERIOD).mean()
@@ -1764,6 +1767,9 @@ def run_rsi_scanner_app(df_global):
                                 format_wr = lambda x: f"{x:.1f}%" if pd.notnull(x) else "—"
                                 format_pf = lambda x: f"{x:.2f}" if pd.notnull(x) else "—"
 
+                                # Reorder DataFrame columns explicitly
+                                res_df = res_df[["Days", "Profit Factor", "Win Rate", "EV", "Count"]]
+
                                 st.dataframe(
                                     res_df.style
                                     .format({"Win Rate": format_wr, "EV": format_func, "Profit Factor": format_pf})
@@ -1787,7 +1793,7 @@ def run_rsi_scanner_app(df_global):
         data_option_div = st.pills("Dataset", options=options, selection_mode="single", default=options[0] if options else None, label_visibility="collapsed", key="rsi_div_pills")
         
         with st.expander("ℹ️ Page Notes: Divergence Strategy Logic"):
-            f_col1, f_col2, f_col3 = st.columns(3)
+            f_col1, f_col2, f_col3, f_col4 = st.columns(4)
             with f_col1:
                 st.markdown('<div class="footer-header">📉 SIGNAL LOGIC</div>', unsafe_allow_html=True)
                 st.markdown(f"""
@@ -1803,9 +1809,19 @@ def run_rsi_scanner_app(df_global):
                 * **New Methodology**: Instead of just looking at RSI levels, this tool looks back at **Every Historical Occurrence** of the specific signal type (e.g., Daily Bullish Divergence) for the ticker.
                 * **Optimization Loop**: It calculates the forward returns for **10, 30, 60, 90, and 180** trading days for each historical signal.
                 * **Selection**: It compares these 5 holding periods and selects the **Optimal Time Period** based on the highest **Profit Factor**.
-                * **Data Constraint**: Note that the input files for this specific scanner currently contain ~3 years of price history.
+                * **Data Constraint**: This scanner utilizes up to 10 years of data if provided in the source file.
                 """)
             with f_col3:
+                st.markdown('<div class="footer-header">📊 TABLE COLUMNS</div>', unsafe_allow_html=True)
+                st.markdown("""
+                * <b>Date Δ</b>: Date the Divergence was confirmed (P2).
+                * <b>RSI Δ</b>: RSI value at Pivot 1 vs Pivot 2.
+                * <b>Price Δ</b>: Price at Pivot 1 vs Pivot 2.
+                * <b>Best Period</b>: The holding period (e.g., 30d) that historically yielded the highest Profit Factor.
+                * <b>Profit Factor</b>: Gross Wins / Gross Losses.
+                * <b>EV</b>: Average expected return per trade.
+                """, unsafe_allow_html=True)
+            with f_col4:
                 st.markdown('<div class="footer-header">🏷️ TAGS</div>', unsafe_allow_html=True)
                 st.markdown(f"""
                 * **EMA{EMA8_PERIOD}**: Bullish (Price > EMA8) or Bearish (Price < EMA8).
@@ -1915,12 +1931,31 @@ def run_rsi_scanner_app(df_global):
         data_option_pct = st.pills("Dataset", options=options, selection_mode="single", default=options[0] if options else None, label_visibility="collapsed", key="rsi_pct_pills")
         
         with st.expander("ℹ️ Page Notes: Percentile Strategy Logic"):
-             st.markdown("""
-            * **Signal Trigger**: RSI crosses **ABOVE Low Percentile** (Leaving Low) or **BELOW High Percentile** (Leaving High).
-            * **Signal-Based Optimization**: Instead of matching RSI values, this backtester finds all historical instances where the stock "Left the Low/High" and calculates performance.
-            * **Optimization Loop**: Calculates returns for **10, 30, 60, 90, 180** days and selects the Winner based on **Profit Factor**.
-            * **Data Constraint**: Note that the input files for this specific scanner currently contain ~3 years of price history.
-            """)
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                 st.markdown("""
+                <div class="footer-header">⚙️ STRATEGY</div>
+                * **Signal Trigger**: RSI crosses **ABOVE Low Percentile** (Leaving Low) or **BELOW High Percentile** (Leaving High).
+                * **Signal-Based Optimization**: Instead of matching RSI values, this backtester finds all historical instances where the stock "Left the Low/High" and calculates performance.
+                * **Optimization Loop**: Calculates returns for **10, 30, 60, 90, 180** days and selects the Winner based on **Profit Factor**.
+                * **Data Constraint**: This scanner utilizes up to 10 years of data if provided in the source file.
+                """, unsafe_allow_html=True)
+            with c2:
+                st.markdown("""
+                <div class="footer-header">🔢 PERCENTILE DEFINITION</div>
+                * **Low/High Percentile**: Calculated based on the last 10 years of data. 
+                * <b>Example</b>: If RSI < 10th Percentile, it means the current RSI is lower than it has been 90% of the time historically. This adapts to each stock's unique personality better than fixed 30/70 levels.
+                """, unsafe_allow_html=True)
+            with c3:
+                st.markdown("""
+                <div class="footer-header">📊 TABLE COLUMNS</div>
+                * <b>Date</b>: The date the signal fired (Left Low/High).
+                * <b>RSI Δ</b>: RSI movement (e.g., 30 ↗ 32).
+                * <b>Signal Close</b>: Price when signal fired.
+                * <b>Best Period</b>: The historical holding period (e.g., 30d) that produced the best Profit Factor.
+                * <b>Profit Factor</b>: Gross Wins divided by Gross Losses.
+                * <b>EV</b>: Average expected return per trade.
+                """, unsafe_allow_html=True)
         
         if data_option_pct:
             try:
