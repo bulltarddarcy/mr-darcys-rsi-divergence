@@ -628,7 +628,7 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0):
         return ts.strftime(fmt)
     
     # ---------------------------------------------------------
-    # PASS 1: SCAN FULL HISTORY
+    # PASS 1: SCAN FULL HISTORY (Used for Statistics)
     # ---------------------------------------------------------
     bullish_signal_indices = []
     bearish_signal_indices = []
@@ -726,6 +726,7 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0):
         price_display = f"${price_p1:,.2f} ↗ ${price_p2:,.2f}" if price_p2 > price_p1 else f"${price_p1:,.2f} ↘ ${price_p2:,.2f}"
 
         # Optimal Period Calculation
+        # Hist_list contains 10 YEARS of indices. 
         hist_list = bullish_signal_indices if s_type == 'Bullish' else bearish_signal_indices
         best_stats = calculate_optimal_signal_stats(hist_list, close_vals, i)
         
@@ -749,6 +750,7 @@ def find_rsi_percentile_signals(df, ticker, pct_low=0.10, pct_high=0.90, min_n=1
     signals = []
     if len(df) < 200: return signals
     
+    # We use the full history provided (up to 10 years)
     cutoff = df.index.max() - timedelta(days=365*10)
     hist_df = df[df.index >= cutoff].copy()
     
@@ -760,12 +762,10 @@ def find_rsi_percentile_signals(df, ticker, pct_low=0.10, pct_high=0.90, min_n=1
     rsi_vals = hist_df['RSI'].values
     price_vals = hist_df['Price'].values
     
-    # 1. Identify ALL Signal Indices in the 10-year history
+    # 1. Identify ALL Signal Indices in the full history
     bullish_signal_indices = []
     bearish_signal_indices = []
     
-    # Iterate through history
-    # Start from index 1
     for i in range(1, len(hist_df)):
         prev_rsi = rsi_vals[i-1]
         curr_rsi = rsi_vals[i]
@@ -775,19 +775,15 @@ def find_rsi_percentile_signals(df, ticker, pct_low=0.10, pct_high=0.90, min_n=1
         elif prev_rsi > p90 and curr_rsi <= (p90 - 1.0):
             bearish_signal_indices.append(i)
             
-    # 2. Report signals (filtered by latest date logic usually done outside, but we can do it here)
-    # The scan_window logic was: df.iloc[-(periods_to_scan+1):]
-    # But user wants "Minimum N to be included" which implies we look at all potential signals
-    # that meet the date filter.
-    
+    # 2. Filter and Optimize
     latest_close = df['Price'].iloc[-1] 
-    
     all_indices = sorted(bullish_signal_indices + bearish_signal_indices)
     
     for i in all_indices:
         curr_row = hist_df.iloc[i]
         curr_date = curr_row.name.date()
         
+        # Only show the signal in the table if it's within the requested recent window
         if filter_date and curr_date < filter_date:
             continue
             
@@ -796,6 +792,7 @@ def find_rsi_percentile_signals(df, ticker, pct_low=0.10, pct_high=0.90, min_n=1
         thresh_val = p10 if is_bullish else p90
         curr_rsi_val = rsi_vals[i]
         
+        # Backtest statistics use the FULL 10-YEAR list
         hist_list = bullish_signal_indices if is_bullish else bearish_signal_indices
         best_stats = calculate_optimal_signal_stats(hist_list, price_vals, i)
         
@@ -1735,10 +1732,10 @@ def run_rsi_scanner_app(df_global):
                             
                             results.append({
                                 "Days": p, 
+                                "Profit Factor": pf, # Correct Order
                                 "Win Rate": win_rate, 
                                 "EV": avg_ret, 
-                                "Count": len(valid_indices),
-                                "Profit Factor": pf
+                                "Count": len(valid_indices)
                             })
 
                         res_df = pd.DataFrame(results)
@@ -1766,9 +1763,6 @@ def run_rsi_scanner_app(df_global):
                                 format_func = lambda x: f"{x:+.2f}%" if pd.notnull(x) else "—"
                                 format_wr = lambda x: f"{x:.1f}%" if pd.notnull(x) else "—"
                                 format_pf = lambda x: f"{x:.2f}" if pd.notnull(x) else "—"
-
-                                # Reorder DataFrame columns explicitly
-                                res_df = res_df[["Days", "Profit Factor", "Win Rate", "EV", "Count"]]
 
                                 st.dataframe(
                                     res_df.style
@@ -1814,12 +1808,13 @@ def run_rsi_scanner_app(df_global):
             with f_col3:
                 st.markdown('<div class="footer-header">📊 TABLE COLUMNS</div>', unsafe_allow_html=True)
                 st.markdown("""
-                * <b>Date Δ</b>: Date the Divergence was confirmed (P2).
+                * <b>Day/Week Δ</b>: Date the Divergence was confirmed (Pivot 2).
                 * <b>RSI Δ</b>: RSI value at Pivot 1 vs Pivot 2.
                 * <b>Price Δ</b>: Price at Pivot 1 vs Pivot 2.
                 * <b>Best Period</b>: The holding period (e.g., 30d) that historically yielded the highest Profit Factor.
-                * <b>Profit Factor</b>: Gross Wins / Gross Losses.
-                * <b>EV</b>: Average expected return per trade.
+                * <b>Profit Factor</b>: Gross Wins / Gross Losses (Measure of efficiency).
+                * <b>EV</b>: Expected Value. Average return per trade.
+                * <b>N</b>: Total historical instances found in the dataset.
                 """, unsafe_allow_html=True)
             with f_col4:
                 st.markdown('<div class="footer-header">🏷️ TAGS</div>', unsafe_allow_html=True)
@@ -1943,18 +1938,19 @@ def run_rsi_scanner_app(df_global):
             with c2:
                 st.markdown("""
                 <div class="footer-header">🔢 PERCENTILE DEFINITION</div>
-                * **Low/High Percentile**: Calculated based on the last 10 years of data. 
+                * **Low/High Percentile**: Calculated based on the full history (up to 10 years). 
                 * <b>Example</b>: If RSI < 10th Percentile, it means the current RSI is lower than it has been 90% of the time historically. This adapts to each stock's unique personality better than fixed 30/70 levels.
                 """, unsafe_allow_html=True)
             with c3:
                 st.markdown("""
                 <div class="footer-header">📊 TABLE COLUMNS</div>
                 * <b>Date</b>: The date the signal fired (Left Low/High).
-                * <b>RSI Δ</b>: RSI movement (e.g., 30 ↗ 32).
+                * <b>RSI Δ</b>: RSI movement (e.g., 10th-Pct ↗ Current-RSI).
                 * <b>Signal Close</b>: Price when signal fired.
                 * <b>Best Period</b>: The historical holding period (e.g., 30d) that produced the best Profit Factor.
                 * <b>Profit Factor</b>: Gross Wins divided by Gross Losses.
                 * <b>EV</b>: Average expected return per trade.
+                * <b>N</b>: Total historical instances found in the dataset.
                 """, unsafe_allow_html=True)
         
         if data_option_pct:
@@ -2014,8 +2010,6 @@ def run_rsi_scanner_app(df_global):
                         elif show_filter == "Leaving Low":
                             res_pct_df = res_pct_df[res_pct_df['Signal_Type'] == 'Bullish']
                             
-                        # Date filter is now applied inside find_rsi_percentile_signals to handle the optimization loop correctly
-                        
                         def style_pct_df(df_in):
                             def highlight_row(row):
                                 styles = [''] * len(row)
