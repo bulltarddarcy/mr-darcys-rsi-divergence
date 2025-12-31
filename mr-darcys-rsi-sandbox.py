@@ -734,22 +734,25 @@ def prepare_data(df):
     
     df_d = df[needed_cols].copy()
     
-    # Map CSV names to internal script names (Use Underscore for consistency with add_technicals)
+    # Map CSV names to internal script names
     rename_dict = {close_col: 'Price', vol_col: 'Volume', high_col: 'High', low_col: 'Low'}
     if d_rsi in df_d.columns: rename_dict[d_rsi] = 'RSI'
-    if d_ema8: rename_dict[d_ema8] = 'EMA_8'   # FIX: Map to EMA_8
-    if d_ema21: rename_dict[d_ema21] = 'EMA_21' # FIX: Map to EMA_21
+    # Initial mapping: map whatever we found to 'EMA8' directly
+    if d_ema8: rename_dict[d_ema8] = 'EMA8'
+    if d_ema21: rename_dict[d_ema21] = 'EMA21'
     
     df_d.rename(columns=rename_dict, inplace=True)
     df_d['VolSMA'] = df_d['Volume'].rolling(window=VOL_SMA_PERIOD).mean()
     
-    # Calculate Techs (Price col exists now, add_technicals expects/produces EMA_8)
+    # Calculate Techs (This might add 'EMA_8' if 'EMA8' was missing)
     df_d = add_technicals(df_d)
     
-    # Force Alias for compatibility with find_divergences (expects EMA8)
-    # Since we forced mapping to EMA_8 above, this block now ALWAYS runs.
-    if 'EMA_8' in df_d.columns: df_d['EMA8'] = df_d['EMA_8']
-    if 'EMA_21' in df_d.columns: df_d['EMA21'] = df_d['EMA_21']
+    # --- FINAL STANDARDIZATION ---
+    # If add_technicals created 'EMA_8', rename it to 'EMA8' so we only have one standard.
+    if 'EMA_8' in df_d.columns and 'EMA8' not in df_d.columns:
+        df_d.rename(columns={'EMA_8': 'EMA8'}, inplace=True)
+    if 'EMA_21' in df_d.columns and 'EMA21' not in df_d.columns:
+        df_d.rename(columns={'EMA_21': 'EMA21'}, inplace=True)
     
     df_d = df_d.dropna(subset=['Price', 'RSI'])
     
@@ -762,8 +765,6 @@ def prepare_data(df):
     w_ema8_source = next((c for c in cols if c in ['W_EMA8', 'W_EMA_8']), None)
     w_ema21_source = next((c for c in cols if c in ['W_EMA21', 'W_EMA_21']), None)
     
-    # We only STRICTLY need Price/Vol/High/Low to build the weekly view.
-    # We can calculate RSI and EMAs if they are missing.
     if all(c in df.columns for c in [w_close, w_vol, w_high, w_low]):
         cols_w = [w_close, w_vol, w_high, w_low]
         if w_rsi_source: cols_w.append(w_rsi_source)
@@ -772,22 +773,22 @@ def prepare_data(df):
         
         df_w = df[cols_w].copy()
         
-        # Map Weekly CSV names to internal names
         w_rename = {w_close: 'Price', w_vol: 'Volume', w_high: 'High', w_low: 'Low'}
         if w_rsi_source: w_rename[w_rsi_source] = 'RSI'
-        if w_ema8_source: w_rename[w_ema8_source] = 'EMA_8'   # FIX: Map to EMA_8
-        if w_ema21_source: w_rename[w_ema21_source] = 'EMA_21' # FIX: Map to EMA_21
+        if w_ema8_source: w_rename[w_ema8_source] = 'EMA8'
+        if w_ema21_source: w_rename[w_ema21_source] = 'EMA21'
         
         df_w.rename(columns=w_rename, inplace=True)
         df_w['VolSMA'] = df_w['Volume'].rolling(window=VOL_SMA_PERIOD).mean()
         df_w['ChartDate'] = df_w.index - pd.to_timedelta(df_w.index.dayofweek, unit='D')
         
-        # Calculate Techs on Weekly Data (Handles missing RSI/EMA)
         df_w = add_technicals(df_w)
         
-        # FIX: Ensure Aliases exist for Weekly too
-        if 'EMA_8' in df_w.columns: df_w['EMA8'] = df_w['EMA_8']
-        if 'EMA_21' in df_w.columns: df_w['EMA21'] = df_w['EMA_21']
+        # --- FINAL STANDARDIZATION WEEKLY ---
+        if 'EMA_8' in df_w.columns and 'EMA8' not in df_w.columns:
+            df_w.rename(columns={'EMA_8': 'EMA8'}, inplace=True)
+        if 'EMA_21' in df_w.columns and 'EMA21' not in df_w.columns:
+            df_w.rename(columns={'EMA_21': 'EMA21'}, inplace=True)
         
         df_w = df_w.dropna(subset=['Price', 'RSI'])
     else: 
@@ -923,20 +924,20 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0):
         row_at_sig = df_tf.iloc[i] 
         curr_price = row_at_sig['Price']
         
-        # 1. ROBUST FETCH: Try both 'EMA8' (clean) and 'EMA_8' (raw) keys
-        ema8_val = row_at_sig.get('EMA8') if 'EMA8' in row_at_sig else row_at_sig.get('EMA_8')
-        ema21_val = row_at_sig.get('EMA21') if 'EMA21' in row_at_sig else row_at_sig.get('EMA_21')
+        # We can now confidently look for 'EMA8' because prepare_data enforced it
+        ema8_val = row_at_sig.get('EMA8') 
+        ema21_val = row_at_sig.get('EMA21')
 
-        # 2. HELPER: Ensure value is not None and not NaN (which breaks comparisons)
+        # Simple Check: Not None and Not NaN
         def is_valid(val):
             return val is not None and not pd.isna(val)
 
         if s_type == 'Bullish':
-            # Bullish Tag: Price is ABOVE EMA
+            # Bullish: Tag if Price >= EMA
             if is_valid(ema8_val) and curr_price >= ema8_val: tags.append(f"EMA{EMA8_PERIOD}")
             if is_valid(ema21_val) and curr_price >= ema21_val: tags.append(f"EMA{EMA21_PERIOD}")
         else: 
-            # Bearish Tag: Price is BELOW EMA
+            # Bearish: Tag if Price <= EMA
             if is_valid(ema8_val) and curr_price <= ema8_val: tags.append(f"EMA{EMA8_PERIOD}")
             if is_valid(ema21_val) and curr_price <= ema21_val: tags.append(f"EMA{EMA21_PERIOD}")
             
