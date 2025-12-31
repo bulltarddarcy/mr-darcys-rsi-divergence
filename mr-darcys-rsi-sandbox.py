@@ -1301,14 +1301,25 @@ def run_rankings_app(df):
             prog_bar = st.progress(0, text="Analyzing technicals...")
             bull_list = top_bulls["Symbol"].tolist()
             
+            # --- PARALLEL OPTIMIZATION START ---
+            # 1. Parallel Fetch (Batch Download)
+            # This downloads all tickers at once (Fast) instead of one-by-one (Slow)
+            batch_results = fetch_technicals_batch(bull_list)
+            
             for i, t in enumerate(bull_list):
                 prog_bar.progress((i+1)/len(bull_list), text=f"Checking {t}...")
-                t_df = get_ticker_technicals(t, ticker_map)
                 
+                # 2. Retrieve Pre-fetched Data
+                # batch_results returns: (spot, ema8, ema21, sma200, h_full)
+                # We extract index 4 (h_full) which is the DataFrame we need
+                data_tuple = batch_results.get(t)
+                t_df = data_tuple[4] if data_tuple else None
+
+                # Fallback: If batch failed (rare), try single fetch
                 if t_df is None or t_df.empty:
                     t_df = fetch_yahoo_data(t)
 
-                if t_df is not None:
+                if t_df is not None and not t_df.empty:
                     sm_score = top_bulls[top_bulls["Symbol"]==t]["Score"].iloc[0]
                     
                     tech_score, reasons, suggs = analyze_trade_setup(t, t_df, df)
@@ -1322,6 +1333,7 @@ def run_rankings_app(df):
                         "Reasons": reasons,
                         "Suggestions": suggs
                     })
+            # --- PARALLEL OPTIMIZATION END ---
             
             prog_bar.empty()
             best_ideas = sorted(candidates, key=lambda x: x['Score'], reverse=True)[:3]
