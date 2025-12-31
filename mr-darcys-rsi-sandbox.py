@@ -734,19 +734,20 @@ def prepare_data(df):
     
     df_d = df[needed_cols].copy()
     
-    # Map CSV names to internal script names
+    # Map CSV names to internal script names (Use Underscore for consistency with add_technicals)
     rename_dict = {close_col: 'Price', vol_col: 'Volume', high_col: 'High', low_col: 'Low'}
     if d_rsi in df_d.columns: rename_dict[d_rsi] = 'RSI'
-    if d_ema8: rename_dict[d_ema8] = 'EMA8'
-    if d_ema21: rename_dict[d_ema21] = 'EMA21'
+    if d_ema8: rename_dict[d_ema8] = 'EMA_8'   # FIX: Map to EMA_8
+    if d_ema21: rename_dict[d_ema21] = 'EMA_21' # FIX: Map to EMA_21
     
     df_d.rename(columns=rename_dict, inplace=True)
     df_d['VolSMA'] = df_d['Volume'].rolling(window=VOL_SMA_PERIOD).mean()
     
-    # Calculate Techs (Price col exists now)
+    # Calculate Techs (Price col exists now, add_technicals expects/produces EMA_8)
     df_d = add_technicals(df_d)
     
-    # Alias for compatibility with find_divergences (expects EMA8 not EMA_8)
+    # Force Alias for compatibility with find_divergences (expects EMA8)
+    # Since we forced mapping to EMA_8 above, this block now ALWAYS runs.
     if 'EMA_8' in df_d.columns: df_d['EMA8'] = df_d['EMA_8']
     if 'EMA_21' in df_d.columns: df_d['EMA21'] = df_d['EMA_21']
     
@@ -774,8 +775,8 @@ def prepare_data(df):
         # Map Weekly CSV names to internal names
         w_rename = {w_close: 'Price', w_vol: 'Volume', w_high: 'High', w_low: 'Low'}
         if w_rsi_source: w_rename[w_rsi_source] = 'RSI'
-        if w_ema8_source: w_rename[w_ema8_source] = 'EMA8'
-        if w_ema21_source: w_rename[w_ema21_source] = 'EMA21'
+        if w_ema8_source: w_rename[w_ema8_source] = 'EMA_8'   # FIX: Map to EMA_8
+        if w_ema21_source: w_rename[w_ema21_source] = 'EMA_21' # FIX: Map to EMA_21
         
         df_w.rename(columns=w_rename, inplace=True)
         df_w['VolSMA'] = df_w['Volume'].rolling(window=VOL_SMA_PERIOD).mean()
