@@ -433,9 +433,10 @@ def get_ticker_technicals(ticker: str, mapping: dict):
             return None
     return None
 
-def calculate_optimal_signal_stats(history_indices, price_array, current_idx, signal_type='Bullish', timeframe='Daily', periods_input=None):
+def calculate_optimal_signal_stats(history_indices, price_array, current_idx, signal_type='Bullish', timeframe='Daily', periods_input=None, optimize_for='PF'):
     """
     Vectorized calculation of forward returns for multiple periods.
+    optimize_for: 'PF' (Profit Factor) or 'SQN' (System Quality Number)
     """
     # 1. Filter for valid historical indices
     hist_arr = np.array(history_indices)
@@ -475,7 +476,7 @@ def calculate_optimal_signal_stats(history_indices, price_array, current_idx, si
         strat_returns_matrix = raw_returns_matrix
 
     # 6. Calculate Stats per Period
-    best_pf = -1.0
+    best_score = -999.0
     best_stats = None
     
     for i, p in enumerate(periods):
@@ -500,15 +501,21 @@ def calculate_optimal_signal_stats(history_indices, price_array, current_idx, si
         win_rate = (len(wins) / n) * 100
         avg_ret = np.mean(period_returns) * 100
         
-        # --- SQN Calculation (Merged from Previous Request) ---
+        # --- SQN Calculation ---
+        # Standard Deviation requires at least 2 data points generally, 
+        # but numpy will return 0.0 for 1 data point (ddof=0 default).
         std_dev = np.std(period_returns)
+        
         if std_dev > 0 and n > 0:
             sqn = (np.mean(period_returns) / std_dev) * np.sqrt(n)
         else:
             sqn = 0.0
         
-        if pf > best_pf:
-            best_pf = pf
+        # Determine Score based on optimization metric
+        current_score = pf if optimize_for == 'PF' else sqn
+        
+        if current_score > best_score:
+            best_score = current_score
             best_stats = {
                 "Best Period": f"{p}{unit}",
                 "Profit Factor": pf,
@@ -918,7 +925,7 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0, periods_input=None, opti
             
     return divergences
 
-def find_rsi_percentile_signals(df, ticker, pct_low=0.10, pct_high=0.90, min_n=1, filter_date=None, timeframe='Daily', periods_input=None):
+def find_rsi_percentile_signals(df, ticker, pct_low=0.10, pct_high=0.90, min_n=1, filter_date=None, timeframe='Daily', periods_input=None, optimize_for='SQN'):
     signals = []
     if len(df) < 200: return signals
     
@@ -960,10 +967,10 @@ def find_rsi_percentile_signals(df, ticker, pct_low=0.10, pct_high=0.90, min_n=1
         curr_rsi_val = rsi_vals[i]
         
         hist_list = bullish_signal_indices if is_bullish else bearish_signal_indices
-        best_stats = calculate_optimal_signal_stats(hist_list, price_vals, i, signal_type=s_type, timeframe=timeframe, periods_input=periods_input)
+        best_stats = calculate_optimal_signal_stats(hist_list, price_vals, i, signal_type=s_type, timeframe=timeframe, periods_input=periods_input, optimize_for=optimize_for)
         
         if best_stats is None:
-             best_stats = {"Best Period": "—", "Profit Factor": 0.0, "Win Rate": 0.0, "EV": 0.0, "N": 0}
+             best_stats = {"Best Period": "—", "Profit Factor": 0.0, "Win Rate": 0.0, "EV": 0.0, "N": 0, "SQN": 0.0}
              
         if best_stats["N"] < min_n:
             continue
