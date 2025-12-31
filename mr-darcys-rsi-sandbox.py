@@ -433,9 +433,10 @@ def get_ticker_technicals(ticker: str, mapping: dict):
             return None
     return None
 
-def calculate_optimal_signal_stats(history_indices, price_array, current_idx, signal_type='Bullish', timeframe='Daily', periods_input=None):
+def calculate_optimal_signal_stats(history_indices, price_array, current_idx, signal_type='Bullish', timeframe='Daily', periods_input=None, optimize_for='PF'):
     """
     Vectorized calculation of forward returns for multiple periods.
+    optimize_for: 'PF' (Profit Factor) or 'SQN' (System Quality Number)
     """
     # 1. Filter for valid historical indices
     hist_arr = np.array(history_indices)
@@ -475,7 +476,7 @@ def calculate_optimal_signal_stats(history_indices, price_array, current_idx, si
         strat_returns_matrix = raw_returns_matrix
 
     # 6. Calculate Stats per Period
-    best_pf = -1.0
+    best_score = -999.0
     best_stats = None
     
     for i, p in enumerate(periods):
@@ -500,15 +501,18 @@ def calculate_optimal_signal_stats(history_indices, price_array, current_idx, si
         win_rate = (len(wins) / n) * 100
         avg_ret = np.mean(period_returns) * 100
         
-        # --- SQN Calculation (Merged from Previous Request) ---
+        # --- SQN Calculation ---
         std_dev = np.std(period_returns)
         if std_dev > 0 and n > 0:
             sqn = (np.mean(period_returns) / std_dev) * np.sqrt(n)
         else:
             sqn = 0.0
         
-        if pf > best_pf:
-            best_pf = pf
+        # Determine Score based on optimization metric
+        current_score = pf if optimize_for == 'PF' else sqn
+        
+        if current_score > best_score:
+            best_score = current_score
             best_stats = {
                 "Best Period": f"{p}{unit}",
                 "Profit Factor": pf,
@@ -918,7 +922,7 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0, periods_input=None, opti
             
     return divergences
 
-def find_rsi_percentile_signals(df, ticker, pct_low=0.10, pct_high=0.90, min_n=1, filter_date=None, timeframe='Daily', periods_input=None):
+def find_rsi_percentile_signals(df, ticker, pct_low=0.10, pct_high=0.90, min_n=1, filter_date=None, timeframe='Daily', periods_input=None, optimize_for='SQN'):
     signals = []
     if len(df) < 200: return signals
     
@@ -960,10 +964,10 @@ def find_rsi_percentile_signals(df, ticker, pct_low=0.10, pct_high=0.90, min_n=1
         curr_rsi_val = rsi_vals[i]
         
         hist_list = bullish_signal_indices if is_bullish else bearish_signal_indices
-        best_stats = calculate_optimal_signal_stats(hist_list, price_vals, i, signal_type=s_type, timeframe=timeframe, periods_input=periods_input)
+        best_stats = calculate_optimal_signal_stats(hist_list, price_vals, i, signal_type=s_type, timeframe=timeframe, periods_input=periods_input, optimize_for=optimize_for)
         
         if best_stats is None:
-             best_stats = {"Best Period": "—", "Profit Factor": 0.0, "Win Rate": 0.0, "EV": 0.0, "N": 0}
+             best_stats = {"Best Period": "—", "Profit Factor": 0.0, "Win Rate": 0.0, "EV": 0.0, "N": 0, "SQN": 0.0}
              
         if best_stats["N"] < min_n:
             continue
@@ -1799,10 +1803,12 @@ def run_rsi_scanner_app(df_global):
     # --- Session State Init ---
     if 'saved_rsi_div_min_n' not in st.session_state: st.session_state.saved_rsi_div_min_n = 0
     if 'saved_rsi_div_periods' not in st.session_state: st.session_state.saved_rsi_div_periods = "10,30,60,90,180"
+    if 'saved_rsi_div_opt' not in st.session_state: st.session_state.saved_rsi_div_opt = "Profit Factor" # Default PF
     
     if 'saved_rsi_pct_low' not in st.session_state: st.session_state.saved_rsi_pct_low = 10
     if 'saved_rsi_pct_high' not in st.session_state: st.session_state.saved_rsi_pct_high = 90
     if 'saved_rsi_pct_show' not in st.session_state: st.session_state.saved_rsi_pct_show = "Everything"
+    if 'saved_rsi_pct_opt' not in st.session_state: st.session_state.saved_rsi_pct_opt = "SQN" # Default SQN
     
     # We'll set the default date dynamically below, but init here to avoid errors
     if 'saved_rsi_pct_date' not in st.session_state: st.session_state.saved_rsi_pct_date = None
@@ -1814,6 +1820,9 @@ def run_rsi_scanner_app(df_global):
         
     dataset_map = DATA_KEYS_PARQUET
     options = list(dataset_map.keys())
+    
+    # Helper to map dropdown text to function codes
+    OPT_MAP = {"Profit Factor": "PF", "SQN": "SQN"}
 
     tab_div, tab_pct, tab_bot = st.tabs(["📉 Divergences", "🔢 Percentiles", "🤖 Backtester"])
 
@@ -1992,7 +2001,7 @@ def run_rsi_scanner_app(df_global):
                 st.markdown(f"""
                 * **New Methodology**: Instead of just looking at RSI levels, this tool looks back at **Every Historical Occurrence** of the specific signal type (e.g., Daily Bullish Divergence) for the ticker.
                 * **Optimization Loop**: It calculates the forward returns for **{','.join(map(str, periods_div_display))}** trading days for each historical signal.
-                * **Selection**: It compares these holding periods and selects the **Optimal Time Period** based on the highest **Profit Factor**.
+                * **Selection**: It compares these holding periods and selects the **Optimal Time Period** based on the highest **Profit Factor** (or SQN if selected).
                 * **Data Constraint**: This scanner utilizes up to 10 years of data if provided in the source file.
                 """)
             with f_col3:
@@ -2043,13 +2052,21 @@ def run_rsi_scanner_app(df_global):
                         cols = st.columns(6)
                         for i, ticker in enumerate(ft_div): cols[i % 6].write(ticker)
 
-                    c_d1, c_d2 = st.columns(2)
+                    c_d1, c_d2, c_d3 = st.columns(3)
                     with c_d1:
                          min_n_div = st.number_input("Minimum N", min_value=0, value=st.session_state.saved_rsi_div_min_n, step=1, key="rsi_div_min_n", on_change=save_rsi_state, args=("rsi_div_min_n", "saved_rsi_div_min_n"))
                     with c_d2:
                          periods_str_div = st.text_input("Test Periods (days/weeks)", value=st.session_state.saved_rsi_div_periods, key="rsi_div_periods", on_change=save_rsi_state, args=("rsi_div_periods", "saved_rsi_div_periods"))
+                    with c_d3:
+                         # Default for Div is PF (Index 0)
+                         curr_div_opt = st.session_state.saved_rsi_div_opt
+                         idx_div_opt = ["Profit Factor", "SQN"].index(curr_div_opt) if curr_div_opt in ["Profit Factor", "SQN"] else 0
+                         opt_mode_div = st.selectbox("Optimize By", ["Profit Factor", "SQN"], index=idx_div_opt, key="rsi_div_opt", on_change=save_rsi_state, args=("rsi_div_opt", "saved_rsi_div_opt"))
                     
                     periods_div = parse_periods(periods_str_div)
+                    
+                    # Convert UI selection to Function Code
+                    div_opt_code = OPT_MAP[opt_mode_div]
 
                     raw_results_div = []
                     progress_bar = st.progress(0, text="Scanning Divergences...")
@@ -2059,8 +2076,8 @@ def run_rsi_scanner_app(df_global):
                     
                     for i, (ticker, group) in enumerate(grouped_list):
                         d_d, d_w = prepare_data(group.copy())
-                        if d_d is not None: raw_results_div.extend(find_divergences(d_d, ticker, 'Daily', min_n=min_n_div, periods_input=periods_div))
-                        if d_w is not None: raw_results_div.extend(find_divergences(d_w, ticker, 'Weekly', min_n=min_n_div, periods_input=periods_div))
+                        if d_d is not None: raw_results_div.extend(find_divergences(d_d, ticker, 'Daily', min_n=min_n_div, periods_input=periods_div, optimize_for=div_opt_code))
+                        if d_w is not None: raw_results_div.extend(find_divergences(d_w, ticker, 'Weekly', min_n=min_n_div, periods_input=periods_div, optimize_for=div_opt_code))
                         if i % 10 == 0 or i == total_groups - 1: progress_bar.progress((i + 1) / total_groups)
                     
                     progress_bar.empty()
@@ -2114,6 +2131,7 @@ def run_rsi_scanner_app(df_global):
                                             "EV": st.column_config.NumberColumn("EV", format="%.1f%%"),
                                             "EV Target": st.column_config.NumberColumn("EV Target", format="$%.2f"), 
                                             "N": st.column_config.NumberColumn("N"),
+                                            "SQN": st.column_config.NumberColumn("SQN", format="%.2f", help="System Quality Number"),
                                             "Signal_Date_ISO": None, "Type": None, "Timeframe": None
                                         },
                                         hide_index=True,
@@ -2137,7 +2155,7 @@ def run_rsi_scanner_app(df_global):
                  st.markdown("""
                 * **Signal Trigger**: RSI crosses **ABOVE Low Percentile** (Leaving Low) or **BELOW High Percentile** (Leaving High).
                 * **Signal-Based Optimization**: Instead of matching RSI values, this backtester finds all historical instances where the stock "Left the Low/High" and calculates performance.
-                * **Optimization Loop**: Calculates returns for multiple days (or weeks) and selects the Winner based on **Profit Factor**.
+                * **Optimization Loop**: Calculates returns for multiple days (or weeks) and selects the Winner based on **Profit Factor** (or SQN if selected).
                 * **Data Constraint**: This scanner utilizes up to 10 years of data if provided in the source file.
                 """)
             with c2:
@@ -2152,7 +2170,7 @@ def run_rsi_scanner_app(df_global):
                 * **Date**: The date the signal fired (Left Low/High).
                 * **RSI Δ**: RSI movement (e.g., 10th-Pct ↗ Current-RSI).
                 * **Signal Close**: Price when signal fired.
-                * **Best Period**: The historical holding period (e.g., 30d/30w) that produced the best Profit Factor.
+                * **Best Period**: The historical holding period (e.g., 30d/30w) that produced the best result (PF or SQN).
                 * **Profit Factor**: Gross Wins / Gross Losses. 
                     * **Leaving Low**: Win = Price went **UP**.
                     * **Leaving High**: Win = Price went **DOWN**.
@@ -2202,13 +2220,19 @@ def run_rsi_scanner_app(df_global):
                     if st.session_state.saved_rsi_pct_date is None:
                         st.session_state.saved_rsi_pct_date = default_start
 
-                    c_p4, c_p5, c_p6 = st.columns(3)
+                    c_p4, c_p5, c_p6, c_p7 = st.columns(4)
                     with c_p4: filter_date = st.date_input("Latest Date", value=st.session_state.saved_rsi_pct_date, key="rsi_pct_date", on_change=save_rsi_state, args=("rsi_pct_date", "saved_rsi_pct_date"))
                     with c_p5: min_n_pct = st.number_input("Minimum N", min_value=0, value=st.session_state.saved_rsi_pct_min_n, step=1, key="rsi_pct_min_n", on_change=save_rsi_state, args=("rsi_pct_min_n", "saved_rsi_pct_min_n"))
                     with c_p6: 
                         periods_str_pct = st.text_input("Test Periods (days only)", value=st.session_state.saved_rsi_pct_periods, key="rsi_pct_periods", on_change=save_rsi_state, args=("rsi_pct_periods", "saved_rsi_pct_periods"))
+                    with c_p7:
+                         # Default for Pct is SQN (Index 1)
+                         curr_pct_opt = st.session_state.saved_rsi_pct_opt
+                         idx_pct_opt = ["Profit Factor", "SQN"].index(curr_pct_opt) if curr_pct_opt in ["Profit Factor", "SQN"] else 1
+                         opt_mode_pct = st.selectbox("Optimize By", ["Profit Factor", "SQN"], index=idx_pct_opt, key="rsi_pct_opt", on_change=save_rsi_state, args=("rsi_pct_opt", "saved_rsi_pct_opt"))
 
                     periods_pct = parse_periods(periods_str_pct)
+                    pct_opt_code = OPT_MAP[opt_mode_pct]
 
                     raw_results_pct = []
                     progress_bar = st.progress(0, text="Scanning Percentiles...")
@@ -2220,7 +2244,7 @@ def run_rsi_scanner_app(df_global):
                         d_d, d_w = prepare_data(group.copy())
                         
                         if d_d is not None:
-                            raw_results_pct.extend(find_rsi_percentile_signals(d_d, ticker, pct_low=in_low/100.0, pct_high=in_high/100.0, min_n=min_n_pct, filter_date=filter_date, timeframe='Daily', periods_input=periods_pct))
+                            raw_results_pct.extend(find_rsi_percentile_signals(d_d, ticker, pct_low=in_low/100.0, pct_high=in_high/100.0, min_n=min_n_pct, filter_date=filter_date, timeframe='Daily', periods_input=periods_pct, optimize_for=pct_opt_code))
                         
                         if i % 10 == 0 or i == total_groups - 1: progress_bar.progress((i + 1) / total_groups)
                     
@@ -2289,72 +2313,3 @@ def run_rsi_scanner_app(df_global):
                     else: st.info(f"No Percentile signals found (Crossing {in_low}th/{in_high}th percentile).")
 
             except Exception as e: st.error(f"Analysis failed: {e}")
-
-st.markdown("""<style>
-.block-container{padding-top:3.5rem;padding-bottom:1rem;}
-.zones-panel{padding:14px 0; border-radius:10px;}
-.zone-row{display:flex; align-items:center; gap:10px; margin:8px 0;}
-.zone-label{width:90px; font-weight:700; text-align:right; flex-shrink: 0; font-size: 13px;}
-.zone-wrapper{
-    flex-grow: 1; 
-    position: relative; 
-    height: 24px; 
-    background-color: rgba(0,0,0,0.03);
-    border-radius: 4px;
-    overflow: hidden;
-}
-.zone-bar{
-    position: absolute;
-    left: 0; 
-    top: 0; 
-    bottom: 0; 
-    z-index: 1;
-    border-radius: 3px;
-    opacity: 0.65;
-}
-.zone-bull{background-color: #71d28a;}
-.zone-bear{background-color: #f29ca0;}
-.zone-value{
-    position: absolute;
-    right: 8px;
-    top: 0;
-    bottom: 0;
-    display: flex;
-    align-items: center;
-    z-index: 2;
-    font-size: 12px; 
-    font-weight: 700;
-    color: #1f1f1f;
-    white-space: nowrap;
-    text-shadow: 0 0 4px rgba(255,255,255,0.8);
-}
-.price-divider { display: flex; align-items: center; justify-content: center; position: relative; margin: 24px 0; width: 100%; }
-.price-divider::before, .price-divider::after { content: ""; flex-grow: 1; height: 2px; background: #66b7ff; opacity: 0.4; }
-.price-badge { background: rgba(102, 183, 255, 0.1); color: #66b7ff; border: 1px solid rgba(102, 183, 255, 0.5); border-radius: 16px; padding: 6px 14px; font-weight: 800; font-size: 12px; letter-spacing: 0.5px; white-space: nowrap; margin: 0 12px; z-index: 1; }
-.metric-row{display:flex;gap:10px;flex-wrap:wrap;margin:.35rem 0 .75rem 0}
-.badge{background: rgba(128, 128, 128, 0.08); border: 1px solid rgba(128, 128, 128, 0.2); border-radius:18px; padding:6px 10px; font-weight:700}
-.price-badge-header{background: rgba(102, 183, 255, 0.1); border: 1px solid #66b7ff; border-radius:18px; padding:6px 10px; font-weight:800}
-.light-note { opacity: 0.7; font-size: 14px; margin-bottom: 10px; }
-
-</style>""", unsafe_allow_html=True)
-
-try:
-    sheet_url = st.secrets["GSHEET_URL"]
-    df_global = load_and_clean_data(sheet_url)
-    last_updated_date = df_global["Trade Date"].max().strftime("%d %b %y")
-
-    pg = st.navigation([
-        st.Page(lambda: run_database_app(df_global), title="Database", icon="📂", url_path="options_db", default=True),
-        st.Page(lambda: run_rankings_app(df_global), title="Rankings", icon="🏆", url_path="rankings"),
-        st.Page(lambda: run_pivot_tables_app(df_global), title="Pivot Tables", icon="🎯", url_path="pivot_tables"),
-        st.Page(lambda: run_strike_zones_app(df_global), title="Strike Zones", icon="📊", url_path="strike_zones"),
-        st.Page(lambda: run_rsi_scanner_app(df_global), title="RSI Scanner", icon="📈", url_path="rsi_scanner"), 
-    ])
-
-    st.sidebar.caption("🖥️ Everything is best viewed with a wide desktop monitor in light mode.")
-    st.sidebar.caption(f"📅 **Last Updated:** {last_updated_date}")
-    
-    pg.run()
-    
-except Exception as e: 
-    st.error(f"Error initializing dashboard: {e}")
