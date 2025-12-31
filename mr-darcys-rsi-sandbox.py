@@ -711,8 +711,25 @@ def prepare_data(df):
     df = df.sort_index()
     
     # --- BUILD DAILY ---
-    df_d = df[[close_col, vol_col, high_col, low_col]].copy()
-    df_d.rename(columns={close_col: 'Price', vol_col: 'Volume', high_col: 'High', low_col: 'Low'}, inplace=True)
+    # Identify Daily columns
+    d_rsi = next((c for c in cols if 'RSI' in c and 'W_' not in c), 'RSI')
+    d_ema8 = next((c for c in cols if c in ['EMA8', 'EMA_8']), None)
+    d_ema21 = next((c for c in cols if c in ['EMA21', 'EMA_21']), None)
+
+    needed_cols = [close_col, vol_col, high_col, low_col]
+    if d_rsi in df.columns: needed_cols.append(d_rsi)
+    if d_ema8: needed_cols.append(d_ema8)
+    if d_ema21: needed_cols.append(d_ema21)
+    
+    df_d = df[needed_cols].copy()
+    
+    # Map CSV names to internal script names
+    rename_dict = {close_col: 'Price', vol_col: 'Volume', high_col: 'High', low_col: 'Low'}
+    if d_rsi in df_d.columns: rename_dict[d_rsi] = 'RSI'
+    if d_ema8: rename_dict[d_ema8] = 'EMA8'
+    if d_ema21: rename_dict[d_ema21] = 'EMA21'
+    
+    df_d.rename(columns=rename_dict, inplace=True)
     df_d['VolSMA'] = df_d['Volume'].rolling(window=VOL_SMA_PERIOD).mean()
     
     # Calculate Techs (Price col exists now)
@@ -725,17 +742,38 @@ def prepare_data(df):
     df_d = df_d.dropna(subset=['Price', 'RSI'])
     
     # --- BUILD WEEKLY ---
-    w_close, w_vol, w_high, w_low = 'W_CLOSE', 'W_VOLUME', 'W_HIGH', 'W_LOW'
+    w_close, w_vol = 'W_CLOSE', 'W_VOLUME'
+    w_high, w_low = 'W_HIGH', 'W_LOW'
     
+    # Identify Weekly columns (if they exist)
+    w_rsi_source = next((c for c in cols if c in ['W_RSI', 'W_RSI_14']), None)
+    w_ema8_source = next((c for c in cols if c in ['W_EMA8', 'W_EMA_8']), None)
+    w_ema21_source = next((c for c in cols if c in ['W_EMA21', 'W_EMA_21']), None)
+    
+    # We only STRICTLY need Price/Vol/High/Low to build the weekly view.
+    # We can calculate RSI and EMAs if they are missing.
     if all(c in df.columns for c in [w_close, w_vol, w_high, w_low]):
-        df_w = df[[w_close, w_vol, w_high, w_low]].copy()
-        df_w.rename(columns={w_close: 'Price', w_vol: 'Volume', w_high: 'High', w_low: 'Low'}, inplace=True)
+        cols_w = [w_close, w_vol, w_high, w_low]
+        if w_rsi_source: cols_w.append(w_rsi_source)
+        if w_ema8_source: cols_w.append(w_ema8_source)
+        if w_ema21_source: cols_w.append(w_ema21_source)
+        
+        df_w = df[cols_w].copy()
+        
+        # Map Weekly CSV names to internal names
+        w_rename = {w_close: 'Price', w_vol: 'Volume', w_high: 'High', w_low: 'Low'}
+        if w_rsi_source: w_rename[w_rsi_source] = 'RSI'
+        if w_ema8_source: w_rename[w_ema8_source] = 'EMA8'
+        if w_ema21_source: w_rename[w_ema21_source] = 'EMA21'
+        
+        df_w.rename(columns=w_rename, inplace=True)
         df_w['VolSMA'] = df_w['Volume'].rolling(window=VOL_SMA_PERIOD).mean()
         df_w['ChartDate'] = df_w.index - pd.to_timedelta(df_w.index.dayofweek, unit='D')
         
-        # Calculate Techs on Weekly Data
+        # Calculate Techs on Weekly Data (Handles missing RSI/EMA)
         df_w = add_technicals(df_w)
         
+        # FIX: Ensure Aliases exist for Weekly too
         if 'EMA_8' in df_w.columns: df_w['EMA8'] = df_w['EMA_8']
         if 'EMA_21' in df_w.columns: df_w['EMA21'] = df_w['EMA_21']
         
