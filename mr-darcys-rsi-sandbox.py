@@ -1850,7 +1850,7 @@ def run_rsi_scanner_app(df_global):
         
         with st.expander("ℹ️ Page Notes: Backtester Logic"):
             st.markdown("""
-            * **Data Source**: Unlike the Divergences and Percentile tabs (which use limited ~3yr history files), this tab pulls **Complete Price History** via Yahoo Finance or the full Ticker Map file.
+            * **Data Source**: Unlike the Divergences and Percentile tabs (which use limited ~10yr history files), this tab pulls **Complete Price History** via Yahoo Finance or the full Ticker Map file.
             * **Methodology**: Calculates forward returns for all historical periods matching the criteria.
             * **Metrics**:
                 * **Profit Factor**: Gross Wins / Gross Losses.
