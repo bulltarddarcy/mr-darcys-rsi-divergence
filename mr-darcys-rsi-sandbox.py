@@ -743,62 +743,94 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0):
         return ts.strftime(fmt)
     
     # ---------------------------------------------------------
-    # PASS 1: SCAN FULL HISTORY (Used for Statistics)
+    # PASS 1: VECTORIZED PRE-CHECK (Optimization)
     # ---------------------------------------------------------
+    # Instead of checking min/max inside the loop (slow), pre-calc rolling limits.
+    # We shift(1) because the current candle must be compared to the *previous* window.
+    
+    # Rolling Min of Lows (Lookback)
+    roll_low_min = pd.Series(low_vals).shift(1).rolling(window=DIVERGENCE_LOOKBACK).min().values
+    
+    # Rolling Max of Highs (Lookback)
+    roll_high_max = pd.Series(high_vals).shift(1).rolling(window=DIVERGENCE_LOOKBACK).max().values
+    
+    # Identify Candidates: Where Price made a New Low (Bullish) or New High (Bearish)
+    # relative to the lookback window.
+    is_new_low = (low_vals < roll_low_min)
+    is_new_high = (high_vals > roll_high_max)
+    
+    # Only iterate over valid range where a signal is possible
+    valid_mask = np.zeros(n_rows, dtype=bool)
+    valid_mask[DIVERGENCE_LOOKBACK:] = True
+    
+    # Get indices where either condition is met
+    candidate_indices = np.where(valid_mask & (is_new_low | is_new_high))[0]
+    
     bullish_signal_indices = []
     bearish_signal_indices = []
     potential_signals = [] 
 
-    start_search = DIVERGENCE_LOOKBACK
+    # ---------------------------------------------------------
+    # PASS 2: SCAN CANDIDATES
+    # ---------------------------------------------------------
     
-    for i in range(start_search, n_rows):
+    for i in candidate_indices:
         p2_rsi = rsi_vals[i]
-        p2_low = low_vals[i]
-        p2_high = high_vals[i]
         p2_vol = vol_vals[i]
         p2_volsma = vol_sma_vals[i]
         
         lb_start = i - DIVERGENCE_LOOKBACK
+        # Slicing numpy arrays is very fast
         lb_rsi = rsi_vals[lb_start:i]
-        lb_low = low_vals[lb_start:i]
-        lb_high = high_vals[lb_start:i]
         
         is_vol_high = int(p2_vol > (p2_volsma * 1.5)) if not np.isnan(p2_volsma) else 0
         
-        # Bullish Logic
-        if p2_low < np.min(lb_low):
-            p1_idx_rel = np.argmin(lb_rsi)
+        # Check Bullish Divergence
+        if is_new_low[i]:
+            # Price is Lower Low (already confirmed by mask), check RSI Higher Low
+            p1_idx_rel = np.argmin(lb_rsi) # Find lowest RSI in window
             p1_rsi = lb_rsi[p1_idx_rel]
+            
             if p2_rsi > (p1_rsi + RSI_DIFF_THRESHOLD):
                 idx_p1_abs = lb_start + p1_idx_rel
+                
+                # Validation: RSI should not have crossed 50 between pivots
                 subset_rsi = rsi_vals[idx_p1_abs : i + 1]
                 if not np.any(subset_rsi > 50): 
                     valid = True
+                    # Look-ahead invalidation (for backtesting accuracy)
                     if i < n_rows - 1:
                         post_rsi = rsi_vals[i+1:]
                         if np.any(post_rsi <= p1_rsi): valid = False
+                    
                     if valid:
                         bullish_signal_indices.append(i)
                         potential_signals.append({"index": i, "type": "Bullish", "p1_idx": idx_p1_abs, "vol_high": is_vol_high})
         
-        # Bearish Logic
-        elif p2_high > np.max(lb_high):
-            p1_idx_rel = np.argmax(lb_rsi)
+        # Check Bearish Divergence
+        elif is_new_high[i]:
+            # Price is Higher High, check RSI Lower High
+            p1_idx_rel = np.argmax(lb_rsi) # Find highest RSI in window
             p1_rsi = lb_rsi[p1_idx_rel]
+            
             if p2_rsi < (p1_rsi - RSI_DIFF_THRESHOLD):
                 idx_p1_abs = lb_start + p1_idx_rel
+                
+                # Validation: RSI should not have crossed 50 between pivots
                 subset_rsi = rsi_vals[idx_p1_abs : i + 1]
                 if not np.any(subset_rsi < 50): 
                     valid = True
+                    # Look-ahead invalidation
                     if i < n_rows - 1:
                         post_rsi = rsi_vals[i+1:]
                         if np.any(post_rsi >= p1_rsi): valid = False
+                    
                     if valid:
                         bearish_signal_indices.append(i)
                         potential_signals.append({"index": i, "type": "Bearish", "p1_idx": idx_p1_abs, "vol_high": is_vol_high})
 
     # ---------------------------------------------------------
-    # PASS 2: REPORT & BACKTEST
+    # PASS 3: REPORT & BACKTEST
     # ---------------------------------------------------------
     display_threshold_idx = n_rows - SIGNAL_LOOKBACK_PERIOD
     
@@ -813,12 +845,11 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0):
         idx_p1_abs = sig["p1_idx"]
         latest_p = df_tf.iloc[-1] 
         
-        # --- FIXED TAGS GENERATION ---
+        # Tags Generation
         tags = []
         row_at_sig = df_tf.iloc[i] 
         curr_price = row_at_sig['Price']
         
-        # EMA Check uses keys mapped in prepare_data ('EMA8', 'EMA21')
         ema8_val = row_at_sig.get('EMA8') 
         ema21_val = row_at_sig.get('EMA21')
 
@@ -841,8 +872,7 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0):
         price_p2 = low_vals[i] if s_type=='Bullish' else high_vals[i]
         price_display = f"${price_p1:,.2f} ↗ ${price_p2:,.2f}" if price_p2 > price_p1 else f"${price_p1:,.2f} ↘ ${price_p2:,.2f}"
 
-        # Optimal Period Calculation
-        # Hist_list contains 10 YEARS of indices. 
+        # Optimal Period Calculation (Vectorized)
         hist_list = bullish_signal_indices if s_type == 'Bullish' else bearish_signal_indices
         best_stats = calculate_optimal_signal_stats(hist_list, close_vals, i, signal_type=s_type, timeframe=timeframe)
         
