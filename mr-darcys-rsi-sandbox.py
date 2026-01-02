@@ -2531,19 +2531,16 @@ def run_seasonality_app(df_global):
     
     combined_bar_data = pd.concat([hist_bar_data, curr_bar_data])
 
-    # Base Chart
     base = alt.Chart(combined_bar_data).encode(
         x=alt.X('MonthName', sort=month_names, title=None)
     )
 
-    # Bars
     bars = base.mark_bar().encode(
         y=alt.Y('Value', title='Return (%)'),
         xOffset='Type',
         color=alt.Color('Type', legend=alt.Legend(orient='bottom', title=None), scale=alt.Scale(scheme='category10'))
     )
 
-    # Positive Labels (Moved up)
     pos_labels = base.transform_filter(
         alt.datum.Value >= 0
     ).mark_text(
@@ -2554,7 +2551,6 @@ def run_seasonality_app(df_global):
         text=alt.Text('Value', format='.1f')
     )
 
-    # Negative Labels (Moved down)
     neg_labels = base.transform_filter(
         alt.datum.Value < 0
     ).mark_text(
@@ -2577,9 +2573,11 @@ def run_seasonality_app(df_global):
         wr = win_rates.loc[i+1]
         avg = avg_stats.loc[i+1]
         
-        if wr < 50: border_color = "#f29ca0" 
-        elif wr == 50 and avg < 0: border_color = "#f29ca0"
-        else: border_color = "#71d28a"
+        # CHANGED LOGIC: Border color depends purely on EV (Average Return)
+        if avg > 0: 
+            border_color = "#71d28a" # Green
+        else: 
+            border_color = "#f29ca0" # Red
         
         target_col = cols[i] if i < 6 else cols2[i-6]
         target_col.markdown(
