@@ -2647,20 +2647,23 @@ try:
     df_global = load_and_clean_data(sheet_url)
     last_updated_date = df_global["Trade Date"].max().strftime("%d %b %y")
 
-    # --- MODIFIED NAVIGATION ---
     pg = st.navigation([
         st.Page(lambda: run_database_app(df_global), title="Database", icon="📂", url_path="options_db", default=True),
         st.Page(lambda: run_rankings_app(df_global), title="Rankings", icon="🏆", url_path="rankings"),
         st.Page(lambda: run_pivot_tables_app(df_global), title="Pivot Tables", icon="🎯", url_path="pivot_tables"),
         st.Page(lambda: run_strike_zones_app(df_global), title="Strike Zones", icon="📊", url_path="strike_zones"),
         st.Page(lambda: run_rsi_scanner_app(df_global), title="RSI Scanner", icon="📈", url_path="rsi_scanner"),
-        st.Page(lambda: run_seasonality_app(df_global), title="Seasonality", icon="📅", url_path="seasonality"), # <--- Added this line
+        st.Page(lambda: run_seasonality_app(df_global), title="Seasonality", icon="📅", url_path="seasonality"),
     ])
 
     st.sidebar.caption("🖥️ Everything is best viewed with a wide desktop monitor in light mode.")
     st.sidebar.caption(f"📅 **Last Updated:** {last_updated_date}")
     
+    # 1. Run the selected page
     pg.run()
+    
+    # 2. Add global padding immediately after the page finishes rendering
+    st.markdown("<br><br><br><br>", unsafe_allow_html=True)
     
 except Exception as e: 
     st.error(f"Error initializing dashboard: {e}")
