@@ -10,6 +10,7 @@ import math
 import requests
 import re
 import time
+import altair as alt
 from io import StringIO, BytesIO
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -2360,15 +2361,11 @@ def run_seasonality_app(df_global):
 
     # --- 2. Data Fetching ---
     ticker_map = load_ticker_map()
-    
-    # Initialize df as None
     df = None
     
     with st.spinner(f"Fetching history for {ticker}..."):
-        # 1. Try Drive Data (returns DataFrame or None)
+        # 1. Try Drive Data
         drive_df = get_ticker_technicals(ticker, ticker_map)
-        
-        # Check if valid DataFrame
         if drive_df is not None and not drive_df.empty:
             df = drive_df
         else:
@@ -2380,10 +2377,7 @@ def run_seasonality_app(df_global):
         return
 
     # --- 3. Data Processing ---
-    # Standardize columns
     df.columns = [c.strip().upper() for c in df.columns]
-    
-    # Identify Date/Close columns
     date_col = next((c for c in df.columns if 'DATE' in c), None)
     close_col = next((c for c in df.columns if 'CLOSE' in c), None)
     
@@ -2398,109 +2392,207 @@ def run_seasonality_app(df_global):
     df_monthly = df[close_col].resample('M').last()
     df_pct = df_monthly.pct_change() * 100
     
-    # Build Seasonality Table
     season_df = pd.DataFrame({
         'Pct': df_pct,
         'Year': df_pct.index.year,
         'Month': df_pct.index.month
     }).dropna()
 
-    # --- 4. Filters (Full Years & Date Range) ---
-    current_year = date.today().year
+    # --- 4. Filtering & Current Year Logic ---
+    today = date.today()
+    current_year = today.year
+    current_month = today.month
     
-    # Strict Full Years: Exclude current partial year
-    season_df = season_df[season_df['Year'] < current_year]
+    # Historical Data (Strict Full Years for Averages)
+    hist_df = season_df[season_df['Year'] < current_year].copy()
     
-    if season_df.empty:
+    # Current Year Data (For YTD Line & Heatmap)
+    curr_df = season_df[season_df['Year'] == current_year].copy()
+    
+    if hist_df.empty:
         st.warning("Not enough historical full-year data available.")
         return
 
-    # Determine available range
-    min_avail_year = int(season_df['Year'].min())
-    max_avail_year = int(season_df['Year'].max())
+    min_avail_year = int(hist_df['Year'].min())
+    max_avail_year = int(hist_df['Year'].max())
     
     with c2:
-        start_year = st.number_input("Start Year", min_value=min_avail_year, max_value=max_avail_year, value=min_avail_year, key="seas_start")
+        start_year = st.number_input("Start Year (History)", min_value=min_avail_year, max_value=max_avail_year, value=max_avail_year-10 if max_avail_year-10 >= min_avail_year else min_avail_year, key="seas_start")
     with c3:
-        end_year = st.number_input("End Year", min_value=start_year, max_value=max_avail_year, value=max_avail_year, key="seas_end")
+        end_year = st.number_input("End Year (History)", min_value=start_year, max_value=max_avail_year, value=max_avail_year, key="seas_end")
 
-    # Apply Range Filter
-    mask = (season_df['Year'] >= start_year) & (season_df['Year'] <= end_year)
-    season_df_filtered = season_df[mask].copy()
+    # Filter Historical Data
+    mask = (hist_df['Year'] >= start_year) & (hist_df['Year'] <= end_year)
+    hist_filtered = hist_df[mask].copy()
     
-    if season_df_filtered.empty:
+    if hist_filtered.empty:
         st.warning("No data in selected date range.")
         return
 
     # --- 5. Statistics Calculation ---
     month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
-    
-    # Calculate stats on the FILTERED data
-    avg_stats = season_df_filtered.groupby('Month')['Pct'].mean().reindex(range(1, 13), fill_value=0)
-    win_rates = season_df_filtered.groupby('Month')['Pct'].apply(lambda x: (x > 0).mean() * 100).reindex(range(1, 13), fill_value=0)
+    month_order = pd.DataFrame({'Month': range(1, 13), 'MonthName': month_names})
 
-    # Prepare Chart Data
-    chart_df = pd.DataFrame({
-        "Month": month_names,
-        "Average Return": avg_stats.values
-    }).set_index("Month")
+    # A. Monthly Averages & Win Rates
+    avg_stats = hist_filtered.groupby('Month')['Pct'].mean().reindex(range(1, 13), fill_value=0)
+    win_rates = hist_filtered.groupby('Month')['Pct'].apply(lambda x: (x > 0).mean() * 100).reindex(range(1, 13), fill_value=0)
+
+    # B. Cumulative Calculation (For Line Chart)
+    # 1. Historical Cumulative
+    hist_cumsum = avg_stats.cumsum()
+    line_data_hist = pd.DataFrame({
+        'Month': range(1, 13),
+        'MonthName': month_names,
+        'Value': hist_cumsum.values,
+        'Type': f'Avg ({start_year}-{end_year})'
+    })
+
+    # 2. Current Year Cumulative (Only up to completed or current data)
+    curr_monthly_stats = curr_df.groupby('Month')['Pct'].sum().reindex(range(1, 13)) # Reindex to align, keeps NaNs for future
+    curr_cumsum = curr_monthly_stats.cumsum()
+    
+    # Filter out future months for the line chart so it doesn't drop to 0
+    valid_curr_indices = curr_monthly_stats.dropna().index
+    line_data_curr = pd.DataFrame({
+        'Month': valid_curr_indices,
+        'MonthName': [month_names[i-1] for i in valid_curr_indices],
+        'Value': curr_cumsum.loc[valid_curr_indices].values,
+        'Type': f'Current Year ({current_year})'
+    })
+    
+    combined_line_data = pd.concat([line_data_hist, line_data_curr])
 
     # --- 6. Visualization ---
-    st.subheader(f"📊 Seasonal Profile: {ticker} ({start_year}-{end_year})")
     
-    tab_chart, tab_data = st.tabs(["Chart View", "Heatmap Data"])
+    # --- CHART 1: Cumulative Performance (Line) ---
+    st.subheader(f"📈 Performance Tracking: {current_year} vs. History")
+    st.caption("Cumulative return YTD vs. the cumulative average of the selected historical period.")
     
-    with tab_chart:
-        # Bar Chart
-        st.bar_chart(chart_df, height=350, color="#66b7ff")
+    # Altair Line Chart
+    chart_line = alt.Chart(combined_line_data).mark_line(point=True).encode(
+        x=alt.X('MonthName', sort=month_names, title='Month'),
+        y=alt.Y('Value', title='Cumulative Return (%)'),
+        color=alt.Color('Type', legend=alt.Legend(orient='bottom', title=None)),
+        tooltip=[alt.Tooltip('MonthName', title='Month'), alt.Tooltip('Value', format='.2f', title='Cumulative %')]
+    ).properties(height=350)
+    
+    st.altair_chart(chart_line, use_container_width=True)
 
-        # Win Rate Cards
-        st.markdown("##### 🎯 Monthly Win Rate")
-        cols = st.columns(6) 
-        cols2 = st.columns(6)
+
+    # --- CHART 2: Monthly Seasonality (Bar) ---
+    st.subheader("📊 Average Monthly Return")
+    
+    bar_data = pd.DataFrame({
+        'MonthName': month_names,
+        'Avg Return': avg_stats.values,
+        'Win Rate': win_rates.values
+    })
+    
+    # Color logic for bars: Green if positive, Red if negative
+    chart_bar = alt.Chart(bar_data).mark_bar().encode(
+        x=alt.X('MonthName', sort=month_names, title=None),
+        y=alt.Y('Avg Return', title='Avg Return (%)'),
+        color=alt.condition(
+            alt.datum['Avg Return'] > 0,
+            alt.value("#71d28a"),  # Green
+            alt.value("#f29ca0")   # Red
+        ),
+        tooltip=[
+            alt.Tooltip('MonthName', title='Month'),
+            alt.Tooltip('Avg Return', format='.2f', title='Avg Return (%)'),
+            alt.Tooltip('Win Rate', format='.1f', title='Win Rate (%)')
+        ]
+    ).properties(height=250)
+
+    st.altair_chart(chart_bar, use_container_width=True)
+
+
+    # --- CARDS: Win Rates ---
+    st.markdown("##### 🎯 Monthly Win Rate & Expectancy")
+    cols = st.columns(6) 
+    cols2 = st.columns(6)
+    
+    for i in range(12):
+        mn = month_names[i]
+        wr = win_rates.loc[i+1]
+        avg = avg_stats.loc[i+1]
         
-        for i in range(12):
-            mn = month_names[i]
-            wr = win_rates.loc[i+1]
-            avg = avg_stats.loc[i+1]
-            
-            # Color based on Win Rate (Green > 50%)
-            color = "#71d28a" if wr >= 50 else "#f29ca0"
-            
-            # Target row
-            target_col = cols[i] if i < 6 else cols2[i-6]
-            target_col.markdown(
-                f"""
-                <div style="background-color: rgba(128,128,128,0.1); border-radius: 8px; padding: 10px; text-align: center; margin-bottom: 10px; border-bottom: 3px solid {color};">
-                    <div style="font-size: 0.8rem; font-weight: bold; color: #888;">{mn}</div>
-                    <div style="font-size: 1.1rem; font-weight: 700;">{wr:.0f}%</div>
-                    <div style="font-size: 0.75rem; color: #666;">Avg: {avg:+.1f}%</div>
-                </div>
-                """, unsafe_allow_html=True
-            )
-
-    with tab_data:
-        st.subheader("🗓️ Monthly Returns Heatmap")
+        # Color Logic: Red if < 50%, or if == 50% and Avg is negative. Green otherwise.
+        if wr < 50:
+            border_color = "#f29ca0" # Red
+        elif wr == 50 and avg < 0:
+            border_color = "#f29ca0" # Red
+        else:
+            border_color = "#71d28a" # Green
         
-        # Create Pivot
-        pivot_grid = season_df_filtered.pivot(index='Year', columns='Month', values='Pct')
-        pivot_grid.columns = month_names 
-        pivot_grid = pivot_grid.sort_index(ascending=False)
-        pivot_grid["Total"] = pivot_grid.sum(axis=1)
-
-        def color_map(val):
-            if pd.isna(val): return ""
-            if val == 0: return "color: #888;"
-            color = "#71d28a" if val > 0 else "#f29ca0"
-            # Lighter background for table cells
-            bg_color = "rgba(113, 210, 138, 0.1)" if val > 0 else "rgba(242, 156, 160, 0.1)"
-            return f'background-color: {bg_color}; color: {color}; font-weight: 500;'
-
-        st.dataframe(
-            pivot_grid.style.format("{:+.2f}%").applymap(color_map),
-            use_container_width=True,
-            height=600
+        # Target row
+        target_col = cols[i] if i < 6 else cols2[i-6]
+        target_col.markdown(
+            f"""
+            <div style="background-color: rgba(128,128,128,0.05); border-radius: 8px; padding: 8px 5px; text-align: center; margin-bottom: 10px; border-bottom: 3px solid {border_color};">
+                <div style="font-size: 0.85rem; font-weight: bold; color: #555;">{mn}</div>
+                <div style="font-size: 0.75rem; color: #888; margin-top:2px;">Win Rate</div>
+                <div style="font-size: 1.0rem; font-weight: 700;">{wr:.0f}%</div>
+                <div style="font-size: 0.75rem; color: #888; margin-top:2px;">Avg Rtn</div>
+                <div style="font-size: 0.9rem; font-weight: 600; color: {'#1f7a1f' if avg > 0 else '#a11f1f'};">{avg:+.2f}%</div>
+            </div>
+            """, unsafe_allow_html=True
         )
+
+
+    # --- HEATMAP ---
+    st.markdown("---")
+    st.subheader("🗓️ Monthly Returns Heatmap")
+    
+    # 1. Prepare Historical Pivot
+    pivot_hist = hist_filtered.pivot(index='Year', columns='Month', values='Pct')
+    
+    # 2. Prepare Current Year Row (Only COMPLETED months)
+    # We define "completed" as months strictly less than the current month.
+    # If today is Jan 15, current_month is 1. Completed is None.
+    # If today is Feb 2, current_month is 2. Completed is 1 (Jan).
+    
+    # However, user said "ONLY IF THE CURRENT MONTH IS COMPLETE". 
+    # Usually this implies we wait until the 1st of next month to show it.
+    
+    completed_curr_df = curr_df[curr_df['Month'] < current_month].copy()
+    
+    if not completed_curr_df.empty:
+        pivot_curr = completed_curr_df.pivot(index='Year', columns='Month', values='Pct')
+        # Combine
+        full_pivot = pd.concat([pivot_curr, pivot_hist])
+    else:
+        full_pivot = pivot_hist
+
+    # Formatting and Ordering
+    full_pivot.columns = [month_names[c-1] for c in full_pivot.columns] # Rename 1->Jan
+    
+    # Ensure all months exist in columns for proper shape
+    for m in month_names:
+        if m not in full_pivot.columns:
+            full_pivot[m] = np.nan
+            
+    # Reorder columns Jan-Dec
+    full_pivot = full_pivot[month_names]
+    
+    # Sort Descending (Newest Year Top)
+    full_pivot = full_pivot.sort_index(ascending=False)
+    
+    # Add Total Column
+    full_pivot["Year Total"] = full_pivot.sum(axis=1, min_count=1) # min_count=1 ensures we don't sum empty rows to 0
+
+    def color_map(val):
+        if pd.isna(val): return ""
+        if val == 0: return "color: #888;"
+        color = "#1f7a1f" if val > 0 else "#a11f1f"
+        bg_color = "rgba(113, 210, 138, 0.2)" if val > 0 else "rgba(242, 156, 160, 0.2)"
+        return f'background-color: {bg_color}; color: {color}; font-weight: 500;'
+
+    st.dataframe(
+        full_pivot.style.format("{:+.2f}%").applymap(color_map),
+        use_container_width=True,
+        height=600
+    )
 
 st.markdown("""<style>
 .block-container{padding-top:3.5rem;padding-bottom:1rem;}
