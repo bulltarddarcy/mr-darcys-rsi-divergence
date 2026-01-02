@@ -2455,12 +2455,10 @@ def run_seasonality_app(df_global):
     combined_line_data = pd.concat([line_data_hist, line_data_curr])
 
     # --- 6. Summary Logic ---
-    # Current MTD
     cur_val = curr_monthly_stats.get(current_month, 0.0)
     if pd.isna(cur_val): cur_val = 0.0
-    cur_color = "#71d28a" if cur_val > 0 else "#f29ca0" # Green/Red hex
+    cur_color = "#71d28a" if cur_val > 0 else "#f29ca0"
     
-    # Next Month Logic
     idx_next = (current_month % 12) + 1
     idx_next_2 = ((current_month + 1) % 12) + 1
     
@@ -2471,7 +2469,6 @@ def run_seasonality_app(df_global):
     nm_wr = win_rates.get(idx_next, 0.0)
     nnm_avg = avg_stats.get(idx_next_2, 0.0)
 
-    # Positioning Heuristic
     if nm_avg >= 1.5 and nm_wr >= 65:
         positioning = "🚀 <b>Strong Bullish Seasonality.</b> Historically a standout month; consider long exposure."
     elif nm_avg > 0 and nm_wr >= 50:
@@ -2534,23 +2531,41 @@ def run_seasonality_app(df_global):
     
     combined_bar_data = pd.concat([hist_bar_data, curr_bar_data])
 
-    bar_base = alt.Chart(combined_bar_data).encode(
-        x=alt.X('MonthName', sort=month_names, title=None), xOffset='Type'
+    # Base Chart
+    base = alt.Chart(combined_bar_data).encode(
+        x=alt.X('MonthName', sort=month_names, title=None)
     )
 
-    bars = bar_base.mark_bar().encode(
+    # Bars
+    bars = base.mark_bar().encode(
         y=alt.Y('Value', title='Return (%)'),
+        xOffset='Type',
         color=alt.Color('Type', legend=alt.Legend(orient='bottom', title=None), scale=alt.Scale(scheme='category10'))
     )
 
-    bar_labels = bar_base.mark_text(fontSize=11, fontWeight='bold').encode(
+    # Positive Labels (Moved up)
+    pos_labels = base.transform_filter(
+        alt.datum.Value >= 0
+    ).mark_text(
+        dy=-10, fontSize=11, fontWeight='bold', color='black'
+    ).encode(
         y=alt.Y('Value'),
-        text=alt.Text('Value', format='.1f'),
-        dy=alt.condition(alt.datum.Value >= 0, alt.value(-10), alt.value(15)),
-        color=alt.value('black')
+        xOffset='Type',
+        text=alt.Text('Value', format='.1f')
     )
 
-    st.altair_chart((bars + bar_labels).properties(height=300), use_container_width=True)
+    # Negative Labels (Moved down)
+    neg_labels = base.transform_filter(
+        alt.datum.Value < 0
+    ).mark_text(
+        dy=15, fontSize=11, fontWeight='bold', color='black'
+    ).encode(
+        y=alt.Y('Value'),
+        xOffset='Type',
+        text=alt.Text('Value', format='.1f')
+    )
+
+    st.altair_chart((bars + pos_labels + neg_labels).properties(height=300), use_container_width=True)
 
     # --- CARDS: Win Rates ---
     st.markdown("##### 🎯 Historical Win Rate & Expectancy")
@@ -2613,6 +2628,7 @@ def run_seasonality_app(df_global):
         use_container_width=True,
         height=table_height
     )
+    
 st.markdown("""<style>
 .block-container{padding-top:3.5rem;padding-bottom:1rem;}
 .zones-panel{padding:14px 0; border-radius:10px;}
