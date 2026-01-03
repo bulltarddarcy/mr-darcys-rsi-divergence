@@ -3216,8 +3216,11 @@ def run_seasonality_app(df_global):
                         d_df[date_c] = pd.to_datetime(d_df[date_c])
                         d_df = d_df.sort_values(date_c).reset_index(drop=True)
                         
+                        # --- FIX: Reset Index after filtering to align idx with length ---
                         cutoff = pd.to_datetime(date.today()) - timedelta(days=scan_lookback*365)
                         d_df = d_df[d_df[date_c] >= cutoff].copy()
+                        d_df = d_df.reset_index(drop=True) 
+                        
                         if len(d_df) < 252: return None, None 
                         
                         target_doy = scan_date.timetuple().tm_yday
