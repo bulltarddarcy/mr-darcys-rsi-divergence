@@ -2398,7 +2398,7 @@ def run_seasonality_app(df_global):
         with st.expander("ℹ️ Page Notes: Methodology"):
             st.markdown("""
             **📊 Calendar Month Performance**
-            * **Year Total:** The **SUM** of monthly returns for that year.
+            * **Year Total:** The **Compounded Return** for that year (Start Price vs End Price), not the sum of months.
             * **Month Average:** The **AVERAGE** return for that specific month across the selected history.
             """)
 
@@ -2557,12 +2557,24 @@ def run_seasonality_app(df_global):
                     combined_bar_data = pd.concat([hist_bar_data, curr_bar_data])
                     combined_bar_data['Label'] = combined_bar_data['Value'].apply(fmt_finance)
 
+                    # --- LABEL FIX: Force text to be above the bar (at 0 or max) ---
+                    combined_bar_data['LabelY'] = combined_bar_data['Value'].apply(lambda x: max(0, x))
+
                     base = alt.Chart(combined_bar_data).encode(x=alt.X('MonthName', sort=month_names, title=None))
                     bars = base.mark_bar().encode(
                         y=alt.Y('Value', title='Return (%)'), xOffset='Type',
                         color=alt.condition(alt.datum.Value > 0, alt.value("#71d28a"), alt.value("#f29ca0"))
                     )
-                    st.altair_chart((bars + base.mark_text(dy=-10, fontSize=11, fontWeight='bold', color='black').encode(y=alt.Y('Value'), xOffset='Type', text='Label')).properties(height=350).configure_axis(labelFontSize=11, titleFontSize=13), use_container_width=True)
+                    
+                    text = base.mark_text(
+                        dy=-10, fontSize=11, fontWeight='bold', color='black'
+                    ).encode(
+                        y=alt.Y('LabelY'), # Anchor text to positive space
+                        xOffset='Type', 
+                        text='Label'
+                    )
+
+                    st.altair_chart((bars + text).properties(height=350).configure_axis(labelFontSize=11, titleFontSize=13), use_container_width=True)
 
                 # --- CARDS ---
                 st.markdown("##### 🎯 Historical Win Rate & Expectancy")
@@ -2588,7 +2600,13 @@ def run_seasonality_app(df_global):
                     if m not in full_pivot.columns: full_pivot[m] = np.nan
                 full_pivot = full_pivot[month_names].sort_index(ascending=False)
                 
-                full_pivot["Year Total"] = full_pivot.sum(axis=1, min_count=1)
+                # --- CHANGE: Calculate Compounded Annual Return for Year Total ---
+                # Formula: ((1 + r1) * (1 + r2) ... - 1)
+                full_pivot["Year Total"] = full_pivot.apply(
+                    lambda x: ((1 + x/100).prod(skipna=True) - 1) * 100 if x.notna().any() else np.nan, 
+                    axis=1
+                )
+                
                 avg_row = full_pivot[month_names].mean(axis=0)
                 avg_row["Year Total"] = full_pivot["Year Total"].mean()
                 avg_row.name = "Month Average"
@@ -2602,7 +2620,7 @@ def run_seasonality_app(df_global):
                     bg_color = "rgba(113, 210, 138, 0.2)" if val > 0 else "rgba(242, 156, 160, 0.2)"
                     return f'background-color: {bg_color}; color: {color}; font-weight: 500;'
                 
-                # --- CHANGE 1: FORCE EQUAL WIDTH COLUMNS ---
+                # Force equal width columns
                 heatmap_config = {c: st.column_config.Column(width="small") for c in full_pivot.columns}
                 
                 st.dataframe(
@@ -2620,6 +2638,7 @@ def run_seasonality_app(df_global):
             st.markdown("""
             **🚀 Rolling Forward Returns**
             * **Methodology**: Scans 10 years of history for dates matching the Start Date (+/- 3 days) and calculates performance for future periods.
+            * **Ranking Logic**: Tickers are excluded if they have insufficient history (<3 matching years) or fall below the Market Cap threshold. The remaining candidates are **ranked by EV** (High to Low), and the Top 20 are displayed.
             * **Consistency (Sharpe)**: Calculated as `Average Return / Std Dev`. High score (>2.0) means consistent gains. Low score (<1.0) means volatile/hit-or-miss.
             * **Mean Reversion**: Looks for tickers with **Positive Seasonality** (Green Historic EV) but **Negative Recent Performance** (Red Last 21d). These may be "coiled" springs.
             """)
@@ -2629,7 +2648,6 @@ def run_seasonality_app(df_global):
         sc1, sc2, sc3 = st.columns([1, 1, 1])
         with sc1:
             scan_date = st.date_input("Start Date for Scan", value=date.today(), key="seas_scan_date")
-            sector_input = st.selectbox("Sector Filter", ["All", "Technology", "Consumer Cyclical", "Communication Services", "Financial", "Healthcare", "Energy", "Industrials", "Consumer Defensive", "Real Estate", "Utilities", "Basic Materials"], key="seas_scan_sector")
         with sc2:
             min_mc_scan = st.selectbox("Min Market Cap", ["0B", "2B", "10B", "50B", "100B"], index=2, key="seas_scan_mc")
             mc_thresh_val = {"0B":0, "2B":2e9, "10B":1e10, "50B":5e10, "100B":1e11}.get(min_mc_scan, 1e10)
@@ -2647,30 +2665,14 @@ def run_seasonality_app(df_global):
                 results = []
                 all_csv_rows = { "21d": [], "42d": [], "63d": [], "126d": [] }
                 
-                st.write(f"Filtering {len(all_tickers)} tickers by Market Cap & Sector...")
+                st.write(f"Filtering {len(all_tickers)} tickers by Market Cap...")
                 
                 valid_tickers = []
-                
-                # Pre-fetch cached sectors if "All" is not selected
-                if sector_input != "All":
-                    with ThreadPoolExecutor(max_workers=10) as executor:
-                        future_to_t = {executor.submit(get_sector_lazy, t, {}): t for t in all_tickers}
-                        sector_cache = {}
-                        for future in as_completed(future_to_t):
-                            t = future_to_t[future]
-                            sector_cache[t] = future.result()
                 
                 def check_filters(t):
                     # 1. Cap Check (Fastest)
                     mc = get_market_cap(t)
                     if mc < mc_thresh_val: return None
-                    
-                    # 2. Sector Check (Slower)
-                    if sector_input != "All":
-                        sec = sector_cache.get(t, 'Unknown')
-                        # Simple fuzzy match
-                        if sector_input.lower() not in sec.lower(): return None
-                        
                     return t
 
                 with ThreadPoolExecutor(max_workers=20) as executor:
@@ -2851,7 +2853,7 @@ def run_seasonality_app(df_global):
                                 }
                             )
 
-                    # --- 2. CHANGE 2: ARBITRAGE TABLE MOVED HERE ---
+                    # --- 2. ARBITRAGE TABLE MOVED HERE ---
                     st.write("---")
                     arb_df = res_df[
                         (res_df['21d_EV'] > 3.0) & 
