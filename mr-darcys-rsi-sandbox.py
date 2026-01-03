@@ -3185,7 +3185,14 @@ def run_seasonality_app(df_global):
             else:
                 all_tickers = [k for k in ticker_map.keys() if not k.upper().endswith('_PARQUET')]
                 results = []
-                all_csv_rows = [] # Accumulator for CSV details
+                
+                # Dictionary to hold CSV rows for ALL periods
+                all_csv_rows = {
+                    "21d": [],
+                    "42d": [],
+                    "63d": [],
+                    "126d": []
+                }
                 
                 st.write(f"Filtering {len(all_tickers)} tickers by Market Cap > {min_mc_scan}...")
                 
@@ -3216,7 +3223,6 @@ def run_seasonality_app(df_global):
                         d_df[date_c] = pd.to_datetime(d_df[date_c])
                         d_df = d_df.sort_values(date_c).reset_index(drop=True)
                         
-                        # --- FIX: Reset Index after filtering to align idx with length ---
                         cutoff = pd.to_datetime(date.today()) - timedelta(days=scan_lookback*365)
                         d_df = d_df[d_df[date_c] >= cutoff].copy()
                         d_df = d_df.reset_index(drop=True) 
@@ -3226,6 +3232,7 @@ def run_seasonality_app(df_global):
                         target_doy = scan_date.timetuple().tm_yday
                         d_df['DOY'] = d_df[date_c].dt.dayofyear
                         
+                        # +/- 3 Day Window
                         matches = d_df[(d_df['DOY'] >= target_doy - 3) & (d_df['DOY'] <= target_doy + 3)].copy()
                         matches['Year'] = matches[date_c].dt.year
                         matches = matches.drop_duplicates(subset=['Year'])
@@ -3237,7 +3244,8 @@ def run_seasonality_app(df_global):
                         stats_row = {'Ticker': ticker_sym, 'N': len(matches)}
                         periods = {"21d": 21, "42d": 42, "63d": 63, "126d": 126}
                         
-                        csv_rows_21d = [] # List to hold details for 21d CSV
+                        # Temporary store for this ticker's details
+                        ticker_csv_rows = {k: [] for k in periods.keys()}
                         
                         for p_name, trading_days in periods.items():
                             returns = []
@@ -3249,16 +3257,15 @@ def run_seasonality_app(df_global):
                                     ret = (exit_p - entry_p) / entry_p
                                     returns.append(ret)
                                     
-                                    # Collect details specifically for the 21d table CSV
-                                    if p_name == "21d":
-                                        csv_rows_21d.append({
-                                            "Ticker": ticker_sym,
-                                            "Start Date": d_df.loc[idx, date_c].date(),
-                                            "Entry Price": entry_p,
-                                            "Exit Date": d_df.loc[exit_idx, date_c].date(),
-                                            "Exit Price": exit_p,
-                                            "Return (%)": ret * 100
-                                        })
+                                    # Collect details for CSV
+                                    ticker_csv_rows[p_name].append({
+                                        "Ticker": ticker_sym,
+                                        "Start Date": d_df.loc[idx, date_c].date(),
+                                        "Entry Price": entry_p,
+                                        "Exit Date": d_df.loc[exit_idx, date_c].date(),
+                                        "Exit Price": exit_p,
+                                        "Return (%)": ret * 100
+                                    })
                                         
                             if returns:
                                 avg_ret = np.mean(returns) * 100
@@ -3269,7 +3276,7 @@ def run_seasonality_app(df_global):
                             stats_row[f"{p_name}_EV"] = avg_ret
                             stats_row[f"{p_name}_WR"] = win_r
                             
-                        return stats_row, csv_rows_21d
+                        return stats_row, ticker_csv_rows
                     except Exception:
                         return None, None
 
@@ -3281,7 +3288,10 @@ def run_seasonality_app(df_global):
                         if res_stats:
                             results.append(res_stats)
                         if res_details:
-                            all_csv_rows.extend(res_details)
+                            # Aggregate this ticker's details into the main dictionary
+                            for k in all_csv_rows.keys():
+                                if res_details[k]:
+                                    all_csv_rows[k].extend(res_details[k])
                             
                         completed += 1
                         if completed % 5 == 0: progress_bar.progress(completed / len(valid_tickers))
@@ -3293,19 +3303,6 @@ def run_seasonality_app(df_global):
                 else:
                     res_df = pd.DataFrame(results)
                     st.write("---")
-                    
-                    # --- CSV Download Section ---
-                    if all_csv_rows:
-                        df_details = pd.DataFrame(all_csv_rows)
-                        df_details = df_details.sort_values(by=["Ticker", "Start Date"])
-                        csv_data = df_details.to_csv(index=False).encode('utf-8')
-                        st.download_button(
-                            label="💾 Download 21d Backtest Data (CSV)",
-                            data=csv_data,
-                            file_name=f"seasonality_21d_inputs_{scan_date.strftime('%Y%m%d')}.csv",
-                            mime="text/csv",
-                            help="Contains the specific historical trade start dates and returns used to calculate the 21d averages."
-                        )
                     
                     def highlight_ev(val):
                         if pd.isna(val): return ""
@@ -3320,14 +3317,29 @@ def run_seasonality_app(df_global):
                     
                     fixed_height = 738
 
-                    for col_obj, p_label, sort_col in [
-                        (c_scan1, "**+21 Trading Days** (~1 Month)", "21d_EV"),
-                        (c_scan2, "**+42 Trading Days** (~2 Months)", "42d_EV"),
-                        (c_scan3, "**+63 Trading Days** (~3 Months)", "63d_EV"),
-                        (c_scan4, "**+126 Trading Days** (~6 Months)", "126d_EV")
+                    # Loop through columns and add download button + table
+                    for col_obj, p_label, sort_col, p_key in [
+                        (c_scan1, "**+21 Trading Days** (~1 Month)", "21d_EV", "21d"),
+                        (c_scan2, "**+42 Trading Days** (~2 Months)", "42d_EV", "42d"),
+                        (c_scan3, "**+63 Trading Days** (~3 Months)", "63d_EV", "63d"),
+                        (c_scan4, "**+126 Trading Days** (~6 Months)", "126d_EV", "126d")
                     ]:
                         with col_obj:
                             st.markdown(p_label)
+                            
+                            # Add Download Button for this specific period
+                            if all_csv_rows[p_key]:
+                                df_details = pd.DataFrame(all_csv_rows[p_key])
+                                df_details = df_details.sort_values(by=["Ticker", "Start Date"])
+                                csv_data = df_details.to_csv(index=False).encode('utf-8')
+                                st.download_button(
+                                    label=f"💾 Download {p_key} CSV",
+                                    data=csv_data,
+                                    file_name=f"seasonality_{p_key}_inputs_{scan_date.strftime('%Y%m%d')}.csv",
+                                    mime="text/csv",
+                                    key=f"dl_btn_{p_key}"
+                                )
+
                             top_df = res_df.sort_values(by=sort_col, ascending=False).head(20)
                             
                             st.dataframe(
