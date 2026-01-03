@@ -2946,8 +2946,7 @@ st.markdown("""<style>
 
 </style>""", unsafe_allow_html=True)
 
-# 2. Price History Date (fetch AAPL as proxy for latest market data)
-    price_date = "Syncing..."
+price_date = "Syncing..."
     try:
         # We use AAPL as the standard "heartbeat" for the market data feed
         df_aapl = fetch_yahoo_data("AAPL")
