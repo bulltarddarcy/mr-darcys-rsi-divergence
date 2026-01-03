@@ -4382,6 +4382,24 @@ def run_seasonality_app(df_global):
                         color = "#1f7a1f" if val > 0 else "#a11f1f"
                         bg = "rgba(113, 210, 138, 0.25)" if val > 0 else "rgba(242, 156, 160, 0.25)"
                         return f'background-color: {bg}; color: {color}; font-weight: bold;'
+                        
+                    # Custom Styling Helpers to replace matplotlib background_gradient
+                    def color_gap(val):
+                        if pd.isna(val): return ""
+                        # Gap (EV - Recent) 
+                        # Higher = Better (Green)
+                        if val < 5: return "background-color: #e8f5e9; color: black" # Lightest green
+                        if val < 10: return "background-color: #c8e6c9; color: black"
+                        if val < 15: return "background-color: #a5d6a7; color: black"
+                        return "background-color: #81c784; color: black" # Strong green
+
+                    def color_sharpe(val):
+                        if pd.isna(val): return ""
+                        # Sharpe: <1 Bad (Red/Orange), 1-2 OK (Yellow), >2 Good (Green)
+                        if val < 1.0: return "background-color: #ffccbc; color: black" # Light red
+                        if val < 2.0: return "background-color: #fff9c4; color: black" # Yellow
+                        if val < 3.0: return "background-color: #c8e6c9; color: black" # Light Green
+                        return "background-color: #81c784; color: black" # Deep Green
 
                     # --- 1. ARBITRAGE / MEAN REVERSION TABLE ---
                     # Logic: 21d EV > 3% (Good Seasonality) AND Recent_21d < -3% (Beaten Down)
@@ -4402,7 +4420,7 @@ def run_seasonality_app(df_global):
                             .format({'Recent_21d': fmt_finance, '21d_EV': fmt_finance, '21d_WR': "{:.1f}%", 'Gap': "{:.1f}%"})
                             .applymap(lambda x: 'color: #d32f2f; font-weight:bold;', subset=['Recent_21d'])
                             .applymap(lambda x: 'color: #2e7d32; font-weight:bold;', subset=['21d_EV'])
-                            .background_gradient(cmap='Greens', subset=['Gap']),
+                            .applymap(color_gap, subset=['Gap']),
                             use_container_width=True, hide_index=True
                         )
                         st.write("---")
@@ -4446,7 +4464,7 @@ def run_seasonality_app(df_global):
                                     sharpe_col: "{:.2f}"
                                 })
                                 .applymap(highlight_ev, subset=[sort_col])
-                                .background_gradient(cmap='RdYlGn', subset=[sharpe_col], vmin=0.5, vmax=3.0),
+                                .applymap(color_sharpe, subset=[sharpe_col]),
                                 use_container_width=True, hide_index=True, height=fixed_height,
                                 column_config={
                                     sharpe_col: st.column_config.NumberColumn("Sharpe", help="Consistency Score (EV / StdDev). >2 is very consistent.")
