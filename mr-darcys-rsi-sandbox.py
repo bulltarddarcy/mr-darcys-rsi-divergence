@@ -3062,6 +3062,9 @@ def run_seasonality_app(df_global):
                     
                     combined_bar_data = pd.concat([hist_bar_data, curr_bar_data])
                     combined_bar_data['Label'] = combined_bar_data['Value'].apply(fmt_finance)
+                    
+                    # --- FIX: Calculate Y position for label to ensure it stays above the bar ---
+                    combined_bar_data['LabelY'] = combined_bar_data['Value'].apply(lambda x: max(0, x))
 
                     base = alt.Chart(combined_bar_data).encode(
                         x=alt.X('MonthName', sort=month_names, title=None)
@@ -3083,7 +3086,7 @@ def run_seasonality_app(df_global):
                         fontWeight='bold',
                         color='black'
                     ).encode(
-                        y=alt.Y('Value'), 
+                        y=alt.Y('LabelY'), # Use calculated positive position
                         xOffset='Type', 
                         text='Label'
                     )
