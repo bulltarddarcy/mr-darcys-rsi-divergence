@@ -2350,11 +2350,40 @@ def run_rsi_scanner_app(df_global):
 def run_seasonality_app(df_global):
     st.title("📅 Seasonality")
     
-    # Create Tabs: 1 for Single Ticker Analysis, 1 for the new Scanner
+    # --- Helper: Optimized Data Fetching (Parquet > CSV > Yahoo) ---
+    def fetch_history_optimized(ticker_sym, t_map):
+        # 1. Try Parquet (Fastest)
+        # We assume the key in the map is "TICKER_parquet"
+        pq_key = f"{ticker_sym}_parquet"
+        
+        if pq_key in t_map:
+            try:
+                # We need the file ID from the map
+                file_id = t_map[pq_key]
+                url = f"https://drive.google.com/uc?export=download&id={file_id}"
+                
+                # Reuse existing binary downloader from your global scope
+                buffer = get_gdrive_binary_data(url)
+                if buffer:
+                    df = pd.read_parquet(buffer, engine='pyarrow')
+                    return df
+            except Exception:
+                # If parquet fails, fail silently and try CSV
+                pass 
+
+        # 2. Try CSV (Standard Drive via existing function)
+        if ticker_sym in t_map:
+            # get_ticker_technicals is your existing cached function
+            return get_ticker_technicals(ticker_sym, t_map)
+            
+        # 3. Fallback Yahoo
+        return fetch_yahoo_data(ticker_sym)
+
+    # Create Tabs
     tab_single, tab_scan = st.tabs(["🔎 Single Ticker Analysis", "🚀 Opportunity Scanner"])
     
     # ==============================================================================
-    # TAB 1: SINGLE TICKER ANALYSIS (Existing Logic)
+    # TAB 1: SINGLE TICKER ANALYSIS
     # ==============================================================================
     with tab_single:
         # --- 1. Inputs ---
@@ -2371,11 +2400,7 @@ def run_seasonality_app(df_global):
         df = None
         
         with st.spinner(f"Fetching history for {ticker}..."):
-            drive_df = get_ticker_technicals(ticker, ticker_map)
-            if drive_df is not None and not drive_df.empty:
-                df = drive_df
-            else:
-                df = fetch_yahoo_data(ticker)
+            df = fetch_history_optimized(ticker, ticker_map)
 
         if df is None or df.empty:
             st.error(f"Could not load data for {ticker}. Check the ticker symbol or your TICKER_MAP.")
@@ -2497,7 +2522,7 @@ def run_seasonality_app(df_global):
                 # --- 7. Visualization ---
                 
                 # --- CHART 1: Cumulative Performance (Line) ---
-                st.subheader(f"📈 Performance Tracking: {current_year} vs. History")
+                st.subheader(f"📈 Performance Tracking")
                 
                 line_base = alt.Chart(combined_line_data).encode(
                     x=alt.X('MonthName', sort=month_names, title='Month'),
@@ -2507,13 +2532,13 @@ def run_seasonality_app(df_global):
                 
                 lines = line_base.mark_line(point=True)
                 labels = line_base.mark_text(
-                    align='center', baseline='bottom', dy=-10, fontSize=12, fontWeight='bold'
+                    align='center', baseline='bottom', dy=-10, fontSize=14, fontWeight='bold' # Updated Font Size
                 ).encode(text=alt.Text('Value', format='.1f'))
                 
                 st.altair_chart((lines + labels).properties(height=350), use_container_width=True)
 
                 # --- CHART 2: Monthly Comparison (Grouped Bar) ---
-                st.subheader(f"📊 Monthly Return: History vs. {current_year}")
+                st.subheader(f"📊 Monthly Returns")
                 
                 hist_bar_data = pd.DataFrame({
                     'Month': range(1, 13), 'MonthName': month_names,
@@ -2549,7 +2574,7 @@ def run_seasonality_app(df_global):
                 pos_labels = base.transform_filter(
                     alt.datum.Value >= 0
                 ).mark_text(
-                    dy=-10, fontSize=11, fontWeight='bold', color='black'
+                    dy=-10, fontSize=14, fontWeight='bold', color='black' # Updated Font Size
                 ).encode(
                     y=alt.Y('Value'),
                     xOffset='Type',
@@ -2559,7 +2584,7 @@ def run_seasonality_app(df_global):
                 neg_labels = base.transform_filter(
                     alt.datum.Value < 0
                 ).mark_text(
-                    dy=15, fontSize=11, fontWeight='bold', color='black'
+                    dy=15, fontSize=14, fontWeight='bold', color='black' # Updated Font Size
                 ).encode(
                     y=alt.Y('Value'),
                     xOffset='Type',
@@ -2578,7 +2603,6 @@ def run_seasonality_app(df_global):
                     wr = win_rates.loc[i+1]
                     avg = avg_stats.loc[i+1]
                     
-                    # CHANGED LOGIC: Border color depends purely on EV (Average Return)
                     if avg > 0: border_color = "#71d28a" 
                     else: border_color = "#f29ca0"
                     
@@ -2631,7 +2655,7 @@ def run_seasonality_app(df_global):
                 )
 
     # ==============================================================================
-    # TAB 2: OPPORTUNITY SCANNER (New Logic)
+    # TAB 2: OPPORTUNITY SCANNER (With Parquet Optimization)
     # ==============================================================================
     with tab_scan:
         st.subheader("🚀 High-EV Seasonality Scanner")
@@ -2654,21 +2678,18 @@ def run_seasonality_app(df_global):
             if not ticker_map:
                 st.error("No TICKER_MAP found in secrets.")
             else:
-                all_tickers = list(ticker_map.keys())
+                # Filter out the parquet keys from the SCAN LIST so we don't double scan
+                all_tickers = [k for k in ticker_map.keys() if not k.endswith('_parquet')]
                 results = []
                 
-                # Fetch MCs first to filter list
                 st.write(f"Filtering {len(all_tickers)} tickers by Market Cap > {min_mc_scan}...")
                 
-                # This part can be slow if doing 1 by 1, so we batch fetch or just loop efficiently
                 valid_tickers = []
                 
-                # Helper to check MC
                 def check_mc(t):
                     mc = get_market_cap(t)
                     return t if mc >= mc_thresh_val else None
 
-                # Use ThreadPool to filter quickly
                 with ThreadPoolExecutor(max_workers=20) as executor:
                     futures = {executor.submit(check_mc, t): t for t in all_tickers}
                     for future in as_completed(futures):
@@ -2678,14 +2699,12 @@ def run_seasonality_app(df_global):
                 st.write(f"Scanning {len(valid_tickers)} tickers for high EV opportunities...")
                 progress_bar = st.progress(0)
                 
-                # Helper to calculate forward stats
                 def calc_forward_returns(ticker_sym):
                     try:
-                        # 1. Get Data
-                        d_df = get_ticker_technicals(ticker_sym, ticker_map)
+                        # Use optimized fetch!
+                        d_df = fetch_history_optimized(ticker_sym, ticker_map)
                         if d_df is None or d_df.empty: return None
                         
-                        # Clean columns
                         d_df.columns = [c.strip().upper() for c in d_df.columns]
                         date_c = next((c for c in d_df.columns if 'DATE' in c), None)
                         close_c = next((c for c in d_df.columns if 'CLOSE' in c), None)
@@ -2694,36 +2713,18 @@ def run_seasonality_app(df_global):
                         d_df[date_c] = pd.to_datetime(d_df[date_c])
                         d_df = d_df.sort_values(date_c).reset_index(drop=True)
                         
-                        # Filter by lookback
                         cutoff = pd.to_datetime(date.today()) - timedelta(days=scan_lookback*365)
                         d_df = d_df[d_df[date_c] >= cutoff].copy()
-                        if len(d_df) < 252: return None # Need at least a year of data
+                        if len(d_df) < 252: return None 
                         
-                        # Target Month/Day
-                        target_m = scan_date.month
-                        target_d = scan_date.day
-                        
-                        # Find indices matching this date (approx) in history
-                        # We look for dates within a 3-day window of the target Month-Day
-                        # to capture "this time of year"
-                        
-                        d_df['Month'] = d_df[date_c].dt.month
-                        d_df['Day'] = d_df[date_c].dt.day
-                        
-                        # Simple logic: match exact month, and day within +/- 2 days
-                        # Actually simpler: Use Day of Year (1-366)
                         target_doy = scan_date.timetuple().tm_yday
                         d_df['DOY'] = d_df[date_c].dt.dayofyear
                         
-                        # Match window: +/- 3 days
-                        # Handle year wrap around if needed (ignoring for simplicity unless date is Jan 1)
                         matches = d_df[(d_df['DOY'] >= target_doy - 2) & (d_df['DOY'] <= target_doy + 2)].copy()
                         
-                        # Dedup years (only 1 signal per year)
                         matches['Year'] = matches[date_c].dt.year
                         matches = matches.drop_duplicates(subset=['Year'])
                         
-                        # Exclude current year from stats
                         curr_y = date.today().year
                         matches = matches[matches['Year'] < curr_y]
                         
@@ -2731,19 +2732,7 @@ def run_seasonality_app(df_global):
                         
                         stats_row = {'Ticker': ticker_sym, 'N': len(matches)}
                         
-                        # Calculate +30d, +60d, +90d
-                        # Note: Trading days. 30 days ~ 21 trading days. 60 ~ 42. 90 ~ 63.
-                        # We'll use calendar days approximation for index shifting if we had continuous index,
-                        # but we have to search forward.
-                        
-                        full_dates = d_df[date_c].values
-                        full_prices = d_df[close_c].values
-                        
-                        periods = {
-                            "30d": 21,
-                            "60d": 42,
-                            "90d": 63
-                        }
+                        periods = {"30d": 21, "60d": 42, "90d": 63}
                         
                         for p_name, trading_days in periods.items():
                             returns = []
@@ -2771,8 +2760,7 @@ def run_seasonality_app(df_global):
                     except Exception:
                         return None
 
-                # Run Batch Analysis
-                with ThreadPoolExecutor(max_workers=10) as executor:
+                with ThreadPoolExecutor(max_workers=20) as executor: 
                     futures = {executor.submit(calc_forward_returns, t): t for t in valid_tickers}
                     completed = 0
                     for future in as_completed(futures):
@@ -2789,10 +2777,8 @@ def run_seasonality_app(df_global):
                 else:
                     res_df = pd.DataFrame(results)
                     
-                    # Columns configuration
                     st.write("---")
                     
-                    # 1. 30 Day Outlook
                     st.subheader(f"🗓️ +30 Days Outlook (from {scan_date.strftime('%d %b')})")
                     top_30 = res_df.sort_values(by="30d_EV", ascending=False).head(20)
                     
@@ -2807,7 +2793,6 @@ def run_seasonality_app(df_global):
                     
                     c_scan1, c_scan2 = st.columns(2)
                     with c_scan1:
-                        # 2. 60 Day Outlook
                         st.subheader(f"🗓️ +60 Days Outlook")
                         top_60 = res_df.sort_values(by="60d_EV", ascending=False).head(20)
                         st.dataframe(
@@ -2820,7 +2805,6 @@ def run_seasonality_app(df_global):
                         )
                     
                     with c_scan2:
-                        # 3. 90 Day Outlook
                         st.subheader(f"🗓️ +90 Days Outlook")
                         top_90 = res_df.sort_values(by="90d_EV", ascending=False).head(20)
                         st.dataframe(
