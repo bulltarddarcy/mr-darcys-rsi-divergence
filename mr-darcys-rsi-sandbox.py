@@ -3063,7 +3063,7 @@ def run_seasonality_app(df_global):
                     combined_bar_data = pd.concat([hist_bar_data, curr_bar_data])
                     combined_bar_data['Label'] = combined_bar_data['Value'].apply(fmt_finance)
                     
-                    # --- FIX: Calculate Y position for label to ensure it stays above the bar ---
+                    # Ensure label is always "above" the zero line visually
                     combined_bar_data['LabelY'] = combined_bar_data['Value'].apply(lambda x: max(0, x))
 
                     base = alt.Chart(combined_bar_data).encode(
@@ -3086,7 +3086,7 @@ def run_seasonality_app(df_global):
                         fontWeight='bold',
                         color='black'
                     ).encode(
-                        y=alt.Y('LabelY'), # Use calculated positive position
+                        y=alt.Y('LabelY'), 
                         xOffset='Type', 
                         text='Label'
                     )
@@ -3161,11 +3161,12 @@ def run_seasonality_app(df_global):
     # TAB 2: OPPORTUNITY SCANNER
     # ==============================================================================
     with tab_scan:
-        with st.expander("ℹ️ Page Notes: Methodology"):
+        with st.expander("ℹ️ Page Notes: Methodology & Metrics"):
             st.markdown("""
             **🚀 Rolling Forward Returns**
-            * **Methodology**: It searches 10 years of history for dates matching the Start Date (+/- 3 days) and calculates the performance for the **next** 21, 42, 63, and 126 trading days.
-            * **N**: The number of historical years found with valid data matching your criteria.
+            * **Methodology**: Scans 10 years of history for dates matching the Start Date (+/- 3 days) and calculates performance for future periods.
+            * **Consistency (Sharpe)**: Calculated as `Average Return / Std Dev`. High score (>2.0) means consistent gains. Low score (<1.0) means volatile/hit-or-miss.
+            * **Mean Reversion**: Looks for tickers with **Positive Seasonality** (Green Historic EV) but **Negative Recent Performance** (Red Last 21d). These may be "coiled" springs.
             """)
 
         st.subheader("🚀 High-EV Seasonality Scanner")
@@ -3188,14 +3189,7 @@ def run_seasonality_app(df_global):
             else:
                 all_tickers = [k for k in ticker_map.keys() if not k.upper().endswith('_PARQUET')]
                 results = []
-                
-                # Dictionary to hold CSV rows for ALL periods
-                all_csv_rows = {
-                    "21d": [],
-                    "42d": [],
-                    "63d": [],
-                    "126d": []
-                }
+                all_csv_rows = { "21d": [], "42d": [], "63d": [], "126d": [] }
                 
                 st.write(f"Filtering {len(all_tickers)} tickers by Market Cap > {min_mc_scan}...")
                 
@@ -3227,16 +3221,23 @@ def run_seasonality_app(df_global):
                         d_df = d_df.sort_values(date_c).reset_index(drop=True)
                         
                         cutoff = pd.to_datetime(date.today()) - timedelta(days=scan_lookback*365)
-                        d_df = d_df[d_df[date_c] >= cutoff].copy()
-                        d_df = d_df.reset_index(drop=True) 
+                        d_df_hist = d_df[d_df[date_c] >= cutoff].copy()
+                        d_df_hist = d_df_hist.reset_index(drop=True)
+                        if len(d_df_hist) < 252: return None, None
                         
-                        if len(d_df) < 252: return None, None 
+                        # --- Calculate Recent Performance (Last 21 days) for Arbitrage Scan ---
+                        recent_perf = 0.0
+                        if len(d_df) > 21:
+                            # Calculate simple % return over last 21 trading days available in DB
+                            last_p = d_df[close_c].iloc[-1]
+                            prev_p = d_df[close_c].iloc[-22] 
+                            recent_perf = ((last_p - prev_p) / prev_p) * 100
                         
                         target_doy = scan_date.timetuple().tm_yday
-                        d_df['DOY'] = d_df[date_c].dt.dayofyear
+                        d_df_hist['DOY'] = d_df_hist[date_c].dt.dayofyear
                         
                         # +/- 3 Day Window
-                        matches = d_df[(d_df['DOY'] >= target_doy - 3) & (d_df['DOY'] <= target_doy + 3)].copy()
+                        matches = d_df_hist[(d_df_hist['DOY'] >= target_doy - 3) & (d_df_hist['DOY'] <= target_doy + 3)].copy()
                         matches['Year'] = matches[date_c].dt.year
                         matches = matches.drop_duplicates(subset=['Year'])
                         curr_y = date.today().year
@@ -3244,40 +3245,43 @@ def run_seasonality_app(df_global):
                         
                         if len(matches) < 3: return None, None
                         
-                        stats_row = {'Ticker': ticker_sym, 'N': len(matches)}
+                        stats_row = {'Ticker': ticker_sym, 'N': len(matches), 'Recent_21d': recent_perf}
                         periods = {"21d": 21, "42d": 42, "63d": 63, "126d": 126}
                         
-                        # Temporary store for this ticker's details
                         ticker_csv_rows = {k: [] for k in periods.keys()}
                         
                         for p_name, trading_days in periods.items():
                             returns = []
                             for idx in matches.index:
-                                entry_p = d_df.loc[idx, close_c]
+                                entry_p = d_df_hist.loc[idx, close_c]
                                 exit_idx = idx + trading_days
-                                if exit_idx < len(d_df):
-                                    exit_p = d_df.loc[exit_idx, close_c]
+                                if exit_idx < len(d_df_hist):
+                                    exit_p = d_df_hist.loc[exit_idx, close_c]
                                     ret = (exit_p - entry_p) / entry_p
                                     returns.append(ret)
                                     
-                                    # Collect details for CSV
                                     ticker_csv_rows[p_name].append({
                                         "Ticker": ticker_sym,
-                                        "Start Date": d_df.loc[idx, date_c].date(),
+                                        "Start Date": d_df_hist.loc[idx, date_c].date(),
                                         "Entry Price": entry_p,
-                                        "Exit Date": d_df.loc[exit_idx, date_c].date(),
+                                        "Exit Date": d_df_hist.loc[exit_idx, date_c].date(),
                                         "Exit Price": exit_p,
                                         "Return (%)": ret * 100
                                     })
                                         
                             if returns:
-                                avg_ret = np.mean(returns) * 100
-                                win_r = np.mean(np.array(returns) > 0) * 100
+                                returns_arr = np.array(returns)
+                                avg_ret = np.mean(returns_arr) * 100
+                                win_r = np.mean(returns_arr > 0) * 100
+                                std_dev = np.std(returns_arr) * 100
+                                # --- Consistency Metric (Sharpe-like) ---
+                                sharpe = avg_ret / std_dev if std_dev > 0.1 else 0.0
                             else:
-                                avg_ret = 0.0
-                                win_r = 0.0
+                                avg_ret = 0.0; win_r = 0.0; sharpe = 0.0
+                                
                             stats_row[f"{p_name}_EV"] = avg_ret
                             stats_row[f"{p_name}_WR"] = win_r
+                            stats_row[f"{p_name}_Sharpe"] = sharpe
                             
                         return stats_row, ticker_csv_rows
                     except Exception:
@@ -3291,11 +3295,9 @@ def run_seasonality_app(df_global):
                         if res_stats:
                             results.append(res_stats)
                         if res_details:
-                            # Aggregate this ticker's details into the main dictionary
                             for k in all_csv_rows.keys():
                                 if res_details[k]:
                                     all_csv_rows[k].extend(res_details[k])
-                            
                         completed += 1
                         if completed % 5 == 0: progress_bar.progress(completed / len(valid_tickers))
                 
@@ -3312,31 +3314,54 @@ def run_seasonality_app(df_global):
                         color = "#1f7a1f" if val > 0 else "#a11f1f"
                         bg = "rgba(113, 210, 138, 0.25)" if val > 0 else "rgba(242, 156, 160, 0.25)"
                         return f'background-color: {bg}; color: {color}; font-weight: bold;'
+
+                    # --- 1. ARBITRAGE / MEAN REVERSION TABLE ---
+                    # Logic: 21d EV > 3% (Good Seasonality) AND Recent_21d < -3% (Beaten Down)
+                    arb_df = res_df[
+                        (res_df['21d_EV'] > 3.0) & 
+                        (res_df['Recent_21d'] < -3.0)
+                    ].copy()
                     
+                    if not arb_df.empty:
+                        st.subheader("💎 Arbitrage / Catch-Up Candidates")
+                        st.caption("Stocks with strong historical seasonality (EV > 3%) that are currently beaten down (Last 21d < -3%).")
+                        
+                        arb_df['Gap'] = arb_df['21d_EV'] - arb_df['Recent_21d']
+                        arb_display = arb_df.sort_values(by='Gap', ascending=False).head(15)
+                        
+                        st.dataframe(
+                            arb_display[['Ticker', 'Recent_21d', '21d_EV', '21d_WR', 'Gap']].style
+                            .format({'Recent_21d': fmt_finance, '21d_EV': fmt_finance, '21d_WR': "{:.1f}%", 'Gap': "{:.1f}%"})
+                            .applymap(lambda x: 'color: #d32f2f; font-weight:bold;', subset=['Recent_21d'])
+                            .applymap(lambda x: 'color: #2e7d32; font-weight:bold;', subset=['21d_EV'])
+                            .background_gradient(cmap='Greens', subset=['Gap']),
+                            use_container_width=True, hide_index=True
+                        )
+                        st.write("---")
+
+                    # --- 2. STANDARD TABLES ---
                     st.subheader(f"🗓️ Forward Returns (from {scan_date.strftime('%d %b')})")
                     
                     c_scan1, c_scan2 = st.columns(2)
                     c_scan3, c_scan4 = st.columns(2)
-                    
                     fixed_height = 738
 
-                    # Loop through columns and add download button + table
-                    for col_obj, p_label, sort_col, p_key in [
-                        (c_scan1, "**+21 Trading Days** (~1 Month)", "21d_EV", "21d"),
-                        (c_scan2, "**+42 Trading Days** (~2 Months)", "42d_EV", "42d"),
-                        (c_scan3, "**+63 Trading Days** (~3 Months)", "63d_EV", "63d"),
-                        (c_scan4, "**+126 Trading Days** (~6 Months)", "126d_EV", "126d")
+                    for col_obj, p_label, sort_col, sharpe_col, p_key in [
+                        (c_scan1, "**+21 Trading Days**", "21d_EV", "21d_Sharpe", "21d"),
+                        (c_scan2, "**+42 Trading Days**", "42d_EV", "42d_Sharpe", "42d"),
+                        (c_scan3, "**+63 Trading Days**", "63d_EV", "63d_Sharpe", "63d"),
+                        (c_scan4, "**+126 Trading Days**", "126d_EV", "126d_Sharpe", "126d")
                     ]:
                         with col_obj:
                             st.markdown(p_label)
                             
-                            # Add Download Button for this specific period
+                            # CSV Download
                             if all_csv_rows[p_key]:
                                 df_details = pd.DataFrame(all_csv_rows[p_key])
                                 df_details = df_details.sort_values(by=["Ticker", "Start Date"])
                                 csv_data = df_details.to_csv(index=False).encode('utf-8')
                                 st.download_button(
-                                    label=f"💾 Download {p_key} CSV",
+                                    label=f"💾 Download CSV",
                                     data=csv_data,
                                     file_name=f"seasonality_{p_key}_inputs_{scan_date.strftime('%Y%m%d')}.csv",
                                     mime="text/csv",
@@ -3346,10 +3371,18 @@ def run_seasonality_app(df_global):
                             top_df = res_df.sort_values(by=sort_col, ascending=False).head(20)
                             
                             st.dataframe(
-                                top_df[['Ticker', sort_col, sort_col.replace('EV','WR'), 'N']].style
-                                .format({sort_col: fmt_finance, sort_col.replace('EV','WR'): "{:.1f}%"})
-                                .applymap(highlight_ev, subset=[sort_col]),
-                                use_container_width=True, hide_index=True, height=fixed_height
+                                top_df[['Ticker', sort_col, sort_col.replace('EV','WR'), sharpe_col]].style
+                                .format({
+                                    sort_col: fmt_finance, 
+                                    sort_col.replace('EV','WR'): "{:.1f}%",
+                                    sharpe_col: "{:.2f}"
+                                })
+                                .applymap(highlight_ev, subset=[sort_col])
+                                .background_gradient(cmap='RdYlGn', subset=[sharpe_col], vmin=0.5, vmax=3.0),
+                                use_container_width=True, hide_index=True, height=fixed_height,
+                                column_config={
+                                    sharpe_col: st.column_config.NumberColumn("Sharpe", help="Consistency Score (EV / StdDev). >2 is very consistent.")
+                                }
                             )
 
 st.markdown("""<style>
