@@ -2908,23 +2908,12 @@ def run_seasonality_app(df_global):
 def run_ema_distance_app(df_global):
     st.title("📏 EMA Distance Analysis")
 
-    # --- NEW: Page Notes ---
+    # --- Page Notes ---
     with st.expander("ℹ️ Page Notes: How to Read This Table"):
         st.markdown("""
-        **What is this tool?**
-        This tool measures the **"Rubber Band" effect**. It quantifies how far the current price has stretched away from its key moving averages compared to the last 10 years of history.
-
-        **The Logic:**
-        Markets rarely move in a straight line. When price gets too far from its average (Moving Average), it tends to snap back ("Mean Reversion"). We use statistical percentiles to determine exactly *how far* is "too far."
-
-        **Column Definitions:**
-        * **%-distance metric**: The Moving Average being analyzed (e.g., Price vs the 8-day EMA).
-        * **Current**: The live gap between today's price and that Moving Average.
-            * *Formula:* `(Price - MA) / MA`
-        * **Long-run avg**: The average gap over the last 10 years.
-        * **p50 (Median)**: The "normal" gap. 50% of the time, the gap is smaller than this; 50% of the time, it is larger.
-        * **p95 (The "Danger Zone")**: The **Suggested Over-Extended Line**. Historically, the price has only been this far above the MA **5% of the time**.
-            * ⚠️ **Signal:** If **Current** > **p95**, the stock is statistically over-extended (2 standard deviations) and the probability of a pullback or consolidation is very high.
+        **The "Rubber Band" Strategy (Long-Only)**
+        * **🟢 Buy Zone (Green):** When **Current** is near or below the **p50 (Median)**. This implies the price has reverted to the mean or is "on sale" relative to the trend.
+        * **🔴 Sell/Trim Zone (Red):** When **Current** is near **p90** or **p95**. This implies the price is statistically over-extended (2 standard deviations). The "rubber band" is stretched tight and likely to snap back.
         """)
 
     # 1. Input Section
@@ -2945,14 +2934,22 @@ def run_ema_distance_app(df_global):
         return
 
     # 3. Calculations
+    # Ensure correct column names
     close_col = 'CLOSE' if 'CLOSE' in df.columns else 'Close'
+    date_col = 'DATE' if 'DATE' in df.columns else 'Date'
     
+    # Check if we have the date column, if not try to use index
+    if date_col not in df.columns:
+        df[date_col] = df.index
+
+    # Calculate MAs
     df['EMA_8'] = df[close_col].ewm(span=8, adjust=False).mean()
     df['EMA_21'] = df[close_col].ewm(span=21, adjust=False).mean()
     df['SMA_50'] = df[close_col].rolling(window=50).mean()
     df['SMA_100'] = df[close_col].rolling(window=100).mean()
     df['SMA_200'] = df[close_col].rolling(window=200).mean()
     
+    # Clean NaN values for accurate stats
     df_clean = df.dropna(subset=['EMA_8', 'EMA_21', 'SMA_50', 'SMA_100', 'SMA_200']).copy()
     
     if df_clean.empty:
@@ -2988,44 +2985,74 @@ def run_ema_distance_app(df_global):
         p90 = np.percentile(dist_series, 90)
         p95 = np.percentile(dist_series, 95)
         
-        def fmt(x): return f"{x:.2f} %"
-        
-        # Build Table 1 Rows (Summary)
+        # Store raw numbers for styling, will format later
         stats_summary.append({
-            "%-distance metric": label,
-            "Current": fmt(current_dist),
-            "Long-run avg": fmt(long_run_avg),
-            "p95": fmt(p95),
-            "Suggested over-extended line": fmt(p95)
+            "Metric": label,
+            "Current": current_dist,
+            "Avg": long_run_avg,
+            "p50": p50,
+            "p90": p90,
+            "p95": p95
         })
         
-        # Build Table 2 Rows (Percentiles)
+        # Table 2 needs string formatting immediately as we won't color code it heavily
+        def fmt(x): return f"{x:.2f}%"
         stats_percentiles.append({
-            "%-distance metric": label,
-            "p50": fmt(p50),
+            "Metric": label,
+            "p50 (Median)": fmt(p50),
             "p70": fmt(p70),
             "p80": fmt(p80),
             "p90": fmt(p90)
         })
 
-    # 4. Display
+    # 4. Display & Coloring
     df_summ = pd.DataFrame(stats_summary)
     df_perc = pd.DataFrame(stats_percentiles)
 
-    # Highlight Logic
-    def highlight_overextended(row):
-        try:
-            curr = float(row["Current"].replace("%","").strip())
-            limit = float(row["Suggested over-extended line"].replace("%","").strip())
-            if curr > limit:
-                return ['background-color: #fce8e6; color: #c5221f; font-weight: bold'] * len(row)
-        except: pass
-        return [''] * len(row)
+    # --- COLOR CODING LOGIC ---
+    def color_long_only(row):
+        # Default Style
+        styles = [''] * len(row)
+        
+        curr = row['Current']
+        p50 = row['p50']
+        p90 = row['p90']
+        
+        # Define Colors
+        color_sell = 'background-color: #fce8e6; color: #c5221f; font-weight: bold;' # Red-ish
+        color_warn = 'background-color: #fff8e1; color: #d68f00;'                   # Yellow/Orange
+        color_buy  = 'background-color: #e6f4ea; color: #1e7e34; font-weight: bold;' # Green-ish
+        
+        idx_curr = df_summ.columns.get_loc("Current")
+        
+        if curr >= p90:
+            styles[idx_curr] = color_sell
+        elif curr <= p50:
+            styles[idx_curr] = color_buy
+        elif curr > p50 and curr < p90:
+            styles[idx_curr] = color_warn
+            
+        return styles
 
     st.subheader(f"{ticker} vs. Moving Avgs")
     
     st.markdown("##### 🚨 Over-Extension Thresholds")
-    st.dataframe(df_summ.style.apply(highlight_overextended, axis=1), use_container_width=True, hide_index=True)
+    
+    # Format the numbers for display while keeping the underlying data for the styler
+    # We use format() inside st.dataframe to keep the floats accessible for the styling function
+    st.dataframe(
+        df_summ.style.apply(color_long_only, axis=1)
+               .format("{:.2f}%", subset=["Current", "Avg", "p50", "p90", "p95"]),
+        use_container_width=True, 
+        hide_index=True,
+        column_config={
+            "Metric": st.column_config.TextColumn("Distance Metric"),
+            "Current": st.column_config.TextColumn("Current Gap"),
+            "p95": st.column_config.TextColumn("Sell Line (p95)"),
+        }
+    )
+    
+    st.caption("🔴 **Red** = Over-extended (Sell/Trim). 🟢 **Green** = Mean Reversion (Buy/Hold).")
     
     st.markdown("##### 📊 Historical Percentiles")
     st.dataframe(df_perc, use_container_width=True, hide_index=True)
@@ -3034,11 +3061,17 @@ def run_ema_distance_app(df_global):
     st.markdown("---")
     st.caption("Visualizing the Close Price vs the 21 EMA % Distance over time")
     
+    # --- FIX FOR THE 'INT - TIMEDELTA' ERROR ---
+    # We explicitly use the date column we identified earlier
     dist_21 = ((df_clean[close_col] - df_clean['EMA_21']) / df_clean['EMA_21']) * 100
+    
     chart_data = pd.DataFrame({
-        'Date': df_clean.index,
+        'Date': df_clean[date_col],  # <--- FIX: Using the column, not the index
         'Distance (%)': dist_21,
     })
+    
+    # Ensure Date is datetime object for sure
+    chart_data['Date'] = pd.to_datetime(chart_data['Date'])
     
     cutoff_date = chart_data['Date'].max() - timedelta(days=730)
     chart_data = chart_data[chart_data['Date'] >= cutoff_date]
