@@ -2728,7 +2728,7 @@ def run_rsi_scanner_app(df_global):
                         target_doy = scan_date.timetuple().tm_yday
                         d_df_hist['DOY'] = d_df_hist[date_c].dt.dayofyear
                         
-                        matches = d_df_hist[(d_df_hist['DOY'] >= target_doy - 7) & (d_df_hist['DOY'] <= target_doy + 7)].copy() # Was originally 3 days
+                        matches = d_df_hist[(d_df_hist['DOY'] >= target_doy - 3) & (d_df_hist['DOY'] <= target_doy + 3)].copy() # Was originally 3 days
                         matches['Year'] = matches[date_c].dt.year
                         matches = matches.drop_duplicates(subset=['Year'])
                         curr_y = date.today().year
