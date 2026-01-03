@@ -769,19 +769,27 @@ def prepare_data(df):
         
     return df_d, df_w
 
-def find_divergences(df_tf, ticker, timeframe, min_n=0, periods_input=None, optimize_for='PF'):
+def find_divergences(df_tf, ticker, timeframe, min_n=0, periods_input=None, optimize_for='PF', lookback_period=90, price_source='High/Low'):
     divergences = []
     n_rows = len(df_tf)
     
-    if n_rows < DIVERGENCE_LOOKBACK + 1: return divergences
+    if n_rows < lookback_period + 1: return divergences
     
     rsi_vals = df_tf['RSI'].values
-    low_vals = df_tf['Low'].values
-    high_vals = df_tf['High'].values
     vol_vals = df_tf['Volume'].values
     vol_sma_vals = df_tf['VolSMA'].values
-    close_vals = df_tf['Price'].values
+    close_vals = df_tf['Price'].values # 'Price' is the renamed Close column
     
+    # --- LOGIC CHANGE: Select Price Arrays based on User Input ---
+    if price_source == 'Close':
+        # If 'Close', we treat the Close price as both the High and the Low for comparison
+        low_vals = close_vals
+        high_vals = close_vals
+    else:
+        # Default behavior: Bullish uses Lows, Bearish uses Highs
+        low_vals = df_tf['Low'].values
+        high_vals = df_tf['High'].values
+        
     def get_date_str(idx, fmt='%Y-%m-%d'): 
         ts = df_tf.index[idx]
         if timeframe.lower() == 'weekly': 
@@ -791,14 +799,14 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0, periods_input=None, opti
     # ---------------------------------------------------------
     # PASS 1: VECTORIZED PRE-CHECK
     # ---------------------------------------------------------
-    roll_low_min = pd.Series(low_vals).shift(1).rolling(window=DIVERGENCE_LOOKBACK).min().values
-    roll_high_max = pd.Series(high_vals).shift(1).rolling(window=DIVERGENCE_LOOKBACK).max().values
+    roll_low_min = pd.Series(low_vals).shift(1).rolling(window=lookback_period).min().values
+    roll_high_max = pd.Series(high_vals).shift(1).rolling(window=lookback_period).max().values
     
     is_new_low = (low_vals < roll_low_min)
     is_new_high = (high_vals > roll_high_max)
     
     valid_mask = np.zeros(n_rows, dtype=bool)
-    valid_mask[DIVERGENCE_LOOKBACK:] = True
+    valid_mask[lookback_period:] = True
     
     candidate_indices = np.where(valid_mask & (is_new_low | is_new_high))[0]
     
@@ -814,7 +822,7 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0, periods_input=None, opti
         p2_vol = vol_vals[i]
         p2_volsma = vol_sma_vals[i]
         
-        lb_start = i - DIVERGENCE_LOOKBACK
+        lb_start = i - lookback_period
         lb_rsi = rsi_vals[lb_start:i]
         
         is_vol_high = int(p2_vol > (p2_volsma * 1.5)) if not np.isnan(p2_volsma) else 0
@@ -889,6 +897,7 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0, periods_input=None, opti
         date_display = f"{get_date_str(idx_p1_abs, '%b %d')} → {get_date_str(i, '%b %d')}"
         rsi_display = f"{int(round(rsi_vals[idx_p1_abs]))} {'↗' if rsi_vals[i] > rsi_vals[idx_p1_abs] else '↘'} {int(round(rsi_vals[i]))}"
         
+        # Display the price used for the signal (Low/High OR Close)
         price_p1 = low_vals[idx_p1_abs] if s_type=='Bullish' else high_vals[idx_p1_abs]
         price_p2 = low_vals[i] if s_type=='Bullish' else high_vals[i]
         price_display = f"${price_p1:,.2f} ↗ ${price_p2:,.2f}" if price_p2 > price_p1 else f"${price_p1:,.2f} ↘ ${price_p2:,.2f}"
@@ -901,11 +910,9 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0, periods_input=None, opti
         
         if best_stats["N"] < min_n: continue
 
-        # --- EV PRICE CALCULATION ---
         ev_val = best_stats['EV']
         sig_close = close_vals[i]
         
-        # New Rule: If N=0, EV Target is 0
         if best_stats['N'] == 0:
             ev_price = 0.0
         else:
@@ -1808,9 +1815,13 @@ def run_rsi_scanner_app(df_global):
     
     # --- Session State Init ---
     if 'saved_rsi_div_min_n' not in st.session_state: st.session_state.saved_rsi_div_min_n = 0
-    if 'saved_rsi_div_periods_days' not in st.session_state: st.session_state.saved_rsi_div_periods_days = "5, 21, 63, 126"
-    if 'saved_rsi_div_periods_weeks' not in st.session_state: st.session_state.saved_rsi_div_periods_weeks = "4, 13, 26, 52, 104"
-    if 'saved_rsi_div_opt' not in st.session_state: st.session_state.saved_rsi_div_opt = "Profit Factor" 
+    # UPDATED DEFAULTS: Trading Days (5, 21, 63, 126, 252) and Weeks (4, 13, 26, 52)
+    if 'saved_rsi_div_periods_days' not in st.session_state: st.session_state.saved_rsi_div_periods_days = "5, 21, 63, 126, 252"
+    if 'saved_rsi_div_periods_weeks' not in st.session_state: st.session_state.saved_rsi_div_periods_weeks = "4, 13, 26, 52"
+    if 'saved_rsi_div_opt' not in st.session_state: st.session_state.saved_rsi_div_opt = "Profit Factor"
+    if 'saved_rsi_div_lookback' not in st.session_state: st.session_state.saved_rsi_div_lookback = 90
+    # NEW: Default Source
+    if 'saved_rsi_div_source' not in st.session_state: st.session_state.saved_rsi_div_source = "High/Low"
     
     if 'saved_rsi_pct_low' not in st.session_state: st.session_state.saved_rsi_pct_low = 10
     if 'saved_rsi_pct_high' not in st.session_state: st.session_state.saved_rsi_pct_high = 90
@@ -1819,7 +1830,7 @@ def run_rsi_scanner_app(df_global):
     
     if 'saved_rsi_pct_date' not in st.session_state: st.session_state.saved_rsi_pct_date = None
     if 'saved_rsi_pct_min_n' not in st.session_state: st.session_state.saved_rsi_pct_min_n = 1
-    if 'saved_rsi_pct_periods' not in st.session_state: st.session_state.saved_rsi_pct_periods = "5, 21, 63, 126"
+    if 'saved_rsi_pct_periods' not in st.session_state: st.session_state.saved_rsi_pct_periods = "5, 21, 63, 126, 252"
 
     def save_rsi_state(key, saved_key):
         st.session_state[saved_key] = st.session_state[key]
@@ -2063,8 +2074,9 @@ def run_rsi_scanner_app(df_global):
                             with cols[i]:
                                 for t in subset:
                                     st.write(t)
-
-                    c_d1, c_d2, c_d3, c_d4 = st.columns(4)
+                    
+                    # UPDATED: Added Source Selectbox
+                    c_d1, c_d2, c_d3, c_d4, c_d5 = st.columns(5)
                     with c_d1:
                          min_n_div = st.number_input("Minimum N", min_value=0, value=st.session_state.saved_rsi_div_min_n, step=1, key="rsi_div_min_n", on_change=save_rsi_state, args=("rsi_div_min_n", "saved_rsi_div_min_n"))
                     with c_d2:
@@ -2075,6 +2087,14 @@ def run_rsi_scanner_app(df_global):
                          curr_div_opt = st.session_state.saved_rsi_div_opt
                          idx_div_opt = ["Profit Factor", "SQN"].index(curr_div_opt) if curr_div_opt in ["Profit Factor", "SQN"] else 0
                          opt_mode_div = st.selectbox("Optimize By", ["Profit Factor", "SQN"], index=idx_div_opt, key="rsi_div_opt", on_change=save_rsi_state, args=("rsi_div_opt", "saved_rsi_div_opt"))
+                    with c_d5:
+                         c5_a, c5_b = st.columns(2)
+                         with c5_a:
+                             div_lookback = st.number_input("Lookback", min_value=30, value=st.session_state.saved_rsi_div_lookback, step=5, key="rsi_div_lookback", on_change=save_rsi_state, args=("rsi_div_lookback", "saved_rsi_div_lookback"))
+                         with c5_b:
+                             curr_source = st.session_state.saved_rsi_div_source
+                             idx_source = ["High/Low", "Close"].index(curr_source) if curr_source in ["High/Low", "Close"] else 0
+                             div_source = st.selectbox("Source", ["High/Low", "Close"], index=idx_source, key="rsi_div_source", on_change=save_rsi_state, args=("rsi_div_source", "saved_rsi_div_source"))
                     
                     periods_div_days = parse_periods(periods_str_div_days)
                     periods_div_weeks = parse_periods(periods_str_div_weeks)
@@ -2089,8 +2109,9 @@ def run_rsi_scanner_app(df_global):
                     
                     for i, (ticker, group) in enumerate(grouped_list):
                         d_d, d_w = prepare_data(group.copy())
-                        if d_d is not None: raw_results_div.extend(find_divergences(d_d, ticker, 'Daily', min_n=min_n_div, periods_input=periods_div_days, optimize_for=div_opt_code))
-                        if d_w is not None: raw_results_div.extend(find_divergences(d_w, ticker, 'Weekly', min_n=min_n_div, periods_input=periods_div_weeks, optimize_for=div_opt_code))
+                        # UPDATED: Pass price_source
+                        if d_d is not None: raw_results_div.extend(find_divergences(d_d, ticker, 'Daily', min_n=min_n_div, periods_input=periods_div_days, optimize_for=div_opt_code, lookback_period=div_lookback, price_source=div_source))
+                        if d_w is not None: raw_results_div.extend(find_divergences(d_w, ticker, 'Weekly', min_n=min_n_div, periods_input=periods_div_weeks, optimize_for=div_opt_code, lookback_period=div_lookback, price_source=div_source))
                         if i % 10 == 0 or i == total_groups - 1: progress_bar.progress((i + 1) / total_groups)
                     
                     progress_bar.empty()
