@@ -83,10 +83,11 @@ def parse_periods(periods_str):
         # Split by comma, strip whitespace, convert to int, filter valid numbers, sort unique
         p_list = sorted(list(set([int(x.strip()) for x in periods_str.split(',') if x.strip().isdigit()])))
         if not p_list:
-            return [10, 30, 60, 90, 180]
+            # Fallback if parsing fails, though specific defaults are usually set in session state
+            return [5, 21, 63, 126] 
         return p_list
     except:
-        return [10, 30, 60, 90, 180]
+        return [5, 21, 63, 126]
 
 def add_technicals(df):
     """
@@ -449,7 +450,7 @@ def calculate_optimal_signal_stats(history_indices, price_array, current_idx, si
 
     # Handle Periods
     if periods_input is None:
-        periods = np.array([10, 30, 60, 90, 180])
+        periods = np.array([5, 21, 63, 126]) # Default trading days
     else:
         periods = np.array(periods_input)
 
@@ -1806,7 +1807,9 @@ def run_rsi_scanner_app(df_global):
     
     # --- Session State Init ---
     if 'saved_rsi_div_min_n' not in st.session_state: st.session_state.saved_rsi_div_min_n = 0
-    if 'saved_rsi_div_periods' not in st.session_state: st.session_state.saved_rsi_div_periods = "10,30,60,90,180"
+    # Split periods for Divergences
+    if 'saved_rsi_div_periods_days' not in st.session_state: st.session_state.saved_rsi_div_periods_days = "5, 21, 63, 126"
+    if 'saved_rsi_div_periods_weeks' not in st.session_state: st.session_state.saved_rsi_div_periods_weeks = "4, 13, 26, 52, 104"
     if 'saved_rsi_div_opt' not in st.session_state: st.session_state.saved_rsi_div_opt = "Profit Factor" # Default PF
     
     if 'saved_rsi_pct_low' not in st.session_state: st.session_state.saved_rsi_pct_low = 10
@@ -1814,10 +1817,10 @@ def run_rsi_scanner_app(df_global):
     if 'saved_rsi_pct_show' not in st.session_state: st.session_state.saved_rsi_pct_show = "Everything"
     if 'saved_rsi_pct_opt' not in st.session_state: st.session_state.saved_rsi_pct_opt = "SQN" # Default SQN
     
-    # We'll set the default date dynamically below, but init here to avoid errors
     if 'saved_rsi_pct_date' not in st.session_state: st.session_state.saved_rsi_pct_date = None
     if 'saved_rsi_pct_min_n' not in st.session_state: st.session_state.saved_rsi_pct_min_n = 1
-    if 'saved_rsi_pct_periods' not in st.session_state: st.session_state.saved_rsi_pct_periods = "10,30,60,90,180"
+    # Updated default for Percentiles
+    if 'saved_rsi_pct_periods' not in st.session_state: st.session_state.saved_rsi_pct_periods = "5, 21, 63, 126"
 
     def save_rsi_state(key, saved_key):
         st.session_state[saved_key] = st.session_state[key]
@@ -1825,7 +1828,6 @@ def run_rsi_scanner_app(df_global):
     dataset_map = DATA_KEYS_PARQUET
     options = list(dataset_map.keys())
     
-    # Helper to map dropdown text to function codes
     OPT_MAP = {"Profit Factor": "PF", "SQN": "SQN"}
 
     tab_div, tab_pct, tab_bot = st.tabs(["📉 Divergences", "🔢 Percentiles", "🤖 Backtester"])
@@ -1906,7 +1908,8 @@ def run_rsi_scanner_app(df_global):
                         total_len = len(full_close)
 
                         results = []
-                        periods = [1, 3, 5, 7, 10, 14, 30, 60, 90, 180]
+                        # UPDATED BACKTESTER PERIODS (Trading Days)
+                        periods = [1, 5, 10, 21, 42, 63, 126, 252]
                         
                         for p in periods:
                             valid_indices = match_indices[match_indices + p < total_len]
@@ -1986,9 +1989,6 @@ def run_rsi_scanner_app(df_global):
     with tab_div:
         data_option_div = st.pills("Dataset", options=options, selection_mode="single", default=options[0] if options else None, label_visibility="collapsed", key="rsi_div_pills")
         
-        # Use session state for display text to allow rendering before input widget
-        periods_div_display = parse_periods(st.session_state.saved_rsi_div_periods)
-        
         with st.expander("ℹ️ Page Notes: Divergence Strategy Logic"):
             f_col1, f_col2, f_col3, f_col4 = st.columns(4)
             with f_col1:
@@ -2004,7 +2004,7 @@ def run_rsi_scanner_app(df_global):
                 st.markdown('<div class="footer-header">🔮 SIGNAL-BASED OPTIMIZATION</div>', unsafe_allow_html=True)
                 st.markdown(f"""
                 * **New Methodology**: Instead of just looking at RSI levels, this tool looks back at **Every Historical Occurrence** of the specific signal type (e.g., Daily Bullish Divergence) for the ticker.
-                * **Optimization Loop**: It calculates the forward returns for **{','.join(map(str, periods_div_display))}** trading days for each historical signal.
+                * **Optimization Loop**: It calculates the forward returns for specified trading periods for each historical signal.
                 * **Selection**: It compares these holding periods and selects the **Optimal Time Period** based on the highest **Profit Factor** (or SQN if selected).
                 * **Data Constraint**: This scanner utilizes up to 10 years of data if provided in the source file.
                 """)
@@ -2014,7 +2014,7 @@ def run_rsi_scanner_app(df_global):
                 * <b>Day/Week Δ</b>: Date the Divergence was confirmed (Pivot 2).
                 * <b>RSI Δ</b>: RSI value at Pivot 1 vs Pivot 2.
                 * <b>Price Δ</b>: Price at Pivot 1 vs Pivot 2.
-                * <b>Best Period</b>: The historical holding period (e.g., 30d/30w) that produced the best Profit Factor.
+                * <b>Best Period</b>: The historical holding period (e.g., 21d/13w) that produced the best Profit Factor.
                 * <b>Profit Factor</b>: Gross Wins / Gross Losses. Measures efficiency.
                     * **Bullish Table**: Win = Price went **UP**.
                     * **Bearish Table**: Win = Price went **DOWN**.
@@ -2056,20 +2056,21 @@ def run_rsi_scanner_app(df_global):
                         cols = st.columns(6)
                         for i, ticker in enumerate(ft_div): cols[i % 6].write(ticker)
 
-                    c_d1, c_d2, c_d3 = st.columns(3)
+                    c_d1, c_d2, c_d3, c_d4 = st.columns(4)
                     with c_d1:
                          min_n_div = st.number_input("Minimum N", min_value=0, value=st.session_state.saved_rsi_div_min_n, step=1, key="rsi_div_min_n", on_change=save_rsi_state, args=("rsi_div_min_n", "saved_rsi_div_min_n"))
                     with c_d2:
-                         periods_str_div = st.text_input("Test Periods (days/weeks)", value=st.session_state.saved_rsi_div_periods, key="rsi_div_periods", on_change=save_rsi_state, args=("rsi_div_periods", "saved_rsi_div_periods"))
+                         periods_str_div_days = st.text_input("Test Periods (Trading Days)", value=st.session_state.saved_rsi_div_periods_days, key="rsi_div_periods_days", on_change=save_rsi_state, args=("rsi_div_periods_days", "saved_rsi_div_periods_days"))
                     with c_d3:
-                         # Default for Div is PF (Index 0)
+                         periods_str_div_weeks = st.text_input("Test Periods (Weeks)", value=st.session_state.saved_rsi_div_periods_weeks, key="rsi_div_periods_weeks", on_change=save_rsi_state, args=("rsi_div_periods_weeks", "saved_rsi_div_periods_weeks"))
+                    with c_d4:
                          curr_div_opt = st.session_state.saved_rsi_div_opt
                          idx_div_opt = ["Profit Factor", "SQN"].index(curr_div_opt) if curr_div_opt in ["Profit Factor", "SQN"] else 0
                          opt_mode_div = st.selectbox("Optimize By", ["Profit Factor", "SQN"], index=idx_div_opt, key="rsi_div_opt", on_change=save_rsi_state, args=("rsi_div_opt", "saved_rsi_div_opt"))
                     
-                    periods_div = parse_periods(periods_str_div)
+                    periods_div_days = parse_periods(periods_str_div_days)
+                    periods_div_weeks = parse_periods(periods_str_div_weeks)
                     
-                    # Convert UI selection to Function Code
                     div_opt_code = OPT_MAP[opt_mode_div]
 
                     raw_results_div = []
@@ -2080,8 +2081,8 @@ def run_rsi_scanner_app(df_global):
                     
                     for i, (ticker, group) in enumerate(grouped_list):
                         d_d, d_w = prepare_data(group.copy())
-                        if d_d is not None: raw_results_div.extend(find_divergences(d_d, ticker, 'Daily', min_n=min_n_div, periods_input=periods_div, optimize_for=div_opt_code))
-                        if d_w is not None: raw_results_div.extend(find_divergences(d_w, ticker, 'Weekly', min_n=min_n_div, periods_input=periods_div, optimize_for=div_opt_code))
+                        if d_d is not None: raw_results_div.extend(find_divergences(d_d, ticker, 'Daily', min_n=min_n_div, periods_input=periods_div_days, optimize_for=div_opt_code))
+                        if d_w is not None: raw_results_div.extend(find_divergences(d_w, ticker, 'Weekly', min_n=min_n_div, periods_input=periods_div_weeks, optimize_for=div_opt_code))
                         if i % 10 == 0 or i == total_groups - 1: progress_bar.progress((i + 1) / total_groups)
                     
                     progress_bar.empty()
@@ -2104,12 +2105,10 @@ def run_rsi_scanner_app(df_global):
                                     def style_div_df(df_in):
                                         def highlight_row(row):
                                             styles = [''] * len(row)
-                                            # Highlight Date
                                             if row['Signal_Date_ISO'] == target_highlight:
                                                 idx = df_in.columns.get_loc('Date_Display')
                                                 styles[idx] = 'background-color: rgba(255, 244, 229, 0.7); color: #e67e22; font-weight: bold;'
                                             
-                                            # Color EV Numeric Cells
                                             if 'EV' in df_in.columns:
                                                 val = row['EV']
                                                 if pd.notnull(val) and val != 0:
@@ -2174,7 +2173,7 @@ def run_rsi_scanner_app(df_global):
                 * **Date**: The date the signal fired (Left Low/High).
                 * **RSI Δ**: RSI movement (e.g., 10th-Pct ↗ Current-RSI).
                 * **Signal Close**: Price when signal fired.
-                * **Best Period**: The historical holding period (e.g., 30d/30w) that produced the best result (PF or SQN).
+                * **Best Period**: The historical holding period (e.g., 21d) that produced the best result (PF or SQN).
                 * **Profit Factor**: Gross Wins / Gross Losses. 
                     * **Leaving Low**: Win = Price went **UP**.
                     * **Leaving High**: Win = Price went **DOWN**.
@@ -2209,7 +2208,6 @@ def run_rsi_scanner_app(df_global):
                     with pct_col1: in_low = st.number_input("RSI Low Percentile (%)", min_value=1, max_value=49, value=st.session_state.saved_rsi_pct_low, step=1, key="rsi_pct_low", on_change=save_rsi_state, args=("rsi_pct_low", "saved_rsi_pct_low"))
                     with pct_col2: in_high = st.number_input("RSI High Percentile (%)", min_value=51, max_value=99, value=st.session_state.saved_rsi_pct_high, step=1, key="rsi_pct_high", on_change=save_rsi_state, args=("rsi_pct_high", "saved_rsi_pct_high"))
                     
-                    # Ensure options are correct for index
                     show_opts = ["Everything", "Leaving High", "Leaving Low"]
                     curr_show = st.session_state.saved_rsi_pct_show
                     idx_show = show_opts.index(curr_show) if curr_show in show_opts else 0
@@ -2228,9 +2226,8 @@ def run_rsi_scanner_app(df_global):
                     with pct_col4: filter_date = st.date_input("Latest Date", value=st.session_state.saved_rsi_pct_date, key="rsi_pct_date", on_change=save_rsi_state, args=("rsi_pct_date", "saved_rsi_pct_date"))
                     with pct_col5: min_n_pct = st.number_input("Minimum N", min_value=0, value=st.session_state.saved_rsi_pct_min_n, step=1, key="rsi_pct_min_n", on_change=save_rsi_state, args=("rsi_pct_min_n", "saved_rsi_pct_min_n"))
                     with pct_col6: 
-                        periods_str_pct = st.text_input("Test Periods (days only)", value=st.session_state.saved_rsi_pct_periods, key="rsi_pct_periods", on_change=save_rsi_state, args=("rsi_pct_periods", "saved_rsi_pct_periods"))
+                        periods_str_pct = st.text_input("Test Periods (Trading Days only)", value=st.session_state.saved_rsi_pct_periods, key="rsi_pct_periods", on_change=save_rsi_state, args=("rsi_pct_periods", "saved_rsi_pct_periods"))
                     with pct_col7:
-                         # Default for Pct is SQN (Index 1)
                          curr_pct_opt = st.session_state.saved_rsi_pct_opt
                          idx_pct_opt = ["Profit Factor", "SQN"].index(curr_pct_opt) if curr_pct_opt in ["Profit Factor", "SQN"] else 1
                          opt_mode_pct = st.selectbox("Optimize By", ["Profit Factor", "SQN"], index=idx_pct_opt, key="rsi_pct_opt", on_change=save_rsi_state, args=("rsi_pct_opt", "saved_rsi_pct_opt"))
@@ -2265,12 +2262,10 @@ def run_rsi_scanner_app(df_global):
                         def style_pct_df(df_in):
                             def highlight_row(row):
                                 styles = [''] * len(row)
-                                # Highlight Date
                                 if row['Date_Obj'] == max_date_in_set:
                                     idx = df_in.columns.get_loc('Date')
                                     styles[idx] = 'background-color: rgba(255, 244, 229, 0.7); color: #e67e22; font-weight: bold;'
                                 
-                                # Color EV
                                 if 'EV' in df_in.columns:
                                     val = row['EV']
                                     if pd.notnull(val) and val != 0:
@@ -2279,16 +2274,14 @@ def run_rsi_scanner_app(df_global):
                                         idx = df_in.columns.get_loc('EV')
                                         styles[idx] = f'{bg} font-weight: 500;'
                                 
-                                # Color Action
                                 if 'Action' in df_in.columns:
                                     act = row['Action']
                                     idx = df_in.columns.get_loc('Action')
                                     if "Leaving Low" in str(act):
-                                        styles[idx] = 'color: #1e7e34;' # Green, no bold
+                                        styles[idx] = 'color: #1e7e34;' 
                                     elif "Leaving High" in str(act):
-                                        styles[idx] = 'color: #c5221f;' # Red, no bold
+                                        styles[idx] = 'color: #c5221f;' 
                                 
-                                # Color SQN
                                 if 'SQN' in df_in.columns:
                                     val = row['SQN']
                                     if pd.notnull(val):
@@ -2297,21 +2290,21 @@ def run_rsi_scanner_app(df_global):
                                         font_weight = 'normal'
                                         
                                         if val < 1.6:
-                                            color = '#d32f2f' # Red
+                                            color = '#d32f2f'
                                         elif 1.6 <= val < 2.0:
-                                            color = '#f57c00' # Orange
+                                            color = '#f57c00'
                                         elif 2.0 <= val < 2.5:
-                                            color = '#fbc02d' # Yellow-ish
+                                            color = '#fbc02d'
                                         elif 2.5 <= val < 3.0:
-                                            color = '#388e3c' # Light Green
+                                            color = '#388e3c'
                                         elif 3.0 <= val <= 5.0:
-                                            color = '#2e7d32' # Strong Green
+                                            color = '#2e7d32'
                                             font_weight = 'bold'
-                                        elif 5.0 < val <= 7.0: # Covering the 5.1-6.9 gap logic
-                                            color = '#1b5e20' # Very Dark Green
+                                        elif 5.0 < val <= 7.0:
+                                            color = '#1b5e20'
                                             font_weight = 'bold'
                                         elif val > 7.0:
-                                            color = '#6a1b9a' # Purple/Gold "Holy Grail"
+                                            color = '#6a1b9a'
                                             font_weight = 'bold'
                                         
                                         if color:
@@ -2346,444 +2339,54 @@ def run_rsi_scanner_app(df_global):
                     else: st.info(f"No Percentile signals found (Crossing {in_low}th/{in_high}th percentile).")
 
             except Exception as e: st.error(f"Analysis failed: {e}")
-
-
-    st.title("📅 Seasonality")
-    
-    # --- Helper: Optimized Data Fetching (Parquet > CSV > Yahoo) ---
-    def fetch_history_optimized(ticker_sym, t_map):
-        # 1. Try Parquet (Fastest)
-        # We check for _PARQUET (since load_ticker_map uppercases keys)
-        pq_key = f"{ticker_sym}_PARQUET"
-        
-        if pq_key in t_map:
-            try:
-                file_id = t_map[pq_key]
-                url = f"https://drive.google.com/uc?export=download&id={file_id}"
-                buffer = get_gdrive_binary_data(url)
-                if buffer:
-                    df = pd.read_parquet(buffer, engine='pyarrow')
-                    return df
-            except Exception:
-                pass 
-
-        # 2. Try CSV (Standard Drive)
-        if ticker_sym in t_map:
-            return get_ticker_technicals(ticker_sym, t_map)
-            
-        # 3. Fallback Yahoo
-        return fetch_yahoo_data(ticker_sym)
-
-    # Create Tabs
-    tab_single, tab_scan = st.tabs(["🔎 Single Ticker Analysis", "🚀 Opportunity Scanner"])
-    
-    # ==============================================================================
-    # TAB 1: SINGLE TICKER ANALYSIS
-    # ==============================================================================
-    with tab_single:
-        # --- 1. Inputs ---
-        c1, c2, c3 = st.columns([1, 1, 1])
-        with c1:
-            ticker = st.text_input("Ticker", value="SPY", key="seas_ticker").strip().upper()
-            
-        if not ticker:
-            st.info("Please enter a ticker symbol.")
-            return
-
-        # --- 2. Data Fetching ---
-        ticker_map = load_ticker_map()
-        df = None
-        
-        with st.spinner(f"Fetching history for {ticker}..."):
-            df = fetch_history_optimized(ticker, ticker_map)
-
-        if df is None or df.empty:
-            st.error(f"Could not load data for {ticker}. Check the ticker symbol or your TICKER_MAP.")
-            return
-
-        # --- 3. Data Processing ---
-        df.columns = [c.strip().upper() for c in df.columns]
-        date_col = next((c for c in df.columns if 'DATE' in c), None)
-        close_col = next((c for c in df.columns if 'CLOSE' in c), None)
-        
-        if not date_col or not close_col:
-            st.error("Data source format error: Missing Date or Close columns.")
-            return
-            
-        df[date_col] = pd.to_datetime(df[date_col])
-        df = df.set_index(date_col).sort_index()
-        
-        # Resample to Monthly Returns
-        df_monthly = df[close_col].resample('M').last()
-        df_pct = df_monthly.pct_change() * 100
-        
-        season_df = pd.DataFrame({
-            'Pct': df_pct,
-            'Year': df_pct.index.year,
-            'Month': df_pct.index.month
-        }).dropna()
-
-        # --- 4. Filtering & Date Logic ---
-        today = date.today()
-        current_year = today.year
-        current_month = today.month
-        
-        hist_df = season_df[season_df['Year'] < current_year].copy()
-        curr_df = season_df[season_df['Year'] == current_year].copy()
-        
-        if hist_df.empty:
-            st.warning("Not enough historical full-year data available.")
-        else:
-            min_avail_year = int(hist_df['Year'].min())
-            max_avail_year = int(hist_df['Year'].max())
-            
-            with c2:
-                start_year = st.number_input("Start Year (History)", min_value=min_avail_year, max_value=max_avail_year, value=max_avail_year-10 if max_avail_year-10 >= min_avail_year else min_avail_year, key="seas_start")
-            with c3:
-                end_year = st.number_input("End Year (History)", min_value=start_year, max_value=max_avail_year, value=max_avail_year, key="seas_end")
-
-            mask = (hist_df['Year'] >= start_year) & (hist_df['Year'] <= end_year)
-            hist_filtered = hist_df[mask].copy()
-            
-            if hist_filtered.empty:
-                st.warning("No data in selected date range.")
-            else:
-                # --- 5. Statistics Calculation ---
-                month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
                 
-                avg_stats = hist_filtered.groupby('Month')['Pct'].mean().reindex(range(1, 13), fill_value=0)
-                win_rates = hist_filtered.groupby('Month')['Pct'].apply(lambda x: (x > 0).mean() * 100).reindex(range(1, 13), fill_value=0)
+st.markdown("""<style>
+.block-container{padding-top:3.5rem;padding-bottom:1rem;}
+.zones-panel{padding:14px 0; border-radius:10px;}
+.zone-row{display:flex; align-items:center; gap:10px; margin:8px 0;}
+.zone-label{width:90px; font-weight:700; text-align:right; flex-shrink: 0; font-size: 13px;}
+.zone-wrapper{
+    flex-grow: 1; 
+    position: relative; 
+    height: 24px; 
+    background-color: rgba(0,0,0,0.03);
+    border-radius: 4px;
+    overflow: hidden;
+}
+.zone-bar{
+    position: absolute;
+    left: 0; 
+    top: 0; 
+    bottom: 0; 
+    z-index: 1;
+    border-radius: 3px;
+    opacity: 0.65;
+}
+.zone-bull{background-color: #71d28a;}
+.zone-bear{background-color: #f29ca0;}
+.zone-value{
+    position: absolute;
+    right: 8px;
+    top: 0;
+    bottom: 0;
+    display: flex;
+    align-items: center;
+    z-index: 2;
+    font-size: 12px; 
+    font-weight: 700;
+    color: #1f1f1f;
+    white-space: nowrap;
+    text-shadow: 0 0 4px rgba(255,255,255,0.8);
+}
+.price-divider { display: flex; align-items: center; justify-content: center; position: relative; margin: 24px 0; width: 100%; }
+.price-divider::before, .price-divider::after { content: ""; flex-grow: 1; height: 2px; background: #66b7ff; opacity: 0.4; }
+.price-badge { background: rgba(102, 183, 255, 0.1); color: #66b7ff; border: 1px solid rgba(102, 183, 255, 0.5); border-radius: 16px; padding: 6px 14px; font-weight: 800; font-size: 12px; letter-spacing: 0.5px; white-space: nowrap; margin: 0 12px; z-index: 1; }
+.metric-row{display:flex;gap:10px;flex-wrap:wrap;margin:.35rem 0 .75rem 0}
+.badge{background: rgba(128, 128, 128, 0.08); border: 1px solid rgba(128, 128, 128, 0.2); border-radius:18px; padding:6px 10px; font-weight:700}
+.price-badge-header{background: rgba(102, 183, 255, 0.1); border: 1px solid #66b7ff; border-radius:18px; padding:6px 10px; font-weight:800}
+.light-note { opacity: 0.7; font-size: 14px; margin-bottom: 10px; }
 
-                hist_cumsum = avg_stats.cumsum()
-                line_data_hist = pd.DataFrame({
-                    'Month': range(1, 13),
-                    'MonthName': month_names,
-                    'Value': hist_cumsum.values,
-                    'Type': f'Avg ({start_year}-{end_year})'
-                })
-
-                curr_monthly_stats = curr_df.groupby('Month')['Pct'].sum().reindex(range(1, 13)) 
-                curr_cumsum = curr_monthly_stats.cumsum()
-                valid_curr_indices = curr_monthly_stats.dropna().index
-                
-                line_data_curr = pd.DataFrame({
-                    'Month': valid_curr_indices,
-                    'MonthName': [month_names[i-1] for i in valid_curr_indices],
-                    'Value': curr_cumsum.loc[valid_curr_indices].values,
-                    'Type': f'Current Year ({current_year})'
-                })
-                combined_line_data = pd.concat([line_data_hist, line_data_curr])
-
-                # --- 6. Summary Logic ---
-                cur_val = curr_monthly_stats.get(current_month, 0.0)
-                if pd.isna(cur_val): cur_val = 0.0
-                cur_color = "#71d28a" if cur_val > 0 else "#f29ca0"
-                
-                idx_next = (current_month % 12) + 1
-                idx_next_2 = ((current_month + 1) % 12) + 1
-                nm_name = month_names[idx_next-1]
-                nnm_name = month_names[idx_next_2-1]
-                nm_avg = avg_stats.get(idx_next, 0.0)
-                nm_wr = win_rates.get(idx_next, 0.0)
-                nnm_avg = avg_stats.get(idx_next_2, 0.0)
-
-                if nm_avg >= 1.5 and nm_wr >= 65:
-                    positioning = "🚀 <b>Strong Bullish Seasonality.</b> Historically a standout month; consider long exposure."
-                elif nm_avg > 0 and nm_wr >= 50:
-                    positioning = "↗️ <b>Mildly Bullish.</b> Tends to be positive, but conviction is moderate."
-                elif nm_avg < 0 and nm_avg > -1.0:
-                    positioning = "⚠️ <b>Choppy/Weak.</b> Historically drags or trends slightly negative."
-                else:
-                    positioning = "🐻 <b>Bearish Seasonality.</b> Historically a weak month; consider hedging."
-
-                trend_vs = "improves" if nnm_avg > nm_avg else "weakens"
-                
-                st.markdown(f"""
-                <div style="background-color: rgba(128,128,128,0.05); border-left: 5px solid #66b7ff; padding: 15px; border-radius: 4px; margin-bottom: 25px;">
-                    <div style="font-weight: bold; font-size: 1.1em; margin-bottom: 8px; color: #444;">🤖 Seasonal Outlook</div>
-                    <div style="margin-bottom: 4px;">• <b>Current:</b> {ticker} is <span style="color:{cur_color}; font-weight:bold;">{cur_val:+.1f}%</span> in {month_names[current_month-1]} so far.</div>
-                    <div style="margin-bottom: 4px;">• <b>Next Month ({nm_name}):</b> {positioning} (Avg: {nm_avg:+.1f}%, Win Rate: {nm_wr:.1f}%)</div>
-                    <div>• <b>Following ({nnm_name}):</b> Seasonality {trend_vs} to an average of <b>{nnm_avg:+.1f}%</b>.</div>
-                </div>
-                """, unsafe_allow_html=True)
-
-                # --- 7. Visualization ---
-                
-                # --- CHART 1: Cumulative Performance (Line) ---
-                st.subheader(f"📈 Performance Tracking")
-                
-                line_base = alt.Chart(combined_line_data).encode(
-                    x=alt.X('MonthName', sort=month_names, title='Month'),
-                    y=alt.Y('Value', title='Cumulative Return (%)'),
-                    color=alt.Color('Type', legend=alt.Legend(orient='bottom', title=None))
-                )
-                
-                lines = line_base.mark_line(point=True)
-                labels = line_base.mark_text(
-                    align='center', baseline='bottom', dy=-10, fontSize=16, fontWeight='bold' 
-                ).encode(text=alt.Text('Value', format='.1f'))
-                
-                st.altair_chart(
-                    (lines + labels).properties(height=350)
-                    .configure_axis(labelFontSize=14, titleFontSize=16) 
-                    .configure_legend(labelFontSize=14, titleFontSize=16), 
-                    use_container_width=True
-                )
-
-                # --- CHART 2: Monthly Comparison (Grouped Bar) ---
-                st.subheader(f"📊 Monthly Returns")
-                
-                hist_bar_data = pd.DataFrame({
-                    'Month': range(1, 13), 'MonthName': month_names,
-                    'Value': avg_stats.values, 'WinRate': win_rates.values,
-                    'Type': 'Historical Avg'
-                })
-
-                completed_curr_df = curr_df[curr_df['Month'] < current_month].copy()
-                curr_bar_data = pd.DataFrame()
-                
-                if not completed_curr_df.empty:
-                    curr_vals = completed_curr_df.groupby('Month')['Pct'].mean()
-                    curr_bar_data = pd.DataFrame({
-                        'Month': curr_vals.index,
-                        'MonthName': [month_names[i-1] for i in curr_vals.index],
-                        'Value': curr_vals.values,
-                        'WinRate': [np.nan] * len(curr_vals),
-                        'Type': f'{current_year} Actual'
-                    })
-                
-                combined_bar_data = pd.concat([hist_bar_data, curr_bar_data])
-
-                base = alt.Chart(combined_bar_data).encode(
-                    x=alt.X('MonthName', sort=month_names, title=None)
-                )
-
-                bars = base.mark_bar().encode(
-                    y=alt.Y('Value', title='Return (%)'),
-                    xOffset='Type',
-                    color=alt.Color('Type', legend=alt.Legend(orient='bottom', title=None), scale=alt.Scale(scheme='category10'))
-                )
-
-                pos_labels = base.transform_filter(alt.datum.Value >= 0).mark_text(
-                    dy=-10, fontSize=16, fontWeight='bold', color='black' 
-                ).encode(
-                    y=alt.Y('Value'), xOffset='Type', text=alt.Text('Value', format='.1f')
-                )
-
-                neg_labels = base.transform_filter(alt.datum.Value < 0).mark_text(
-                    dy=15, fontSize=16, fontWeight='bold', color='black'
-                ).encode(
-                    y=alt.Y('Value'), xOffset='Type', text=alt.Text('Value', format='.1f')
-                )
-
-                st.altair_chart(
-                    (bars + pos_labels + neg_labels).properties(height=300)
-                    .configure_axis(labelFontSize=14, titleFontSize=16) 
-                    .configure_legend(labelFontSize=14, titleFontSize=16),
-                    use_container_width=True
-                )
-
-                # --- CARDS: Win Rates ---
-                st.markdown("##### 🎯 Historical Win Rate & Expectancy")
-                cols = st.columns(6) 
-                cols2 = st.columns(6)
-                
-                for i in range(12):
-                    mn = month_names[i]
-                    wr = win_rates.loc[i+1]
-                    avg = avg_stats.loc[i+1]
-                    
-                    if avg > 0: border_color = "#71d28a" 
-                    else: border_color = "#f29ca0"
-                    
-                    target_col = cols[i] if i < 6 else cols2[i-6]
-                    target_col.markdown(
-                        f"""
-                        <div style="background-color: rgba(128,128,128,0.05); border-radius: 8px; padding: 8px 5px; text-align: center; margin-bottom: 10px; border-bottom: 3px solid {border_color};">
-                            <div style="font-size: 0.85rem; font-weight: bold; color: #555;">{mn}</div>
-                            <div style="font-size: 0.75rem; color: #888; margin-top:2px;">Win Rate</div>
-                            <div style="font-size: 1.0rem; font-weight: 700;">{wr:.1f}%</div>
-                            <div style="font-size: 0.75rem; color: #888; margin-top:2px;">Avg Rtn</div>
-                            <div style="font-size: 0.9rem; font-weight: 600; color: {'#1f7a1f' if avg > 0 else '#a11f1f'};">{avg:+.1f}%</div>
-                        </div>
-                        """, unsafe_allow_html=True
-                    )
-
-                # --- HEATMAP ---
-                st.markdown("---")
-                st.subheader("🗓️ Monthly Returns Heatmap")
-                
-                pivot_hist = hist_filtered.pivot(index='Year', columns='Month', values='Pct')
-                if not completed_curr_df.empty:
-                    pivot_curr = completed_curr_df.pivot(index='Year', columns='Month', values='Pct')
-                    full_pivot = pd.concat([pivot_curr, pivot_hist])
-                else:
-                    full_pivot = pivot_hist
-
-                full_pivot.columns = [month_names[c-1] for c in full_pivot.columns]
-                for m in month_names:
-                    if m not in full_pivot.columns: full_pivot[m] = np.nan
-                full_pivot = full_pivot[month_names].sort_index(ascending=False)
-                full_pivot["Year Total"] = full_pivot.sum(axis=1, min_count=1)
-
-                def color_map(val):
-                    if pd.isna(val): return ""
-                    if val == 0: return "color: #888;"
-                    color = "#1f7a1f" if val > 0 else "#a11f1f"
-                    bg_color = "rgba(113, 210, 138, 0.2)" if val > 0 else "rgba(242, 156, 160, 0.2)"
-                    return f'background-color: {bg_color}; color: {color}; font-weight: 500;'
-                st.dataframe(full_pivot.style.format("{:+.1f}%").applymap(color_map), use_container_width=True, height=(len(full_pivot)+1)*35+3)
-
-    # ==============================================================================
-    # TAB 2: OPPORTUNITY SCANNER (With Parquet Optimization & Fixes)
-    # ==============================================================================
-    with tab_scan:
-        st.subheader("🚀 High-EV Seasonality Scanner")
-        st.caption("Scans the entire TICKER_MAP to find the best forward returns (+30/60/90 Days) starting from a specific date.")
-        
-        sc1, sc2, sc3 = st.columns([1, 1, 1])
-        with sc1:
-            scan_date = st.date_input("Start Date for Scan", value=date.today(), key="seas_scan_date")
-        with sc2:
-            min_mc_scan = st.selectbox("Min Market Cap", ["0B", "2B", "10B", "50B", "100B"], index=2, key="seas_scan_mc")
-            mc_thresh_val = {"0B":0, "2B":2e9, "10B":1e10, "50B":5e10, "100B":1e11}.get(min_mc_scan, 1e10)
-        with sc3:
-            scan_lookback = st.number_input("Lookback Years", min_value=5, max_value=20, value=10, key="seas_scan_lb")
-            
-        start_scan = st.button("Run Scanner")
-        
-        if start_scan:
-            ticker_map = load_ticker_map()
-            if not ticker_map:
-                st.error("No TICKER_MAP found in secrets.")
-            else:
-                # FIX 1: Robust Filter for Parquet keys
-                # We filter out any key that ends in _PARQUET (case insensitive just to be safe)
-                all_tickers = [k for k in ticker_map.keys() if not k.upper().endswith('_PARQUET')]
-                results = []
-                
-                st.write(f"Filtering {len(all_tickers)} tickers by Market Cap > {min_mc_scan}...")
-                
-                valid_tickers = []
-                
-                def check_mc(t):
-                    mc = get_market_cap(t)
-                    return t if mc >= mc_thresh_val else None
-
-                with ThreadPoolExecutor(max_workers=20) as executor:
-                    futures = {executor.submit(check_mc, t): t for t in all_tickers}
-                    for future in as_completed(futures):
-                        res = future.result()
-                        if res: valid_tickers.append(res)
-                
-                st.write(f"Scanning {len(valid_tickers)} tickers for high EV opportunities...")
-                progress_bar = st.progress(0)
-                
-                def calc_forward_returns(ticker_sym):
-                    try:
-                        d_df = fetch_history_optimized(ticker_sym, ticker_map)
-                        if d_df is None or d_df.empty: return None
-                        
-                        d_df.columns = [c.strip().upper() for c in d_df.columns]
-                        date_c = next((c for c in d_df.columns if 'DATE' in c), None)
-                        close_c = next((c for c in d_df.columns if 'CLOSE' in c), None)
-                        if not date_c or not close_c: return None
-                        
-                        d_df[date_c] = pd.to_datetime(d_df[date_c])
-                        d_df = d_df.sort_values(date_c).reset_index(drop=True)
-                        
-                        cutoff = pd.to_datetime(date.today()) - timedelta(days=scan_lookback*365)
-                        d_df = d_df[d_df[date_c] >= cutoff].copy()
-                        if len(d_df) < 252: return None 
-                        
-                        target_doy = scan_date.timetuple().tm_yday
-                        d_df['DOY'] = d_df[date_c].dt.dayofyear
-                        
-                        matches = d_df[(d_df['DOY'] >= target_doy - 2) & (d_df['DOY'] <= target_doy + 2)].copy()
-                        matches['Year'] = matches[date_c].dt.year
-                        matches = matches.drop_duplicates(subset=['Year'])
-                        curr_y = date.today().year
-                        matches = matches[matches['Year'] < curr_y]
-                        
-                        if len(matches) < 3: return None
-                        
-                        stats_row = {'Ticker': ticker_sym, 'N': len(matches)}
-                        periods = {"30d": 21, "60d": 42, "90d": 63}
-                        
-                        for p_name, trading_days in periods.items():
-                            returns = []
-                            for idx in matches.index:
-                                entry_p = d_df.loc[idx, close_c]
-                                exit_idx = idx + trading_days
-                                if exit_idx < len(d_df):
-                                    exit_p = d_df.loc[exit_idx, close_c]
-                                    ret = (exit_p - entry_p) / entry_p
-                                    returns.append(ret)
-                            if returns:
-                                avg_ret = np.mean(returns) * 100
-                                win_r = np.mean(np.array(returns) > 0) * 100
-                            else:
-                                avg_ret = 0.0
-                                win_r = 0.0
-                            stats_row[f"{p_name}_EV"] = avg_ret
-                            stats_row[f"{p_name}_WR"] = win_r
-                        return stats_row
-                    except Exception:
-                        return None
-
-                with ThreadPoolExecutor(max_workers=20) as executor: 
-                    futures = {executor.submit(calc_forward_returns, t): t for t in valid_tickers}
-                    completed = 0
-                    for future in as_completed(futures):
-                        res = future.result()
-                        if res: results.append(res)
-                        completed += 1
-                        if completed % 5 == 0: progress_bar.progress(completed / len(valid_tickers))
-                
-                progress_bar.empty()
-                
-                if not results:
-                    st.warning("No opportunities found.")
-                else:
-                    res_df = pd.DataFrame(results)
-                    st.write("---")
-                    
-                    # FIX 2: Replaced background_gradient with applymap to fix Matplotlib error
-                    def highlight_ev(val):
-                        if pd.isna(val): return ""
-                        color = "#1f7a1f" if val > 0 else "#a11f1f"
-                        bg = "rgba(113, 210, 138, 0.25)" if val > 0 else "rgba(242, 156, 160, 0.25)"
-                        return f'background-color: {bg}; color: {color}; font-weight: bold;'
-
-                    st.subheader(f"🗓️ +30 Days Outlook (from {scan_date.strftime('%d %b')})")
-                    top_30 = res_df.sort_values(by="30d_EV", ascending=False).head(20)
-                    st.dataframe(
-                        top_30[['Ticker', '30d_EV', '30d_WR', 'N']].style.format({
-                            '30d_EV': '{:+.1f}%', '30d_WR': '{:.1f}%'
-                        }).applymap(highlight_ev, subset=['30d_EV']),
-                        use_container_width=True, hide_index=True
-                    )
-                    
-                    c_scan1, c_scan2 = st.columns(2)
-                    with c_scan1:
-                        st.subheader(f"🗓️ +60 Days Outlook")
-                        top_60 = res_df.sort_values(by="60d_EV", ascending=False).head(20)
-                        st.dataframe(
-                            top_60[['Ticker', '60d_EV', '60d_WR', 'N']].style.format({
-                                '60d_EV': '{:+.1f}%', '60d_WR': '{:.1f}%'
-                            }).applymap(highlight_ev, subset=['60d_EV']),
-                            use_container_width=True, hide_index=True
-                        )
-                    
-                    with c_scan2:
-                        st.subheader(f"🗓️ +90 Days Outlook")
-                        top_90 = res_df.sort_values(by="90d_EV", ascending=False).head(20)
-                        st.dataframe(
-                            top_90[['Ticker', '90d_EV', '90d_WR', 'N']].style.format({
-                                '90d_EV': '{:+.1f}%', '90d_WR': '{:.1f}%'
-                            }).applymap(highlight_ev, subset=['90d_EV']),
-                            use_container_width=True, hide_index=True
-                        )
+</style>""", unsafe_allow_html=True)
 
 def run_seasonality_app(df_global):
     st.title("📅 Seasonality")
@@ -2803,13 +2406,10 @@ def run_seasonality_app(df_global):
                     df = pd.read_parquet(buffer, engine='pyarrow')
                     
                     # --- FIX: Handle Date stored as Index ---
-                    # The metadata confirms "index_columns": ["Date"]
-                    # We must reset index to make 'Date' a regular column for the app to see it.
                     if isinstance(df.index, pd.DatetimeIndex):
                         df = df.reset_index()
                     elif df.index.name and 'DATE' in df.index.name.upper():
                         df = df.reset_index()
-                    # Fallback: if 'Date' isn't in columns, try resetting anyway
                     elif 'Date' not in df.columns and 'DATE' not in df.columns:
                         df = df.reset_index()
                          
@@ -2858,7 +2458,6 @@ def run_seasonality_app(df_global):
         
         if not date_col or not close_col:
             st.error("Data source format error: Missing Date or Close columns.")
-            # Debug info if needed: st.write(df.head())
             return
             
         df[date_col] = pd.to_datetime(df[date_col])
@@ -3090,7 +2689,7 @@ def run_seasonality_app(df_global):
     # ==============================================================================
     with tab_scan:
         st.subheader("🚀 High-EV Seasonality Scanner")
-        st.caption("Scans the entire TICKER_MAP to find the best forward returns (+30/60/90 Days) starting from a specific date.")
+        st.caption("Scans the entire TICKER_MAP to find the best forward returns (+21/42/63/126 Days) starting from a specific date.")
         
         sc1, sc2, sc3 = st.columns([1, 1, 1])
         with sc1:
@@ -3158,7 +2757,8 @@ def run_seasonality_app(df_global):
                         if len(matches) < 3: return None
                         
                         stats_row = {'Ticker': ticker_sym, 'N': len(matches)}
-                        periods = {"30d": 21, "60d": 42, "90d": 63}
+                        # UPDATED TRADING PERIODS
+                        periods = {"21d": 21, "42d": 42, "63d": 63, "126d": 126}
                         
                         for p_name, trading_days in periods.items():
                             returns = []
@@ -3204,83 +2804,50 @@ def run_seasonality_app(df_global):
                         bg = "rgba(113, 210, 138, 0.25)" if val > 0 else "rgba(242, 156, 160, 0.25)"
                         return f'background-color: {bg}; color: {color}; font-weight: bold;'
 
-                    st.subheader(f"🗓️ +30 Days Outlook (from {scan_date.strftime('%d %b')})")
-                    top_30 = res_df.sort_values(by="30d_EV", ascending=False).head(20)
-                    st.dataframe(
-                        top_30[['Ticker', '30d_EV', '30d_WR', 'N']].style.format({
-                            '30d_EV': '{:+.1f}%', '30d_WR': '{:.1f}%'
-                        }).applymap(highlight_ev, subset=['30d_EV']),
-                        use_container_width=True, hide_index=True
-                    )
+                    st.subheader(f"🗓️ Forward Returns (from {scan_date.strftime('%d %b')})")
                     
                     c_scan1, c_scan2 = st.columns(2)
+                    c_scan3, c_scan4 = st.columns(2)
+                    
                     with c_scan1:
-                        st.subheader(f"🗓️ +60 Days Outlook")
-                        top_60 = res_df.sort_values(by="60d_EV", ascending=False).head(20)
+                        st.markdown("**+21 Trading Days** (~1 Month)")
+                        top_21 = res_df.sort_values(by="21d_EV", ascending=False).head(20)
                         st.dataframe(
-                            top_60[['Ticker', '60d_EV', '60d_WR', 'N']].style.format({
-                                '60d_EV': '{:+.1f}%', '60d_WR': '{:.1f}%'
-                            }).applymap(highlight_ev, subset=['60d_EV']),
+                            top_21[['Ticker', '21d_EV', '21d_WR', 'N']].style.format({
+                                '21d_EV': '{:+.1f}%', '21d_WR': '{:.1f}%'
+                            }).applymap(highlight_ev, subset=['21d_EV']),
                             use_container_width=True, hide_index=True
                         )
                     
                     with c_scan2:
-                        st.subheader(f"🗓️ +90 Days Outlook")
-                        top_90 = res_df.sort_values(by="90d_EV", ascending=False).head(20)
+                        st.markdown("**+42 Trading Days** (~2 Months)")
+                        top_42 = res_df.sort_values(by="42d_EV", ascending=False).head(20)
                         st.dataframe(
-                            top_90[['Ticker', '90d_EV', '90d_WR', 'N']].style.format({
-                                '90d_EV': '{:+.1f}%', '90d_WR': '{:.1f}%'
-                            }).applymap(highlight_ev, subset=['90d_EV']),
+                            top_42[['Ticker', '42d_EV', '42d_WR', 'N']].style.format({
+                                '42d_EV': '{:+.1f}%', '42d_WR': '{:.1f}%'
+                            }).applymap(highlight_ev, subset=['42d_EV']),
                             use_container_width=True, hide_index=True
                         )
-
-st.markdown("""<style>
-.block-container{padding-top:3.5rem;padding-bottom:1rem;}
-.zones-panel{padding:14px 0; border-radius:10px;}
-.zone-row{display:flex; align-items:center; gap:10px; margin:8px 0;}
-.zone-label{width:90px; font-weight:700; text-align:right; flex-shrink: 0; font-size: 13px;}
-.zone-wrapper{
-    flex-grow: 1; 
-    position: relative; 
-    height: 24px; 
-    background-color: rgba(0,0,0,0.03);
-    border-radius: 4px;
-    overflow: hidden;
-}
-.zone-bar{
-    position: absolute;
-    left: 0; 
-    top: 0; 
-    bottom: 0; 
-    z-index: 1;
-    border-radius: 3px;
-    opacity: 0.65;
-}
-.zone-bull{background-color: #71d28a;}
-.zone-bear{background-color: #f29ca0;}
-.zone-value{
-    position: absolute;
-    right: 8px;
-    top: 0;
-    bottom: 0;
-    display: flex;
-    align-items: center;
-    z-index: 2;
-    font-size: 12px; 
-    font-weight: 700;
-    color: #1f1f1f;
-    white-space: nowrap;
-    text-shadow: 0 0 4px rgba(255,255,255,0.8);
-}
-.price-divider { display: flex; align-items: center; justify-content: center; position: relative; margin: 24px 0; width: 100%; }
-.price-divider::before, .price-divider::after { content: ""; flex-grow: 1; height: 2px; background: #66b7ff; opacity: 0.4; }
-.price-badge { background: rgba(102, 183, 255, 0.1); color: #66b7ff; border: 1px solid rgba(102, 183, 255, 0.5); border-radius: 16px; padding: 6px 14px; font-weight: 800; font-size: 12px; letter-spacing: 0.5px; white-space: nowrap; margin: 0 12px; z-index: 1; }
-.metric-row{display:flex;gap:10px;flex-wrap:wrap;margin:.35rem 0 .75rem 0}
-.badge{background: rgba(128, 128, 128, 0.08); border: 1px solid rgba(128, 128, 128, 0.2); border-radius:18px; padding:6px 10px; font-weight:700}
-.price-badge-header{background: rgba(102, 183, 255, 0.1); border: 1px solid #66b7ff; border-radius:18px; padding:6px 10px; font-weight:800}
-.light-note { opacity: 0.7; font-size: 14px; margin-bottom: 10px; }
-
-</style>""", unsafe_allow_html=True)
+                    
+                    with c_scan3:
+                        st.markdown("**+63 Trading Days** (~3 Months)")
+                        top_63 = res_df.sort_values(by="63d_EV", ascending=False).head(20)
+                        st.dataframe(
+                            top_63[['Ticker', '63d_EV', '63d_WR', 'N']].style.format({
+                                '63d_EV': '{:+.1f}%', '63d_WR': '{:.1f}%'
+                            }).applymap(highlight_ev, subset=['63d_EV']),
+                            use_container_width=True, hide_index=True
+                        )
+                        
+                    with c_scan4:
+                        st.markdown("**+126 Trading Days** (~6 Months)")
+                        top_126 = res_df.sort_values(by="126d_EV", ascending=False).head(20)
+                        st.dataframe(
+                            top_126[['Ticker', '126d_EV', '126d_WR', 'N']].style.format({
+                                '126d_EV': '{:+.1f}%', '126d_WR': '{:.1f}%'
+                            }).applymap(highlight_ev, subset=['126d_EV']),
+                            use_container_width=True, hide_index=True
+                        )
 
 try:
     sheet_url = st.secrets["GSHEET_URL"]
@@ -3299,11 +2866,7 @@ try:
     st.sidebar.caption("🖥️ Everything is best viewed with a wide desktop monitor in light mode.")
     st.sidebar.caption(f"📅 **Last Updated:** {last_updated_date}")
     
-    # 1. Run the selected page
     pg.run()
-    
-    # 2. Add global padding immediately after the page finishes rendering
-    st.markdown("<br><br><br><br>", unsafe_allow_html=True)
     
 except Exception as e: 
     st.error(f"Error initializing dashboard: {e}")
