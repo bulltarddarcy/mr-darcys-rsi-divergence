@@ -2925,42 +2925,16 @@ st.markdown("""<style>
 
 </style>""", unsafe_allow_html=True)
 
-try:
-    sheet_url = st.secrets["GSHEET_URL"]
-    df_global = load_and_clean_data(sheet_url)
-    
-    # 1. Database Date (from Google Sheet)
-    db_date = df_global["Trade Date"].max().strftime("%d %b %y")
-    
-    # 2. Price History Date (fetch AAPL as proxy for latest market data)
+# 2. Price History Date (fetch AAPL as proxy for latest market data)
     price_date = "Syncing..."
     try:
         # We use AAPL as the standard "heartbeat" for the market data feed
         df_aapl = fetch_yahoo_data("AAPL")
         if df_aapl is not None and not df_aapl.empty:
-            price_date = pd.to_datetime(df_aapl['Date']).max().strftime("%d %b %y")
+            # FIX: Use 'DATE' (uppercase) because fetch_yahoo_data capitalizes columns
+            price_date = pd.to_datetime(df_aapl['DATE']).max().strftime("%d %b %y")
+        else:
+            # FIX: If fetch fails (returns None), explicitly set to Offline
+            price_date = "Offline"
     except Exception:
         price_date = "Offline"
-
-    pg = st.navigation([
-        st.Page(lambda: run_database_app(df_global), title="Database", icon="📂", url_path="options_db", default=True),
-        st.Page(lambda: run_rankings_app(df_global), title="Rankings", icon="🏆", url_path="rankings"),
-        st.Page(lambda: run_pivot_tables_app(df_global), title="Pivot Tables", icon="🎯", url_path="pivot_tables"),
-        st.Page(lambda: run_strike_zones_app(df_global), title="Strike Zones", icon="📊", url_path="strike_zones"),
-        st.Page(lambda: run_rsi_scanner_app(df_global), title="RSI Scanner", icon="📈", url_path="rsi_scanner"),
-        st.Page(lambda: run_seasonality_app(df_global), title="Seasonality", icon="📅", url_path="seasonality"),
-    ])
-
-    st.sidebar.caption("🖥️ Everything is best viewed with a wide desktop monitor in light mode.")
-    
-    # Updated Sidebar Dates
-    st.sidebar.caption(f"💾 **Database:** {db_date}")
-    st.sidebar.caption(f"📈 **Price History:** {price_date}")
-    
-    pg.run()
-    
-    # Global padding at the bottom of the page
-    st.markdown("<br><br><br><br>", unsafe_allow_html=True)
-    
-except Exception as e: 
-    st.error(f"Error initializing dashboard: {e}")
