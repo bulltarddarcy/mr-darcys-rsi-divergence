@@ -1701,7 +1701,8 @@ def run_pivot_tables_app(df):
     d_range = df[(df["Trade Date"].dt.date >= td_start) & (df["Trade Date"].dt.date <= td_end)].copy()
     if d_range.empty: return
 
-    order_type_col = "Order Type" if "Order Type" in f.columns else "Order type"
+    # --- FIX: Replaced 'f' with 'df' ---
+    order_type_col = "Order Type" if "Order Type" in df.columns else "Order type"
     
     cb_pool = d_range[d_range[order_type_col] == "Calls Bought"].copy()
     ps_pool = d_range[d_range[order_type_col] == "Puts Sold"].copy()
