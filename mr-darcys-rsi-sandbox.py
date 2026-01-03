@@ -2905,6 +2905,159 @@ def run_seasonality_app(df_global):
                             }
                         )
 
+def run_ema_distance_app(df_global):
+    st.title("📏 EMA Distance Analysis")
+
+    # --- NEW: Page Notes ---
+    with st.expander("ℹ️ Page Notes: How to Read This Table"):
+        st.markdown("""
+        **What is this tool?**
+        This tool measures the **"Rubber Band" effect**. It quantifies how far the current price has stretched away from its key moving averages compared to the last 10 years of history.
+
+        **The Logic:**
+        Markets rarely move in a straight line. When price gets too far from its average (Moving Average), it tends to snap back ("Mean Reversion"). We use statistical percentiles to determine exactly *how far* is "too far."
+
+        **Column Definitions:**
+        * **%-distance metric**: The Moving Average being analyzed (e.g., Price vs the 8-day EMA).
+        * **Current**: The live gap between today's price and that Moving Average.
+            * *Formula:* `(Price - MA) / MA`
+        * **Long-run avg**: The average gap over the last 10 years.
+        * **p50 (Median)**: The "normal" gap. 50% of the time, the gap is smaller than this; 50% of the time, it is larger.
+        * **p95 (The "Danger Zone")**: The **Suggested Over-Extended Line**. Historically, the price has only been this far above the MA **5% of the time**.
+            * ⚠️ **Signal:** If **Current** > **p95**, the stock is statistically over-extended (2 standard deviations) and the probability of a pullback or consolidation is very high.
+        """)
+
+    # 1. Input Section
+    col_in, _ = st.columns([1, 3])
+    with col_in:
+        ticker = st.text_input("Ticker", value="QQQ").upper().strip()
+    
+    if not ticker:
+        st.warning("Please enter a ticker.")
+        return
+
+    # 2. Data Fetching
+    with st.spinner(f"Crunching 10 years of data for {ticker}..."):
+        df = fetch_yahoo_data(ticker)
+    
+    if df is None or df.empty:
+        st.error(f"Could not fetch data for {ticker}. Please check the symbol.")
+        return
+
+    # 3. Calculations
+    close_col = 'CLOSE' if 'CLOSE' in df.columns else 'Close'
+    
+    df['EMA_8'] = df[close_col].ewm(span=8, adjust=False).mean()
+    df['EMA_21'] = df[close_col].ewm(span=21, adjust=False).mean()
+    df['SMA_50'] = df[close_col].rolling(window=50).mean()
+    df['SMA_100'] = df[close_col].rolling(window=100).mean()
+    df['SMA_200'] = df[close_col].rolling(window=200).mean()
+    
+    df_clean = df.dropna(subset=['EMA_8', 'EMA_21', 'SMA_50', 'SMA_100', 'SMA_200']).copy()
+    
+    if df_clean.empty:
+        st.error("Not enough historical data to calculate 200-day SMA.")
+        return
+
+    metrics = [
+        ("Close vs 8-EMA", df_clean['EMA_8']),
+        ("Close vs 21-EMA", df_clean['EMA_21']),
+        ("Close vs 50-SMA", df_clean['SMA_50']),
+        ("Close vs 100-SMA", df_clean['SMA_100']),
+        ("Close vs 200-SMA", df_clean['SMA_200']),
+    ]
+    
+    stats_summary = []
+    stats_percentiles = []
+    
+    current_price = df_clean[close_col].iloc[-1]
+    
+    for label, ma_series in metrics:
+        # Calculate Percentage Distance: (Price - MA) / MA * 100
+        dist_series = ((df_clean[close_col] - ma_series) / ma_series) * 100
+        
+        # Current Distance
+        current_ma_val = ma_series.iloc[-1]
+        current_dist = ((current_price - current_ma_val) / current_ma_val) * 100
+        
+        # Stats
+        long_run_avg = dist_series.mean()
+        p50 = np.percentile(dist_series, 50)
+        p70 = np.percentile(dist_series, 70)
+        p80 = np.percentile(dist_series, 80)
+        p90 = np.percentile(dist_series, 90)
+        p95 = np.percentile(dist_series, 95)
+        
+        def fmt(x): return f"{x:.2f} %"
+        
+        # Build Table 1 Rows (Summary)
+        stats_summary.append({
+            "%-distance metric": label,
+            "Current": fmt(current_dist),
+            "Long-run avg": fmt(long_run_avg),
+            "p95": fmt(p95),
+            "Suggested over-extended line": fmt(p95)
+        })
+        
+        # Build Table 2 Rows (Percentiles)
+        stats_percentiles.append({
+            "%-distance metric": label,
+            "p50": fmt(p50),
+            "p70": fmt(p70),
+            "p80": fmt(p80),
+            "p90": fmt(p90)
+        })
+
+    # 4. Display
+    df_summ = pd.DataFrame(stats_summary)
+    df_perc = pd.DataFrame(stats_percentiles)
+
+    # Highlight Logic
+    def highlight_overextended(row):
+        try:
+            curr = float(row["Current"].replace("%","").strip())
+            limit = float(row["Suggested over-extended line"].replace("%","").strip())
+            if curr > limit:
+                return ['background-color: #fce8e6; color: #c5221f; font-weight: bold'] * len(row)
+        except: pass
+        return [''] * len(row)
+
+    st.subheader(f"{ticker} vs. Moving Avgs")
+    
+    st.markdown("##### 🚨 Over-Extension Thresholds")
+    st.dataframe(df_summ.style.apply(highlight_overextended, axis=1), use_container_width=True, hide_index=True)
+    
+    st.markdown("##### 📊 Historical Percentiles")
+    st.dataframe(df_perc, use_container_width=True, hide_index=True)
+    
+    # Visualization
+    st.markdown("---")
+    st.caption("Visualizing the Close Price vs the 21 EMA % Distance over time")
+    
+    dist_21 = ((df_clean[close_col] - df_clean['EMA_21']) / df_clean['EMA_21']) * 100
+    chart_data = pd.DataFrame({
+        'Date': df_clean.index,
+        'Distance (%)': dist_21,
+    })
+    
+    cutoff_date = chart_data['Date'].max() - timedelta(days=730)
+    chart_data = chart_data[chart_data['Date'] >= cutoff_date]
+
+    c = alt.Chart(chart_data).mark_area(
+        line={'color':'darkblue'},
+        color=alt.Gradient(
+            gradient='linear',
+            stops=[alt.GradientStop(color='white', offset=0),
+                   alt.GradientStop(color='darkblue', offset=1)],
+            x1=1, x2=1, y1=1, y2=0
+        )
+    ).encode(
+        x='Date:T',
+        y=alt.Y('Distance (%)', title='% Dist from 21 EMA')
+    ).properties(height=300)
+    
+    st.altair_chart(c, use_container_width=True)
+
 st.markdown("""<style>
 .block-container{padding-top:3.5rem;padding-bottom:1rem;}
 .zones-panel{padding:14px 0; border-radius:10px;}
