@@ -1701,7 +1701,7 @@ def run_pivot_tables_app(df):
     d_range = df[(df["Trade Date"].dt.date >= td_start) & (df["Trade Date"].dt.date <= td_end)].copy()
     if d_range.empty: return
 
-    order_type_col = "Order Type" if "Order Type" in d_range.columns else "Order type"
+    order_type_col = "Order Type" if "Order Type" in f.columns else "Order type"
     
     cb_pool = d_range[d_range[order_type_col] == "Calls Bought"].copy()
     ps_pool = d_range[d_range[order_type_col] == "Puts Sold"].copy()
@@ -2431,6 +2431,18 @@ def run_seasonality_app(df_global):
     # TAB 1: SINGLE TICKER ANALYSIS
     # ==============================================================================
     with tab_single:
+        # Note
+        with st.expander("ℹ️ Page Notes: Methodology"):
+            st.markdown("""
+            **📊 Calendar Month Performance**
+            
+            This tab analyzes historical returns based on strictly defined **Calendar Months** (e.g., Jan 1st to Jan 31st).
+            
+            * **Best Use Case**: Understanding broad seasonal trends (e.g., "Tech stocks are weak in September").
+            * **Calculation**: Uses the closing price of the last trading day of the month vs. the last trading day of the previous month.
+            * **Difference**: This is less precise for trade timing than the Opportunity Scanner because it doesn't account for mid-month entries.
+            """)
+
         # --- 1. Inputs ---
         c1, c2, c3 = st.columns([1, 1, 1])
         with c1:
@@ -2688,6 +2700,17 @@ def run_seasonality_app(df_global):
     # TAB 2: OPPORTUNITY SCANNER (With Parquet Optimization & Fixes)
     # ==============================================================================
     with tab_scan:
+        with st.expander("ℹ️ Page Notes: Methodology"):
+            st.markdown("""
+            **🚀 Rolling Forward Returns**
+            
+            This tab uses a **Rolling Window** approach to find tactical opportunities based on the specific **Start Date** you enter.
+            
+            * **Methodology**: It searches 10 years of history for dates matching the Start Date (+/- 3 days) and calculates the performance for the **next** 21, 42, 63, and 126 trading days.
+            * **Difference**: This can show completely different stats than the "Monthly" view because it captures mid-month trends. For example, if a stock typically sells off Jan 1-5 but rallies hard Jan 6-31, the Monthly view might show flat/red, but a Scanner starting Jan 6th would show massive green.
+            * **N**: The number of historical years found with valid data matching your criteria.
+            """)
+
         st.subheader("🚀 High-EV Seasonality Scanner")
         st.caption("Scans the entire TICKER_MAP to find the best forward returns (+21/42/63/126 Days) starting from a specific date.")
         
@@ -2748,7 +2771,7 @@ def run_seasonality_app(df_global):
                         target_doy = scan_date.timetuple().tm_yday
                         d_df['DOY'] = d_df[date_c].dt.dayofyear
                         
-                        matches = d_df[(d_df['DOY'] >= target_doy - 2) & (d_df['DOY'] <= target_doy + 2)].copy()
+                        matches = d_df[(d_df['DOY'] >= target_doy - 3) & (d_df['DOY'] <= target_doy + 3)].copy()
                         matches['Year'] = matches[date_c].dt.year
                         matches = matches.drop_duplicates(subset=['Year'])
                         curr_y = date.today().year
@@ -2757,7 +2780,7 @@ def run_seasonality_app(df_global):
                         if len(matches) < 3: return None
                         
                         stats_row = {'Ticker': ticker_sym, 'N': len(matches)}
-                        # UPDATED TRADING PERIODS
+                        # UPDATED PERIODS (Trading Days)
                         periods = {"21d": 21, "42d": 42, "63d": 63, "126d": 126}
                         
                         for p_name, trading_days in periods.items():
@@ -2809,6 +2832,10 @@ def run_seasonality_app(df_global):
                     c_scan1, c_scan2 = st.columns(2)
                     c_scan3, c_scan4 = st.columns(2)
                     
+                    # Set a fixed height that fits exactly 20 rows + header (approx 35px per row)
+                    # 21 * 35 + 3 = 738
+                    fixed_height = 738
+
                     with c_scan1:
                         st.markdown("**+21 Trading Days** (~1 Month)")
                         top_21 = res_df.sort_values(by="21d_EV", ascending=False).head(20)
@@ -2816,7 +2843,7 @@ def run_seasonality_app(df_global):
                             top_21[['Ticker', '21d_EV', '21d_WR', 'N']].style.format({
                                 '21d_EV': '{:+.1f}%', '21d_WR': '{:.1f}%'
                             }).applymap(highlight_ev, subset=['21d_EV']),
-                            use_container_width=True, hide_index=True
+                            use_container_width=True, hide_index=True, height=fixed_height
                         )
                     
                     with c_scan2:
@@ -2826,7 +2853,7 @@ def run_seasonality_app(df_global):
                             top_42[['Ticker', '42d_EV', '42d_WR', 'N']].style.format({
                                 '42d_EV': '{:+.1f}%', '42d_WR': '{:.1f}%'
                             }).applymap(highlight_ev, subset=['42d_EV']),
-                            use_container_width=True, hide_index=True
+                            use_container_width=True, hide_index=True, height=fixed_height
                         )
                     
                     with c_scan3:
@@ -2836,7 +2863,7 @@ def run_seasonality_app(df_global):
                             top_63[['Ticker', '63d_EV', '63d_WR', 'N']].style.format({
                                 '63d_EV': '{:+.1f}%', '63d_WR': '{:.1f}%'
                             }).applymap(highlight_ev, subset=['63d_EV']),
-                            use_container_width=True, hide_index=True
+                            use_container_width=True, hide_index=True, height=fixed_height
                         )
                         
                     with c_scan4:
@@ -2846,7 +2873,7 @@ def run_seasonality_app(df_global):
                             top_126[['Ticker', '126d_EV', '126d_WR', 'N']].style.format({
                                 '126d_EV': '{:+.1f}%', '126d_WR': '{:.1f}%'
                             }).applymap(highlight_ev, subset=['126d_EV']),
-                            use_container_width=True, hide_index=True
+                            use_container_width=True, hide_index=True, height=fixed_height
                         )
 
 try:
@@ -2867,6 +2894,9 @@ try:
     st.sidebar.caption(f"📅 **Last Updated:** {last_updated_date}")
     
     pg.run()
+    
+    # Global padding at the bottom of the page
+    st.markdown("<br><br><br><br>", unsafe_allow_html=True)
     
 except Exception as e: 
     st.error(f"Error initializing dashboard: {e}")
