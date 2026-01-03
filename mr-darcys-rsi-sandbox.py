@@ -2090,7 +2090,7 @@ def run_rsi_scanner_app(df_global):
                     with c_d5:
                          c5_a, c5_b = st.columns(2)
                          with c5_a:
-                             div_lookback = st.number_input("Lookback", min_value=30, value=st.session_state.saved_rsi_div_lookback, step=5, key="rsi_div_lookback", on_change=save_rsi_state, args=("rsi_div_lookback", "saved_rsi_div_lookback"))
+                             div_lookback = st.number_input("Max Candle Δ", min_value=30, value=st.session_state.saved_rsi_div_lookback, step=5, key="rsi_div_lookback", on_change=save_rsi_state, args=("rsi_div_lookback", "saved_rsi_div_lookback"))
                          with c5_b:
                              curr_source = st.session_state.saved_rsi_div_source
                              idx_source = ["High/Low", "Close"].index(curr_source) if curr_source in ["High/Low", "Close"] else 0
