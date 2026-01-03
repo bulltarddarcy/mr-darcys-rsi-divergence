@@ -1821,13 +1821,12 @@ def run_rsi_scanner_app(df_global):
     
     # --- Session State Init ---
     if 'saved_rsi_div_min_n' not in st.session_state: st.session_state.saved_rsi_div_min_n = 0
-    # UPDATED DEFAULTS: Trading Days (5, 21, 63, 126, 252) and Weeks (4, 13, 26, 52)
     if 'saved_rsi_div_periods_days' not in st.session_state: st.session_state.saved_rsi_div_periods_days = "5, 21, 63, 126, 252"
     if 'saved_rsi_div_periods_weeks' not in st.session_state: st.session_state.saved_rsi_div_periods_weeks = "4, 13, 26, 52"
     if 'saved_rsi_div_opt' not in st.session_state: st.session_state.saved_rsi_div_opt = "Profit Factor"
     if 'saved_rsi_div_lookback' not in st.session_state: st.session_state.saved_rsi_div_lookback = 90
-    # NEW: Default Source
     if 'saved_rsi_div_source' not in st.session_state: st.session_state.saved_rsi_div_source = "High/Low"
+    if 'saved_rsi_div_strict' not in st.session_state: st.session_state.saved_rsi_div_strict = True
     
     if 'saved_rsi_pct_low' not in st.session_state: st.session_state.saved_rsi_pct_low = 10
     if 'saved_rsi_pct_high' not in st.session_state: st.session_state.saved_rsi_pct_high = 90
@@ -1924,7 +1923,6 @@ def run_rsi_scanner_app(df_global):
                         total_len = len(full_close)
 
                         results = []
-                        # UPDATED BACKTESTER PERIODS (Trading Days)
                         periods = [1, 5, 10, 21, 42, 63, 126, 252]
                         
                         for p in periods:
@@ -2015,40 +2013,32 @@ def run_rsi_scanner_app(df_global):
                 * **Divergence**: 
                     * **Bullish**: Price makes a Lower Low, but RSI makes a Higher Low.
                     * **Bearish**: Price makes a Higher High, but RSI makes a Lower High.
-                * **Invalidation**: If RSI crosses the 50 midline between pivots, the setup is reset.
+                * **Invalidation**: Controlled by "Strict 50-Cross Check". If Checked, signals are invalid if RSI crosses 50 between pivots.
                 """)
             with f_col2:
                 st.markdown('<div class="footer-header">🔮 SIGNAL-BASED OPTIMIZATION</div>', unsafe_allow_html=True)
                 st.markdown(f"""
-                * **New Methodology**: Instead of just looking at RSI levels, this tool looks back at **Every Historical Occurrence** of the specific signal type (e.g., Daily Bullish Divergence) for the ticker.
-                * **Optimization Loop**: It calculates the forward returns for specified trading periods for each historical signal.
-                * **Selection**: It compares these holding periods and selects the **Optimal Time Period** based on the highest **Profit Factor** (or SQN if selected).
-                * **Data Constraint**: This scanner utilizes up to 10 years of data if provided in the source file.
+                * **Methodology**: Instead of just looking at RSI levels, this tool looks back at **Every Historical Occurrence** of the specific signal.
+                * **Optimization Loop**: Calculates forward returns for each historical signal.
+                * **Selection**: Selects the **Optimal Time Period** based on the highest **Profit Factor** (or SQN).
                 """)
             with f_col3:
                 st.markdown('<div class="footer-header">📊 TABLE COLUMNS</div>', unsafe_allow_html=True)
                 st.markdown("""
-                * <b>Day/Week Δ</b>: Date the Divergence was confirmed (Pivot 2).
+                * <b>Day/Week Δ</b>: Date the Divergence was confirmed.
                 * <b>RSI Δ</b>: RSI value at Pivot 1 vs Pivot 2.
                 * <b>Price Δ</b>: Price at Pivot 1 vs Pivot 2.
-                * <b>Best Period</b>: The historical holding period (e.g., 21d/13w) that produced the best Profit Factor.
-                * <b>Profit Factor</b>: Gross Wins / Gross Losses. Measures efficiency.
-                    * **Bullish Table**: Win = Price went **UP**.
-                    * **Bearish Table**: Win = Price went **DOWN**.
-                * <b>Win Rate</b>: Percentage of historical trades that resulted in a "Win" (based on signal type above).
-                * <b>EV</b>: Expected Value. Average return per trade.
-                    * **Bullish Table**: Positive EV means the stock historically **rose**.
-                    * **Bearish Table**: Positive EV means the stock historically **fell** (profitable for shorts/puts).
-                * <b>EV Target</b>: Signal Price CLOSE x (1+EV). (If N=0, Target=0)
-                * <b>N</b>: Total historical instances used for the stats in the Winning Period.
+                * <b>Best Period</b>: Holding period producing best metrics.
+                * <b>Profit Factor</b>: Gross Wins / Gross Losses.
+                * <b>EV</b>: Expected Value per trade.
+                * <b>EV Target</b>: Signal Price CLOSE x (1+EV).
                 """, unsafe_allow_html=True)
             with f_col4:
                 st.markdown('<div class="footer-header">🏷️ TAGS</div>', unsafe_allow_html=True)
                 st.markdown(f"""
-                * **EMA{EMA8_PERIOD}**: Bullish (Last Close > EMA8) or Bearish (Last Close < EMA8).
-                * **EMA{EMA21_PERIOD}**: Bullish (Last Close > EMA21) or Bearish (Last Close < EMA21).
-                * **V_HI**: Signal candle volume is > 150% of the 30-day average.
-                * **V_GROW**: Volume on the second pivot (P2) is higher than the first pivot (P1).
+                * **EMA{EMA8_PERIOD}/{EMA21_PERIOD}**: Last Close relative to EMA.
+                * **V_HI**: Signal candle volume > 150% of 30d avg.
+                * **V_GROW**: Volume on P2 > P1.
                 """)
         
         if data_option_div:
@@ -2070,7 +2060,6 @@ def run_rsi_scanner_app(df_global):
                     with st.expander(f"🔍 View Scanned Tickers ({len(all_tickers)} symbols)"):
                         sq_div = st.text_input("Filter...", key="rsi_div_filter_ticker").upper()
                         ft_div = [t for t in all_tickers if sq_div in t]
-                        
                         cols = st.columns(6)
                         rows_per_col = math.ceil(len(ft_div) / 6)
                         for i in range(6):
@@ -2081,26 +2070,33 @@ def run_rsi_scanner_app(df_global):
                                 for t in subset:
                                     st.write(t)
                     
-                    # UPDATED: Added Source Selectbox
-                    c_d1, c_d2, c_d3, c_d4, c_d5 = st.columns(5)
+                    # --- RESIZED COLUMNS & NEW CHECKBOX ---
+                    # Layout: Min N (small), Days (med), Weeks (med), Opt (small), Last Col (large for settings)
+                    c_d1, c_d2, c_d3, c_d4, c_d5 = st.columns([0.6, 1.4, 1.4, 1.0, 2.2])
+                    
                     with c_d1:
                          min_n_div = st.number_input("Minimum N", min_value=0, value=st.session_state.saved_rsi_div_min_n, step=1, key="rsi_div_min_n", on_change=save_rsi_state, args=("rsi_div_min_n", "saved_rsi_div_min_n"))
                     with c_d2:
-                         periods_str_div_days = st.text_input("Test Periods (Trading Days)", value=st.session_state.saved_rsi_div_periods_days, key="rsi_div_periods_days", on_change=save_rsi_state, args=("rsi_div_periods_days", "saved_rsi_div_periods_days"))
+                         periods_str_div_days = st.text_input("Periods (Days)", value=st.session_state.saved_rsi_div_periods_days, key="rsi_div_periods_days", on_change=save_rsi_state, args=("rsi_div_periods_days", "saved_rsi_div_periods_days"))
                     with c_d3:
-                         periods_str_div_weeks = st.text_input("Test Periods (Weeks)", value=st.session_state.saved_rsi_div_periods_weeks, key="rsi_div_periods_weeks", on_change=save_rsi_state, args=("rsi_div_periods_weeks", "saved_rsi_div_periods_weeks"))
+                         periods_str_div_weeks = st.text_input("Periods (Weeks)", value=st.session_state.saved_rsi_div_periods_weeks, key="rsi_div_periods_weeks", on_change=save_rsi_state, args=("rsi_div_periods_weeks", "saved_rsi_div_periods_weeks"))
                     with c_d4:
                          curr_div_opt = st.session_state.saved_rsi_div_opt
                          idx_div_opt = ["Profit Factor", "SQN"].index(curr_div_opt) if curr_div_opt in ["Profit Factor", "SQN"] else 0
                          opt_mode_div = st.selectbox("Optimize By", ["Profit Factor", "SQN"], index=idx_div_opt, key="rsi_div_opt", on_change=save_rsi_state, args=("rsi_div_opt", "saved_rsi_div_opt"))
+                    
                     with c_d5:
-                         c5_a, c5_b = st.columns(2)
-                         with c5_a:
+                         r5_a, r5_b = st.columns(2)
+                         with r5_a:
                              div_lookback = st.number_input("Max Candle Δ", min_value=30, value=st.session_state.saved_rsi_div_lookback, step=5, key="rsi_div_lookback", on_change=save_rsi_state, args=("rsi_div_lookback", "saved_rsi_div_lookback"))
-                         with c5_b:
+                         with r5_b:
                              curr_source = st.session_state.saved_rsi_div_source
                              idx_source = ["High/Low", "Close"].index(curr_source) if curr_source in ["High/Low", "Close"] else 0
-                             div_source = st.selectbox("Source", ["High/Low", "Close"], index=idx_source, key="rsi_div_source", on_change=save_rsi_state, args=("rsi_div_source", "saved_rsi_div_source"))
+                             # RENAMED "Source" -> "Pivot Candle Signal"
+                             div_source = st.selectbox("Pivot Candle Signal", ["High/Low", "Close"], index=idx_source, key="rsi_div_source", on_change=save_rsi_state, args=("rsi_div_source", "saved_rsi_div_source"))
+                         
+                         # NEW CHECKBOX
+                         strict_div = st.checkbox("Strict 50-Cross Invalidation", value=st.session_state.saved_rsi_div_strict, key="rsi_div_strict", on_change=save_rsi_state, args=("rsi_div_strict", "saved_rsi_div_strict"))
                     
                     periods_div_days = parse_periods(periods_str_div_days)
                     periods_div_weeks = parse_periods(periods_str_div_weeks)
@@ -2115,9 +2111,10 @@ def run_rsi_scanner_app(df_global):
                     
                     for i, (ticker, group) in enumerate(grouped_list):
                         d_d, d_w = prepare_data(group.copy())
-                        # UPDATED: Pass price_source
-                        if d_d is not None: raw_results_div.extend(find_divergences(d_d, ticker, 'Daily', min_n=min_n_div, periods_input=periods_div_days, optimize_for=div_opt_code, lookback_period=div_lookback, price_source=div_source))
-                        if d_w is not None: raw_results_div.extend(find_divergences(d_w, ticker, 'Weekly', min_n=min_n_div, periods_input=periods_div_weeks, optimize_for=div_opt_code, lookback_period=div_lookback, price_source=div_source))
+                        if d_d is not None: 
+                            raw_results_div.extend(find_divergences(d_d, ticker, 'Daily', min_n=min_n_div, periods_input=periods_div_days, optimize_for=div_opt_code, lookback_period=div_lookback, price_source=div_source, strict_validation=strict_div))
+                        if d_w is not None: 
+                            raw_results_div.extend(find_divergences(d_w, ticker, 'Weekly', min_n=min_n_div, periods_input=periods_div_weeks, optimize_for=div_opt_code, lookback_period=div_lookback, price_source=div_source, strict_validation=strict_div))
                         if i % 10 == 0 or i == total_groups - 1: progress_bar.progress((i + 1) / total_groups)
                     
                     progress_bar.empty()
@@ -2192,31 +2189,24 @@ def run_rsi_scanner_app(df_global):
                  st.markdown('<div class="footer-header">⚙️ STRATEGY</div>', unsafe_allow_html=True)
                  st.markdown("""
                 * **Signal Trigger**: RSI crosses **ABOVE Low Percentile** (Leaving Low) or **BELOW High Percentile** (Leaving High).
-                * **Signal-Based Optimization**: Instead of matching RSI values, this backtester finds all historical instances where the stock "Left the Low/High" and calculates performance.
-                * **Optimization Loop**: Calculates returns for multiple days (or weeks) and selects the Winner based on **Profit Factor** (or SQN if selected).
-                * **Data Constraint**: This scanner utilizes up to 10 years of data if provided in the source file.
+                * **Optimization Loop**: Calculates returns for multiple days (or weeks) and selects the Winner based on **Profit Factor** (or SQN).
                 """)
             with c2:
                 st.markdown('<div class="footer-header">🔢 PERCENTILE DEFINITION</div>', unsafe_allow_html=True)
                 st.markdown("""
                 * **Low/High Percentile**: Calculated based on the full history (up to 10 years). 
-                * **Example**: If RSI < 10th Percentile, it means the current RSI is lower than it has been 90% of the time historically. This adapts to each stock's unique personality better than fixed 30/70 levels.
+                * **Example**: RSI < 10th Percentile means current RSI is lower than 90% of history.
                 """)
             with c3:
                 st.markdown('<div class="footer-header">📊 TABLE COLUMNS</div>', unsafe_allow_html=True)
                 st.markdown("""
-                * **Date**: The date the signal fired (Left Low/High).
-                * **RSI Δ**: RSI movement (e.g., 10th-Pct ↗ Current-RSI).
-                * **Signal Close**: Price when signal fired.
-                * **Best Period**: The historical holding period (e.g., 21d) that produced the best result (PF or SQN).
+                * **Date**: The date the signal fired.
+                * **RSI Δ**: RSI movement.
+                * **Best Period**: The historical holding period that produced the best result.
                 * **Profit Factor**: Gross Wins / Gross Losses. 
-                    * **Leaving Low**: Win = Price went **UP**.
-                    * **Leaving High**: Win = Price went **DOWN**.
-                * **Win Rate**: Percentage of historical trades that resulted in a "Win".
-                * **EV**: Expected Value. Average return per trade.
-                * **EV Target**: Signal Close × (1 + EV). (If N=0, Target=0)
-                * **N**: Total historical instances used for the stats in the Winning Period.
-                * **SQN**: System Quality Number. Measures relationship between expectancy and volatility.
+                * **Win Rate**: % of historical trades that won.
+                * **EV**: Average return per trade.
+                * **SQN**: System Quality Number.
                 """)
         
         if data_option_pct:
@@ -2331,28 +2321,14 @@ def run_rsi_scanner_app(df_global):
                                         idx = df_in.columns.get_loc('SQN')
                                         color = ''
                                         font_weight = 'normal'
-                                        
-                                        if val < 1.6:
-                                            color = '#d32f2f'
-                                        elif 1.6 <= val < 2.0:
-                                            color = '#f57c00'
-                                        elif 2.0 <= val < 2.5:
-                                            color = '#fbc02d'
-                                        elif 2.5 <= val < 3.0:
-                                            color = '#388e3c'
-                                        elif 3.0 <= val <= 5.0:
-                                            color = '#2e7d32'
-                                            font_weight = 'bold'
-                                        elif 5.0 < val <= 7.0:
-                                            color = '#1b5e20'
-                                            font_weight = 'bold'
-                                        elif val > 7.0:
-                                            color = '#6a1b9a'
-                                            font_weight = 'bold'
-                                        
-                                        if color:
-                                            styles[idx] = f'color: {color}; font-weight: {font_weight};'
-
+                                        if val < 1.6: color = '#d32f2f'
+                                        elif 1.6 <= val < 2.0: color = '#f57c00'
+                                        elif 2.0 <= val < 2.5: color = '#fbc02d'
+                                        elif 2.5 <= val < 3.0: color = '#388e3c'
+                                        elif 3.0 <= val <= 5.0: color = '#2e7d32'; font_weight = 'bold'
+                                        elif 5.0 < val <= 7.0: color = '#1b5e20'; font_weight = 'bold'
+                                        elif val > 7.0: color = '#6a1b9a'; font_weight = 'bold'
+                                        if color: styles[idx] = f'color: {color}; font-weight: {font_weight};'
                                 return styles
                             return df_in.style.apply(highlight_row, axis=1)
 
@@ -2371,7 +2347,7 @@ def run_rsi_scanner_app(df_global):
                                 "EV": st.column_config.NumberColumn("EV", format="%.1f%%"),
                                 "EV Target": st.column_config.NumberColumn("EV Target", format="$%.2f"), 
                                 "N": st.column_config.NumberColumn("N"),
-                                "SQN": st.column_config.NumberColumn("SQN", format="%.2f", help="How to Read the Score:\n< 1.6: Poor / Hard to Trade (Likely not worth trading)\n1.6 – 1.9: Below Average (Tradeable, but difficult)\n2.0 – 2.5: Average\n2.5 – 3.0: Good\n3.0 – 5.0: Excellent\n5.1 – 6.9: Superb\n> 7.0: Holy Grail"),
+                                "SQN": st.column_config.NumberColumn("SQN", format="%.2f", help="How to Read the Score:\n< 1.6: Poor\n1.6 – 1.9: Below Avg\n2.0 – 2.5: Avg\n2.5 – 3.0: Good\n3.0 – 5.0: Excellent\n> 5.0: Superb"),
                                 "Signal_Type": None, "Date_Obj": None
                             },
                             hide_index=True,
