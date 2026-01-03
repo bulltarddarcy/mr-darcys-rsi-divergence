@@ -769,7 +769,7 @@ def prepare_data(df):
         
     return df_d, df_w
 
-def find_divergences(df_tf, ticker, timeframe, min_n=0, periods_input=None, optimize_for='PF', lookback_period=90, price_source='High/Low'):
+def find_divergences(df_tf, ticker, timeframe, min_n=0, periods_input=None, optimize_for='PF', lookback_period=90, price_source='High/Low', strict_validation=True):
     divergences = []
     n_rows = len(df_tf)
     
@@ -778,15 +778,13 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0, periods_input=None, opti
     rsi_vals = df_tf['RSI'].values
     vol_vals = df_tf['Volume'].values
     vol_sma_vals = df_tf['VolSMA'].values
-    close_vals = df_tf['Price'].values # 'Price' is the renamed Close column
+    close_vals = df_tf['Price'].values 
     
-    # --- LOGIC CHANGE: Select Price Arrays based on User Input ---
+    # Select Price Arrays based on User Input
     if price_source == 'Close':
-        # If 'Close', we treat the Close price as both the High and the Low for comparison
         low_vals = close_vals
         high_vals = close_vals
     else:
-        # Default behavior: Bullish uses Lows, Bearish uses Highs
         low_vals = df_tf['Low'].values
         high_vals = df_tf['High'].values
         
@@ -796,9 +794,7 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0, periods_input=None, opti
              return df_tf.iloc[idx]['ChartDate'].strftime(fmt)
         return ts.strftime(fmt)
     
-    # ---------------------------------------------------------
     # PASS 1: VECTORIZED PRE-CHECK
-    # ---------------------------------------------------------
     roll_low_min = pd.Series(low_vals).shift(1).rolling(window=lookback_period).min().values
     roll_high_max = pd.Series(high_vals).shift(1).rolling(window=lookback_period).max().values
     
@@ -814,9 +810,7 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0, periods_input=None, opti
     bearish_signal_indices = []
     potential_signals = [] 
 
-    # ---------------------------------------------------------
     # PASS 2: SCAN CANDIDATES
-    # ---------------------------------------------------------
     for i in candidate_indices:
         p2_rsi = rsi_vals[i]
         p2_vol = vol_vals[i]
@@ -835,7 +829,15 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0, periods_input=None, opti
             if p2_rsi > (p1_rsi + RSI_DIFF_THRESHOLD):
                 idx_p1_abs = lb_start + p1_idx_rel
                 subset_rsi = rsi_vals[idx_p1_abs : i + 1]
-                if not np.any(subset_rsi > 50): 
+                
+                # --- NEW INVALIDATION LOGIC ---
+                # Default (Strict): Invalid if ANY RSI in between > 50
+                # User Toggle (Loose): Allow RSI > 50
+                is_valid_structure = True
+                if strict_validation and np.any(subset_rsi > 50):
+                    is_valid_structure = False
+                
+                if is_valid_structure: 
                     valid = True
                     if i < n_rows - 1:
                         post_rsi = rsi_vals[i+1:]
@@ -853,7 +855,14 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0, periods_input=None, opti
             if p2_rsi < (p1_rsi - RSI_DIFF_THRESHOLD):
                 idx_p1_abs = lb_start + p1_idx_rel
                 subset_rsi = rsi_vals[idx_p1_abs : i + 1]
-                if not np.any(subset_rsi < 50): 
+                
+                # --- NEW INVALIDATION LOGIC ---
+                # Default (Strict): Invalid if ANY RSI in between < 50
+                is_valid_structure = True
+                if strict_validation and np.any(subset_rsi < 50):
+                    is_valid_structure = False
+                    
+                if is_valid_structure: 
                     valid = True
                     if i < n_rows - 1:
                         post_rsi = rsi_vals[i+1:]
@@ -863,9 +872,7 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0, periods_input=None, opti
                         bearish_signal_indices.append(i)
                         potential_signals.append({"index": i, "type": "Bearish", "p1_idx": idx_p1_abs, "vol_high": is_vol_high})
 
-    # ---------------------------------------------------------
     # PASS 3: REPORT & BACKTEST
-    # ---------------------------------------------------------
     display_threshold_idx = n_rows - SIGNAL_LOOKBACK_PERIOD
     
     for sig in potential_signals:
@@ -897,7 +904,6 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0, periods_input=None, opti
         date_display = f"{get_date_str(idx_p1_abs, '%b %d')} → {get_date_str(i, '%b %d')}"
         rsi_display = f"{int(round(rsi_vals[idx_p1_abs]))} {'↗' if rsi_vals[i] > rsi_vals[idx_p1_abs] else '↘'} {int(round(rsi_vals[i]))}"
         
-        # Display the price used for the signal (Low/High OR Close)
         price_p1 = low_vals[idx_p1_abs] if s_type=='Bullish' else high_vals[idx_p1_abs]
         price_p2 = low_vals[i] if s_type=='Bullish' else high_vals[i]
         price_display = f"${price_p1:,.2f} ↗ ${price_p2:,.2f}" if price_p2 > price_p1 else f"${price_p1:,.2f} ↘ ${price_p2:,.2f}"
