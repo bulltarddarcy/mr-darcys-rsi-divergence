@@ -955,6 +955,18 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0, periods_input=None, opti
             'N': best_stats['N'],
             'SQN': best_stats.get('SQN', 0.0)
         })
+
+        # --- ADD FUTURE PRICES FOR DOWNLOADABLE CSV ---
+        if periods_input is not None:
+            for p in periods_input:
+                future_idx = i + p
+                # We prefix with "Price_After_" to avoid potential collision and make parsing easy
+                col_key = f"Price_After_{p}"
+                
+                if future_idx < n_rows:
+                    div_obj[col_key] = close_vals[future_idx]
+                else:
+                    div_obj[col_key] = "n/a"
         
         divergences.append(div_obj)
             
@@ -1283,13 +1295,28 @@ def run_rsi_scanner_app(df_global):
                         csv_export_df["Type"] = csv_export_df["Timeframe"] + " " + csv_export_df["Type"]
                         file_label = data_option_div.replace(" ", "_") if data_option_div else "dataset"
 
+                        # DYNAMICALLY FIND FUTURE PRICE COLUMNS
+                        # These keys were added in find_divergences (e.g., Price_After_5, Price_After_21)
+                        # We want to display them in numerical order if possible.
+                        future_price_cols = [c for c in csv_export_df.columns if c.startswith("Price_After_")]
+                        try:
+                            # Sort by integer value of the period
+                            future_price_cols.sort(key=lambda x: int(x.split('_')[-1]))
+                        except:
+                            future_price_cols.sort()
+
                         # Button 1: Raw
-                        csv_cols_raw = ["Type", "Ticker", "Day1", "Day2", "RSI1", "RSI2", "Price1", "Price2"]
-                        csv_data_raw = csv_export_df[csv_cols_raw].to_csv(index=False).encode('utf-8')
+                        csv_cols_raw = ["Type", "Ticker", "Day1", "Day2", "RSI1", "RSI2", "Price1", "Price2"] + future_price_cols
+                        
+                        # Filter for columns that actually exist (pandas handles this but good to be explicit)
+                        valid_cols_raw = [c for c in csv_cols_raw if c in csv_export_df.columns]
+                        csv_data_raw = csv_export_df[valid_cols_raw].to_csv(index=False).encode('utf-8')
                         
                         # Button 2: Processed (Includes Stats)
-                        csv_cols_proc = ["Type", "Ticker", "Day1", "Day2", "RSI1", "RSI2", "Price1", "Price2", "Best Period", "Profit Factor", "Win Rate", "EV", "SQN", "N"]
-                        csv_data_proc = csv_export_df[csv_cols_proc].to_csv(index=False).encode('utf-8')
+                        csv_cols_proc = ["Type", "Ticker", "Day1", "Day2", "RSI1", "RSI2", "Price1", "Price2", "Best Period", "Profit Factor", "Win Rate", "EV", "SQN", "N"] + future_price_cols
+                        
+                        valid_cols_proc = [c for c in csv_cols_proc if c in csv_export_df.columns]
+                        csv_data_proc = csv_export_df[valid_cols_proc].to_csv(index=False).encode('utf-8')
 
                         btn_col1, btn_col2 = st.columns(2)
                         with btn_col1:
@@ -1378,185 +1405,6 @@ def run_rsi_scanner_app(df_global):
                     else: st.warning("No Divergence signals found.")
                 else:
                     st.error(f"Failed to load dataset: {data_option_div}")
-            except Exception as e: st.error(f"Analysis failed: {e}")
-
-    with tab_pct:
-        data_option_pct = st.pills("Dataset", options=options, selection_mode="single", default=options[0] if options else None, label_visibility="collapsed", key="rsi_pct_pills")
-        
-        with st.expander("ℹ️ Page Notes: Percentile Strategy Logic"):
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                 st.markdown('<div class="footer-header">⚙️ STRATEGY</div>', unsafe_allow_html=True)
-                 st.markdown("""
-                * **Signal Trigger**: RSI crosses **ABOVE Low Percentile** (Leaving Low) or **BELOW High Percentile** (Leaving High).
-                * **Optimization Loop**: Calculates returns for multiple days (or weeks) and selects the Winner based on **Profit Factor** (or SQN).
-                """)
-            with c2:
-                st.markdown('<div class="footer-header">🔢 PERCENTILE DEFINITION</div>', unsafe_allow_html=True)
-                st.markdown("""
-                * **Low/High Percentile**: Calculated based on the full history (up to 10 years). 
-                * **Example**: RSI < 10th Percentile means current RSI is lower than 90% of history.
-                """)
-            with c3:
-                st.markdown('<div class="footer-header">📊 TABLE COLUMNS</div>', unsafe_allow_html=True)
-                st.markdown("""
-                * **Date**: The date the signal fired.
-                * **RSI Δ**: RSI movement.
-                * **Best Period**: The historical holding period that produced the best result.
-                * **Profit Factor**: Gross Wins / Gross Losses. 
-                * **Win Rate**: % of historical trades that won.
-                * **EV**: Average return per trade.
-                * **SQN**: System Quality Number.
-                """)
-        
-        if data_option_pct:
-            try:
-                key = dataset_map[data_option_pct]
-                master = load_parquet_and_clean(key)
-                
-                if master is not None and not master.empty:
-                    t_col = next((c for c in master.columns if c.strip().upper() in ['TICKER', 'SYMBOL']), None)
-                    date_col_raw = next((c for c in master.columns if 'DATE' in c.upper()), None)
-                    max_date_in_set = None
-                    if date_col_raw:
-                        max_dt_obj = pd.to_datetime(master[date_col_raw]).max()
-                        max_date_in_set = max_dt_obj.date()
-
-                    all_tickers = sorted(master[t_col].unique())
-                    with st.expander(f"🔍 View Scanned Tickers ({len(all_tickers)} symbols)"):
-                        sq_pct = st.text_input("Filter...", key="rsi_pct_filter_ticker").upper()
-                        ft_pct = [t for t in all_tickers if sq_pct in t]
-                        
-                        cols = st.columns(6)
-                        rows_per_col = math.ceil(len(ft_pct) / 6)
-                        for i in range(6):
-                            start = i * rows_per_col
-                            end = start + rows_per_col
-                            subset = ft_pct[start:end]
-                            with cols[i]:
-                                for t in subset:
-                                    st.write(t)
-
-                    pct_col1, pct_col2, pct_col3 = st.columns(3)
-                    with pct_col1: in_low = st.number_input("RSI Low Percentile (%)", min_value=1, max_value=49, value=st.session_state.saved_rsi_pct_low, step=1, key="rsi_pct_low", on_change=save_rsi_state, args=("rsi_pct_low", "saved_rsi_pct_low"))
-                    with pct_col2: in_high = st.number_input("RSI High Percentile (%)", min_value=51, max_value=99, value=st.session_state.saved_rsi_pct_high, step=1, key="rsi_pct_high", on_change=save_rsi_state, args=("rsi_pct_high", "saved_rsi_pct_high"))
-                    
-                    show_opts = ["Everything", "Leaving High", "Leaving Low"]
-                    curr_show = st.session_state.saved_rsi_pct_show
-                    idx_show = show_opts.index(curr_show) if curr_show in show_opts else 0
-                    with pct_col3: show_filter = st.selectbox("Actions to Show", show_opts, index=idx_show, key="rsi_pct_show", on_change=save_rsi_state, args=("rsi_pct_show", "saved_rsi_pct_show"))
-                    
-                    if not df_global.empty and "Trade Date" in df_global.columns:
-                        ref_date = df_global["Trade Date"].max().date()
-                    else:
-                        ref_date = date.today()
-                    default_start = ref_date - timedelta(days=14)
-                    
-                    if st.session_state.saved_rsi_pct_date is None:
-                        st.session_state.saved_rsi_pct_date = default_start
-
-                    pct_col4, pct_col5, pct_col6, pct_col7 = st.columns(4)
-                    with pct_col4: filter_date = st.date_input("Latest Date", value=st.session_state.saved_rsi_pct_date, key="rsi_pct_date", on_change=save_rsi_state, args=("rsi_pct_date", "saved_rsi_pct_date"))
-                    with pct_col5: min_n_pct = st.number_input("Minimum N", min_value=0, value=st.session_state.saved_rsi_pct_min_n, step=1, key="rsi_pct_min_n", on_change=save_rsi_state, args=("rsi_pct_min_n", "saved_rsi_pct_min_n"))
-                    with pct_col6: 
-                        periods_str_pct = st.text_input("Test Periods (Trading Days only)", value=st.session_state.saved_rsi_pct_periods, key="rsi_pct_periods", on_change=save_rsi_state, args=("rsi_pct_periods", "saved_rsi_pct_periods"))
-                    with pct_col7:
-                         curr_pct_opt = st.session_state.saved_rsi_pct_opt
-                         idx_pct_opt = ["Profit Factor", "SQN"].index(curr_pct_opt) if curr_pct_opt in ["Profit Factor", "SQN"] else 1
-                         opt_mode_pct = st.selectbox("Optimize By", ["Profit Factor", "SQN"], index=idx_pct_opt, key="rsi_pct_opt", on_change=save_rsi_state, args=("rsi_pct_opt", "saved_rsi_pct_opt"))
-
-                    periods_pct = parse_periods(periods_str_pct)
-                    pct_opt_code = OPT_MAP[opt_mode_pct]
-
-                    raw_results_pct = []
-                    progress_bar = st.progress(0, text="Scanning Percentiles...")
-                    grouped = master.groupby(t_col)
-                    grouped_list = list(grouped)
-                    total_groups = len(grouped_list)
-                    
-                    for i, (ticker, group) in enumerate(grouped_list):
-                        d_d, d_w = prepare_data(group.copy())
-                        
-                        if d_d is not None:
-                            raw_results_pct.extend(find_rsi_percentile_signals(d_d, ticker, pct_low=in_low/100.0, pct_high=in_high/100.0, min_n=min_n_pct, filter_date=filter_date, timeframe='Daily', periods_input=periods_pct, optimize_for=pct_opt_code))
-                        
-                        if i % 10 == 0 or i == total_groups - 1: progress_bar.progress((i + 1) / total_groups)
-                    
-                    progress_bar.empty()
-
-                    if raw_results_pct:
-                        res_pct_df = pd.DataFrame(raw_results_pct).sort_values(by='Date_Obj', ascending=False)
-                        
-                        if show_filter == "Leaving High":
-                            res_pct_df = res_pct_df[res_pct_df['Signal_Type'] == 'Bearish']
-                        elif show_filter == "Leaving Low":
-                            res_pct_df = res_pct_df[res_pct_df['Signal_Type'] == 'Bullish']
-                            
-                        def style_pct_df(df_in):
-                            def highlight_row(row):
-                                styles = [''] * len(row)
-                                if row['Date_Obj'] == max_date_in_set:
-                                    idx = df_in.columns.get_loc('Date')
-                                    styles[idx] = 'background-color: rgba(255, 244, 229, 0.7); color: #e67e22; font-weight: bold;'
-                                
-                                if 'EV' in df_in.columns:
-                                    val = row['EV']
-                                    if pd.notnull(val) and val != 0:
-                                        is_green = val > 0
-                                        bg = 'background-color: #e6f4ea; color: #1e7e34;' if is_green else 'background-color: #fce8e6; color: #c5221f;'
-                                        idx = df_in.columns.get_loc('EV')
-                                        styles[idx] = f'{bg} font-weight: 500;'
-                                
-                                if 'Action' in df_in.columns:
-                                    act = row['Action']
-                                    idx = df_in.columns.get_loc('Action')
-                                    if "Leaving Low" in str(act):
-                                        styles[idx] = 'color: #1e7e34;' 
-                                    elif "Leaving High" in str(act):
-                                        styles[idx] = 'color: #c5221f;' 
-                                
-                                if 'SQN' in df_in.columns:
-                                    val = row['SQN']
-                                    if pd.notnull(val):
-                                        idx = df_in.columns.get_loc('SQN')
-                                        color = ''
-                                        font_weight = 'normal'
-                                        if val < 1.6: color = '#d32f2f'
-                                        elif 1.6 <= val < 2.0: color = '#f57c00'
-                                        elif 2.0 <= val < 2.5: color = '#fbc02d'
-                                        elif 2.5 <= val < 3.0: color = '#388e3c'
-                                        elif 3.0 <= val <= 5.0: color = '#2e7d32'; font_weight = 'bold'
-                                        elif 5.0 < val <= 7.0: color = '#1b5e20'; font_weight = 'bold'
-                                        elif val > 7.0: color = '#6a1b9a'; font_weight = 'bold'
-                                        if color: styles[idx] = f'color: {color}; font-weight: {font_weight};'
-                                return styles
-                            return df_in.style.apply(highlight_row, axis=1)
-
-                        st.dataframe(
-                            style_pct_df(res_pct_df),
-                            column_config={
-                                "Ticker": st.column_config.TextColumn("Ticker"),
-                                "Date": st.column_config.TextColumn("Date"),
-                                "Action": st.column_config.TextColumn("Action"),
-                                "RSI_Display": st.column_config.TextColumn("RSI Δ"),
-                                "Signal_Price": st.column_config.TextColumn("Signal Close"),
-                                "Last_Close": st.column_config.TextColumn("Last Close"), 
-                                "Best Period": st.column_config.TextColumn("Best Period"),
-                                "Profit Factor": st.column_config.NumberColumn("Profit Factor", format="%.2f"),
-                                "Win Rate": st.column_config.NumberColumn("Win Rate", format="%.1f%%"),
-                                "EV": st.column_config.NumberColumn("EV", format="%.1f%%"),
-                                "EV Target": st.column_config.NumberColumn("EV Target", format="$%.2f"), 
-                                "N": st.column_config.NumberColumn("N"),
-                                "SQN": st.column_config.NumberColumn("SQN", format="%.2f", help="How to Read the Score:\n< 1.6: Poor\n1.6 – 1.9: Below Avg\n2.0 – 2.5: Avg\n2.5 – 3.0: Good\n3.0 – 5.0: Excellent\n> 5.0: Superb"),
-                                "Signal_Type": None, "Date_Obj": None
-                            },
-                            hide_index=True,
-                            use_container_width=True,
-                            height=get_table_height(res_pct_df, max_rows=50)
-                        )
-                        st.markdown("<br><br>", unsafe_allow_html=True)
-                    else: st.info(f"No Percentile signals found (Crossing {in_low}th/{in_high}th percentile).")
-
             except Exception as e: st.error(f"Analysis failed: {e}")
 
 def find_rsi_percentile_signals(df, ticker, pct_low=0.10, pct_high=0.90, min_n=1, filter_date=None, timeframe='Daily', periods_input=None, optimize_for='SQN'):
