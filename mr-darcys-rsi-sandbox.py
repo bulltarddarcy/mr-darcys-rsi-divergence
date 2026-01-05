@@ -864,8 +864,7 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0, periods_input=None, opti
     # PASS 3: REPORT & METRICS
     display_threshold_idx = n_rows - recent_days_filter
     
-    # Pre-calculate lists for optimization stats if needed (Scanner usage)
-    # For History tab, we calculate specific returns inline below
+    # Pre-calculate indices for stats (if needed)
     bullish_indices = [x['index'] for x in potential_signals if x['type'] == 'Bullish']
     bearish_indices = [x['index'] for x in potential_signals if x['type'] == 'Bearish']
 
@@ -917,11 +916,7 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0, periods_input=None, opti
         date_display = f"{get_date_str(idx_p1_abs, '%b %d')} → {get_date_str(i, '%b %d')}"
         price_display = f"${price_p1:,.2f} ↗ ${price_p2:,.2f}" if price_p2 > price_p1 else f"${price_p1:,.2f} ↘ ${price_p2:,.2f}"
 
-        # OPTIONAL: "Best Period" Logic (Mainly for Scanner filtering/stats)
-        # We only run this if we are in Scanner mode (indicated by periods_input not being None, usually)
-        # But we can just run it quickly or skip if not needed.
-        # For simplicity, we keep the logic but we won't display it in the streamlined UI.
-        
+        # Optimization Stats
         hist_list = bullish_indices if s_type == 'Bullish' else bearish_indices
         best_stats = calculate_optimal_signal_stats(hist_list, close_vals, i, signal_type=s_type, timeframe=timeframe, periods_input=periods_input, optimize_for=optimize_for)
         
@@ -935,7 +930,7 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0, periods_input=None, opti
             'Date_Display': date_display,
             'Price_Display': price_display, 
             'Last_Close': f"${latest_row['Price']:,.2f}",
-            'N': best_stats['N'] # Kept for filtering
+            'N': best_stats['N']
         })
 
         # --- FORWARD PERFORMANCE & RAW CSV DATA ---
@@ -958,14 +953,11 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0, periods_input=None, opti
                     div_obj[col_vol] = vol_vals[future_idx]
                     
                     # Calculate % Return
-                    # Bullish: (Exit - Entry) / Entry
-                    # Bearish: (Entry - Exit) / Entry (Short profit) OR just raw price move? 
-                    # Standard convention: Long return for Bullish, Short return for Bearish
                     entry = close_vals[i]
                     if s_type == 'Bullish':
                         ret_pct = (f_price - entry) / entry
                     else:
-                        ret_pct = (entry - f_price) / entry # Positive if price dropped
+                        ret_pct = (entry - f_price) / entry 
                         
                     div_obj[col_ret] = ret_pct * 100
                     
@@ -1006,7 +998,7 @@ def run_rsi_scanner_app(df_global):
     dataset_map = DATA_KEYS_PARQUET
     options = list(dataset_map.keys())
     
-    # CSV Hardcoded Defaults (Since filters are removed from Scanner UI)
+    # CSV Hardcoded Defaults (Scanning Periods)
     CSV_PERIODS_DAYS = [5, 21, 63, 126, 252]
     CSV_PERIODS_WEEKS = [4, 13, 26, 52]
 
@@ -1031,6 +1023,21 @@ def run_rsi_scanner_app(df_global):
                 master = load_parquet_and_clean(key)
                 
                 if master is not None and not master.empty:
+                    # Calculate Highlighting Targets based on Dataset MAX dates
+                    target_highlight_daily = None
+                    target_highlight_weekly = None
+                    
+                    date_col_raw = next((c for c in master.columns if 'DATE' in c.upper()), None)
+                    if date_col_raw:
+                        master[date_col_raw] = pd.to_datetime(master[date_col_raw])
+                        max_dt_obj = master[date_col_raw].max()
+                        target_highlight_daily = max_dt_obj.strftime('%Y-%m-%d')
+                        # Calculate start of current week (Monday)
+                        days_to_subtract = max_dt_obj.weekday()
+                        target_highlight_weekly = (max_dt_obj - timedelta(days=days_to_subtract)).strftime('%Y-%m-%d')
+                        # Alternatively, if weekly signals date logic is different (e.g. chart date), 
+                        # ensure this matches `get_date_str` logic in `find_divergences`.
+                    
                     t_col = next((c for c in master.columns if c.strip().upper() in ['TICKER', 'SYMBOL']), None)
                     all_tickers = sorted(master[t_col].unique())
                     
@@ -1064,7 +1071,6 @@ def run_rsi_scanner_app(df_global):
                         d_d, d_w = prepare_data(group.copy())
                         
                         # We pass CSV_PERIODS just so the "Raw" CSV download has data.
-                        # We use 0 min_n because we aren't filtering by stats anymore on this page.
                         if d_d is not None: 
                             raw_results_div.extend(find_divergences(d_d, ticker, 'Daily', min_n=0, periods_input=CSV_PERIODS_DAYS, optimize_for='PF', lookback_period=div_lookback, price_source=div_source, strict_validation=strict_div, recent_days_filter=days_since))
                         if d_w is not None: 
@@ -1092,7 +1098,6 @@ def run_rsi_scanner_app(df_global):
                             except: lst.sort()
 
                         final_cols = d_p_cols + w_p_cols + d_v_cols + w_v_cols
-                        # Ensure columns exist
                         for c in final_cols:
                             if c not in csv_export_df.columns: csv_export_df[c] = "n/a"
                             else: csv_export_df[c] = csv_export_df[c].fillna("n/a")
@@ -1103,18 +1108,19 @@ def run_rsi_scanner_app(df_global):
                         csv_data = csv_export_df[valid_export_cols].to_csv(index=False).encode('utf-8')
                         st.download_button("📥 Download 10Y Signal History (Raw)", data=csv_data, file_name=f"rsi_div_raw_{file_label}.csv", mime="text/csv")
 
-                        # --- UI DISPLAY (STREAMLINED) ---
+                        # --- UI DISPLAY ---
                         res_div_df = df_all_results[df_all_results["Is_Recent"] == True].copy()
                         
                         if res_div_df.empty:
                             st.warning(f"No signals found in the last {days_since} days.")
                         else:
                             res_div_df = res_div_df.sort_values(by='Signal_Date_ISO', ascending=False)
-                            # Only show 1 per ticker/type/tf to avoid clutter
                             consolidated = res_div_df.groupby(['Ticker', 'Type', 'Timeframe']).head(1)
                             
                             for tf in ['Daily', 'Weekly']:
+                                target_highlight = target_highlight_weekly if tf == 'Weekly' else target_highlight_daily
                                 date_header = "Week Δ" if tf == 'Weekly' else "Day Δ"
+                                
                                 for s_type, emoji in [('Bullish', '🟢'), ('Bearish', '🔴')]:
                                     st.subheader(f"{emoji} {tf} {s_type} Signals")
                                     tbl_df = consolidated[(consolidated['Type']==s_type) & (consolidated['Timeframe']==tf)].copy()
@@ -1124,8 +1130,20 @@ def run_rsi_scanner_app(df_global):
                                         price_header = "Low Δ" if s_type == 'Bullish' else "High Δ"
 
                                     if not tbl_df.empty:
+                                        # Highlighting Logic
+                                        def style_div_df(df_in):
+                                            def highlight_row(row):
+                                                styles = [''] * len(row)
+                                                # Check if Signal Date matches Target
+                                                if target_highlight and row['Signal_Date_ISO'] == target_highlight:
+                                                    if 'Date_Display' in df_in.columns:
+                                                        idx = df_in.columns.get_loc('Date_Display')
+                                                        styles[idx] = 'background-color: rgba(255, 244, 229, 0.7); color: #e67e22; font-weight: bold;'
+                                                return styles
+                                            return df_in.style.apply(highlight_row, axis=1)
+
                                         st.dataframe(
-                                            tbl_df,
+                                            style_div_df(tbl_df),
                                             column_config={
                                                 "Ticker": st.column_config.TextColumn("Ticker", width=None),
                                                 "Tags": st.column_config.ListColumn("Tags", width="medium"), 
@@ -1161,9 +1179,9 @@ def run_rsi_scanner_app(df_global):
         with c_h4:
             h_source = st.selectbox("Pivot Candle Signal", ["High/Low", "Close"], index=0, key="rsi_hist_source")
         with c_h5:
-            h_per_days = st.text_input("Periods (Days)", value="5, 21, 63", key="rsi_hist_p_days")
+            h_per_days = st.text_input("Periods (Days)", value="5, 21, 63, 126, 252", key="rsi_hist_p_days")
         with c_h6:
-            h_per_weeks = st.text_input("Periods (Weeks)", value="4, 13, 26", key="rsi_hist_p_weeks")
+            h_per_weeks = st.text_input("Periods (Weeks)", value="4, 13, 26, 52", key="rsi_hist_p_weeks")
 
         current_params = {
             "t": hist_ticker_in, "lb": h_lookback, "str": h_strict, "src": h_source, 
@@ -1194,6 +1212,7 @@ def run_rsi_scanner_app(df_global):
                         p_days_parsed = parse_periods(h_per_days)
                         p_weeks_parsed = parse_periods(h_per_weeks)
                         
+                        # Note: We pass recent_days_filter=99999 to get ALL history
                         if d_d_h is not None:
                             raw_results_hist.extend(find_divergences(d_d_h, hist_ticker_in, 'Daily', min_n=0, periods_input=p_days_parsed, lookback_period=h_lookback, price_source=h_source, strict_validation=h_strict, recent_days_filter=99999))
                         if d_w_h is not None:
@@ -1211,53 +1230,35 @@ def run_rsi_scanner_app(df_global):
             res_df_h = st.session_state.rsi_hist_results.copy()
             res_df_h = res_df_h.sort_values(by='Signal_Date_ISO', ascending=False)
             
-            # --- 1. HISTORICAL ANALYSIS & RECOMMENDATION ---
-            st.markdown("### 📊 Historical Analysis & Recommendation")
+            # --- DOWNLOAD BUTTON FOR SINGLE TICKER HISTORY ---
+            csv_export_h = res_df_h.rename(columns={"Signal_Date_ISO": "Day2", "P1_Date_ISO": "Day1"})
+            csv_export_h["Type"] = csv_export_h["Timeframe"] + " " + csv_export_h["Type"]
             
-            # Calculate aggregates for Daily Bullish (most common usage)
-            stats_subset = res_df_h[(res_df_h['Type'] == 'Bullish') & (res_df_h['Timeframe'] == 'Daily')].copy()
+            # Use same sort/filling logic as Scanner
+            d_p_cols = [c for c in csv_export_h.columns if c.startswith("Daily_Price")]
+            w_p_cols = [c for c in csv_export_h.columns if c.startswith("Weekly_Price")]
+            d_v_cols = [c for c in csv_export_h.columns if c.startswith("Daily_Vol")]
+            w_v_cols = [c for c in csv_export_h.columns if c.startswith("Weekly_Vol")]
+            for lst in [d_p_cols, w_p_cols, d_v_cols, w_v_cols]:
+                try: lst.sort(key=lambda x: int(x.split('_')[-1]))
+                except: lst.sort()
             
-            if not stats_subset.empty:
-                periods_to_analyze = [c for c in stats_subset.columns if c.startswith("Ret_")]
-                best_ev = -999
-                best_p_str = "N/A"
+            final_cols_h = d_p_cols + w_p_cols + d_v_cols + w_v_cols
+            for c in final_cols_h:
+                if c not in csv_export_h.columns: csv_export_h[c] = "n/a"
+                else: csv_export_h[c] = csv_export_h[c].fillna("n/a")
                 
-                analysis_cols = st.columns(len(periods_to_analyze) + 1 if periods_to_analyze else 1)
-                with analysis_cols[0]:
-                    st.markdown(f"**Found {len(stats_subset)} Daily Bullish Signals**")
-                
-                for i, p_col in enumerate(periods_to_analyze):
-                    days = p_col.split('_')[1]
-                    avg_ret = stats_subset[p_col].mean()
-                    win_rate = (stats_subset[p_col] > 0).mean() * 100
-                    ev = avg_ret # Simple EV for recommendation text
-                    
-                    if ev > best_ev:
-                        best_ev = ev
-                        best_p_str = f"{days} Days"
-                    
-                    with analysis_cols[i+1]:
-                        st.metric(f"{days}d Forward", f"{avg_ret:+.1f}%", f"{win_rate:.0f}% WR")
-                
-                # Simple Recommendation Logic
-                rec_text = "Data inconclusive."
-                if best_ev > 1.0:
-                    rec_text = f"✅ **Favorable**. Daily Bullish Divergences have historically yielded positive returns, performing best over a **{best_p_str}** hold."
-                elif best_ev > 0:
-                    rec_text = f"⚠️ **Weak**. Signals are marginally profitable but lack strong edge."
-                else:
-                    rec_text = f"🛑 **Unfavorable**. Historical signals have averaged negative returns."
-                
-                st.markdown(f"> **Recommendation**: {rec_text}")
-            else:
-                st.info("No Daily Bullish signals found to analyze.")
+            base_cols = ["Type", "Ticker", "Day1", "Day2", "RSI1", "RSI2", "Price1", "Price2", "Day1_Volume", "Day2_Volume"]
+            valid_export_cols = [c for c in base_cols + final_cols_h if c in csv_export_h.columns]
+            
+            csv_data_h = csv_export_h[valid_export_cols].to_csv(index=False).encode('utf-8')
+            st.download_button(f"📥 Download History ({hist_ticker_in})", data=csv_data_h, file_name=f"rsi_div_history_{hist_ticker_in}.csv", mime="text/csv")
 
             st.divider()
 
             # --- 2. DETAILED TABLES ---
             for tf in ['Daily', 'Weekly']:
                 p_cols_to_show = []
-                # Identify which return columns belong to this timeframe's input
                 current_periods = parse_periods(h_per_days if tf == 'Daily' else h_per_weeks)
                 for p in current_periods:
                     col_key = f"Ret_{p}"
@@ -1268,7 +1269,6 @@ def run_rsi_scanner_app(df_global):
                     tbl_df = res_df_h[(res_df_h['Type']==s_type) & (res_df_h['Timeframe']==tf)].copy()
                     
                     if not tbl_df.empty:
-                        # Color returns
                         def style_ret(df_in):
                             def highlight_val(val):
                                 if pd.isna(val): return ''
@@ -1280,20 +1280,19 @@ def run_rsi_scanner_app(df_global):
                                 style_obj = style_obj.map(highlight_val, subset=[p_c])
                             return style_obj
 
-                        # Dynamic Column Config
                         cfg = {
-                            "Date_Display": st.column_config.TextColumn("Date"),
+                            "P1_Date_ISO": st.column_config.TextColumn("Date 1", width="medium"),
+                            "Signal_Date_ISO": st.column_config.TextColumn("Date 2", width="medium"),
                             "RSI1": st.column_config.NumberColumn("RSI 1", format="%.0f"),
                             "RSI2": st.column_config.NumberColumn("RSI 2", format="%.0f"),
                             "Price1": st.column_config.NumberColumn("Price 1", format="$%.2f"),
                             "Price2": st.column_config.NumberColumn("Price 2", format="$%.2f"),
                         }
-                        # Add config for return columns
                         for p_c in p_cols_to_show:
                             days = p_c.split('_')[1]
                             cfg[p_c] = st.column_config.NumberColumn(f"{days}{'d' if tf=='Daily' else 'w'} %", format="%+.2f%%")
                         
-                        cols_base = ["Date_Display", "RSI1", "RSI2", "Price1", "Price2"]
+                        cols_base = ["P1_Date_ISO", "Signal_Date_ISO", "RSI1", "RSI2", "Price1", "Price2"]
                         final_cols = cols_base + p_cols_to_show
 
                         st.dataframe(
