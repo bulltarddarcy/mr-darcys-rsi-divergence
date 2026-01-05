@@ -1840,32 +1840,31 @@ def run_database_app(df):
     with ot3: inc_pb = st.checkbox("Puts Bought", value=st.session_state.saved_db_inc_pb, key="db_inc_pb", on_change=save_db_state, args=("db_inc_pb", "saved_db_inc_pb"))
     
     with ot_dates:
-        # Use a nested column structure to hold the buttons tightly
-        # Just creating a small visual gap from the checkboxes
+        # Spacer to align buttons visually with checkboxes
         st.write("") 
         d_btn1, d_btn2, d_btn3, d_btn4, d_btn5 = st.columns(5)
         
+        # Logic: From Today, Only Change Start Date
         today = date.today()
         
-        def set_date_range(s, e):
-            st.session_state.saved_db_start = s
-            st.session_state.saved_db_end = e
+        def set_start_date(new_start):
+            st.session_state.saved_db_start = new_start
             st.rerun()
 
         if d_btn1.button("MTD", use_container_width=True, help="Month to Date"):
-            set_date_range(today.replace(day=1), today)
+            set_start_date(today.replace(day=1))
             
         if d_btn2.button("YTD", use_container_width=True, help="Year to Date"):
-            set_date_range(today.replace(month=1, day=1), today)
+            set_start_date(today.replace(month=1, day=1))
             
         if d_btn3.button("L30D", use_container_width=True, help="Last 30 Days"):
-            set_date_range(today - timedelta(days=30), today)
+            set_start_date(today - timedelta(days=30))
             
         if d_btn4.button("L60D", use_container_width=True, help="Last 60 Days"):
-            set_date_range(today - timedelta(days=60), today)
+            set_start_date(today - timedelta(days=60))
             
         if d_btn5.button("L90D", use_container_width=True, help="Last 90 Days"):
-            set_date_range(today - timedelta(days=90), today)
+            set_start_date(today - timedelta(days=90))
 
     # --- FILTERING LOGIC ---
     f = df.copy()
