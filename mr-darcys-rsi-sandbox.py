@@ -842,7 +842,6 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0, periods_input=None, opti
             p1_idx_rel = np.argmin(lb_rsi)
             p1_rsi = lb_rsi[p1_idx_rel]
             
-            # UPDATED LOGIC: Use dynamic rsi_diff_threshold
             if p2_rsi > (p1_rsi + rsi_diff_threshold):
                 idx_p1_abs = lb_start + p1_idx_rel
                 subset_rsi = rsi_vals[idx_p1_abs : i + 1]
@@ -865,7 +864,6 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0, periods_input=None, opti
             p1_idx_rel = np.argmax(lb_rsi)
             p1_rsi = lb_rsi[p1_idx_rel]
             
-            # UPDATED LOGIC: Use dynamic rsi_diff_threshold
             if p2_rsi < (p1_rsi - rsi_diff_threshold):
                 idx_p1_abs = lb_start + p1_idx_rel
                 subset_rsi = rsi_vals[idx_p1_abs : i + 1]
@@ -963,12 +961,8 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0, periods_input=None, opti
         if periods_input is not None:
             for p in periods_input:
                 future_idx = i + p
-                
-                # 1. For CSV Download (Raw Prices)
                 col_price = f"{prefix}_Price_After_{p}"
                 col_vol = f"{prefix}_Volume_After_{p}"
-                
-                # 2. For History Tab Display (Percentage Return)
                 col_ret = f"Ret_{p}"
                 
                 if future_idx < n_rows:
@@ -976,8 +970,8 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0, periods_input=None, opti
                     div_obj[col_price] = f_price
                     div_obj[col_vol] = vol_vals[future_idx]
                     
-                    # Calculate % Return
                     entry = close_vals[i]
+                    # Logic: Long return for Bullish, Short return for Bearish
                     if s_type == 'Bullish':
                         ret_pct = (f_price - entry) / entry
                     else:
@@ -1033,7 +1027,8 @@ def run_rsi_scanner_app(df_global):
     CSV_PERIODS_DAYS = [5, 21, 63, 126, 252]
     CSV_PERIODS_WEEKS = [4, 13, 26, 52]
 
-    tab_div, tab_hist, tab_pct, tab_bot = st.tabs(["📉 Divergences Tracker", "📉 Divergeces History", "🔢 Percentiles (WIP)", "🤖 RSI Only Backtester"])
+    # --- UPDATED TAB NAMES ---
+    tab_div, tab_hist, tab_pct, tab_bot = st.tabs(["📉 Divergences", "📉 Divergences History", "🔢 Percentiles", "🤖 RSI Backtester"])
 
     # --------------------------------------------------------------------------
     # TAB 1: DIVERGENCES (SCANNER)
@@ -1041,12 +1036,31 @@ def run_rsi_scanner_app(df_global):
     with tab_div:
         data_option_div = st.pills("Dataset", options=options, selection_mode="single", default=options[0] if options else None, label_visibility="collapsed", key="rsi_div_pills")
         
-        with st.expander("ℹ️ Page Notes: Divergence Strategy Logic"):
-            st.markdown("""
-            * **Signal**: Bullish (Lower Low Price / Higher Low RSI) or Bearish (Higher High Price / Lower High RSI).
-            * **Validation**: "Strict 50-Cross" invalidates signals if RSI crosses 50 between pivots.
-            * **Display**: Shows tickers with confirmed divergence signals within the "Days Since Signal" window.
-            """)
+        with st.expander("ℹ️ Page User Guide"):
+            c_guide1, c_guide2 = st.columns(2)
+            with c_guide1:
+                st.markdown("#### ⚙️ Settings & Inputs")
+                st.markdown("""
+                * **Dataset**: Selects the universe of stocks to scan (e.g., SP500, NASDAQ).
+                * **Days Since Signal**: Filters the view to show only signals that were confirmed within this number of past trading days.
+                * **Min RSI Delta**: The minimum required difference between the two RSI pivot points. (e.g., A value of 2 means RSI must rise from 30 to at least 32).
+                * **Max Candle Between Pivots**: The maximum allowed distance (in trading bars) between the first pivot and the second pivot.
+                * **Strict 50-Cross Invalidation**: If set to "Yes", a signal is considered invalid if the RSI line crossed the 50 centerline at any point between the two pivots (suggesting a trend reset).
+                * **Candle Price Methodology**: Defines which price data to use for divergence detection. "High/Low" uses candle wicks (standard), "Close" uses candle bodies.
+                """)
+            with c_guide2:
+                st.markdown("#### 📊 Table Columns")
+                st.markdown("""
+                * **Ticker**: The stock symbol.
+                * **Tags**: 
+                    * `EMA8`/`EMA21`: Current price is above/below these moving averages.
+                    * `V_HI`: Signal candle volume is >1.5x the 30-day average.
+                    * `V_GROW`: Volume on the second pivot was higher than the first.
+                * **Day Δ / Week Δ**: The date the second pivot (the signal) was confirmed.
+                * **RSI Δ**: The RSI value at the first pivot compared to the second pivot.
+                * **Price Δ**: The price at the first pivot compared to the second pivot (Low vs Low for Bullish, High vs High for Bearish).
+                * **Last Close**: The most recent available closing price for context.
+                """)
         
         if data_option_div:
             try:
@@ -1054,7 +1068,6 @@ def run_rsi_scanner_app(df_global):
                 master = load_parquet_and_clean(key)
                 
                 if master is not None and not master.empty:
-                    # Calculate Highlighting Targets based on Dataset MAX dates
                     target_highlight_daily = None
                     target_highlight_weekly = None
                     
@@ -1073,7 +1086,6 @@ def run_rsi_scanner_app(df_global):
                         st.write(", ".join(all_tickers[:100]) + ("..." if len(all_tickers) > 100 else ""))
                     
                     # --- STREAMLINED INPUTS ---
-                    # Added 'Min RSI Delta' to c_d2
                     c_d1, c_d2, c_d3, c_d4, c_d5 = st.columns(5)
                     
                     with c_d1:
@@ -1100,7 +1112,6 @@ def run_rsi_scanner_app(df_global):
                     
                     for i, (ticker, group) in enumerate(grouped_list):
                         d_d, d_w = prepare_data(group.copy())
-                        
                         if d_d is not None: 
                             raw_results_div.extend(find_divergences(d_d, ticker, 'Daily', min_n=0, periods_input=CSV_PERIODS_DAYS, optimize_for='PF', lookback_period=div_lookback, price_source=div_source, strict_validation=strict_div, recent_days_filter=days_since, rsi_diff_threshold=div_diff))
                         if d_w is not None: 
@@ -1112,7 +1123,7 @@ def run_rsi_scanner_app(df_global):
                     if raw_results_div:
                         df_all_results = pd.DataFrame(raw_results_div)
                         
-                        # --- DOWNLOAD BUTTON (RAW ONLY) ---
+                        # --- DOWNLOAD BUTTON ---
                         csv_export_df = df_all_results.rename(columns={"Signal_Date_ISO": "Day2", "P1_Date_ISO": "Day1"})
                         csv_export_df["Type"] = csv_export_df["Timeframe"] + " " + csv_export_df["Type"]
                         file_label = data_option_div.replace(" ", "_") if data_option_div else "dataset"
@@ -1196,7 +1207,6 @@ def run_rsi_scanner_app(df_global):
     # TAB 2: DIV HISTORY (SINGLE TICKER + ANALYSIS)
     # --------------------------------------------------------------------------
     with tab_hist:
-        # Added 7th column for Min RSI Delta here too for consistency/testing
         c_h1, c_h2, c_h3, c_h4, c_h5, c_h6, c_h7 = st.columns(7)
         
         with c_h1:
@@ -1284,8 +1294,136 @@ def run_rsi_scanner_app(df_global):
             
             csv_data_h = csv_export_h[valid_export_cols].to_csv(index=False).encode('utf-8')
             st.download_button(f"📥 Download History ({hist_ticker_in})", data=csv_data_h, file_name=f"rsi_div_history_{hist_ticker_in}.csv", mime="text/csv")
-
+            
             st.divider()
+
+            # --- ANALYSIS LOGIC (Chains & Optimization) ---
+            def analyze_chains(df_sub):
+                if df_sub.empty: return None
+                
+                # 1. Group by P1_Date (The Start of the Divergence Formation)
+                # Grouping by P1 represents the "Event" regardless of how many times it triggered
+                chains = []
+                for p1_date, group in df_sub.groupby('P1_Date_ISO'):
+                    group = group.sort_values('Signal_Date_ISO') # Sort chronologically
+                    
+                    first_sig = group.iloc[0]
+                    
+                    # Determine Best Entry in the Chain
+                    # Bullish = Minimum Price2 (Bottom), Bearish = Maximum Price2 (Top)
+                    is_bullish = first_sig['Type'] == 'Bullish'
+                    
+                    if is_bullish:
+                        best_entry_idx = group['Price2'].idxmin()
+                        worst_entry_idx = group['Price2'].idxmax() # Usually the first one, but not always
+                    else:
+                        best_entry_idx = group['Price2'].idxmax()
+                        worst_entry_idx = group['Price2'].idxmin()
+
+                    best_sig = group.loc[best_entry_idx]
+                    
+                    # Metrics for this specific chain
+                    duration = (pd.to_datetime(group['Signal_Date_ISO'].max()) - pd.to_datetime(group['Signal_Date_ISO'].min())).days
+                    price_drawdown = abs(first_sig['Price2'] - best_sig['Price2'])
+                    
+                    # Forward Returns of the BEST entry
+                    ret_cols = [c for c in group.columns if c.startswith('Ret_')]
+                    best_rets = {c: best_sig[c] for c in ret_cols}
+                    
+                    chains.append({
+                        'P1': p1_date,
+                        'Duration': duration,
+                        'Drawdown_Avoided': price_drawdown,
+                        'RSI_Gap_Best': abs(best_sig['RSI2'] - best_sig['RSI1']),
+                        'RSI_Gap_First': abs(first_sig['RSI2'] - first_sig['RSI1']),
+                        **best_rets
+                    })
+                
+                return pd.DataFrame(chains)
+
+            # --- DISPLAY ANALYSIS ---
+            st.markdown("### 🧠 Divergence Chain Analysis")
+            st.caption("A 'Chain' groups multiple signals stemming from the same Pivot 1 date into a single event to analyze how long divergences typically 'play out'.")
+            
+            c_a1, c_a2 = st.columns(2)
+            
+            # Daily Bullish Analysis
+            with c_a1:
+                st.markdown("#### 🟢 Daily Bullish Chains")
+                df_bull = res_df_h[(res_df_h['Type']=='Bullish') & (res_df_h['Timeframe']=='Daily')]
+                chains_bull = analyze_chains(df_bull)
+                
+                if chains_bull is not None and not chains_bull.empty:
+                    avg_dur = chains_bull['Duration'].mean()
+                    count = len(chains_bull)
+                    
+                    # Optimal Hold (Max Avg Return among periods)
+                    ret_cols = [c for c in chains_bull.columns if c.startswith('Ret_')]
+                    if ret_cols:
+                        avg_rets = chains_bull[ret_cols].mean()
+                        best_period = avg_rets.idxmax().replace('Ret_', '')
+                        best_val = avg_rets.max()
+                    else:
+                        best_period, best_val = "N/A", 0
+
+                    st.markdown(f"""
+                    * **Events Found**: {count} (merged from {len(df_bull)} signals)
+                    * **Avg Time to Bottom**: {avg_dur:.1f} days
+                    * **Optimal Hold**: {best_period} days (Avg +{best_val:.1f}%)
+                    """)
+                    
+                    # Entry Optimization Hint
+                    avg_rsi_gap_first = chains_bull['RSI_Gap_First'].mean()
+                    avg_rsi_gap_best = chains_bull['RSI_Gap_Best'].mean()
+                    
+                    if avg_rsi_gap_best > avg_rsi_gap_first + 1.0:
+                        st.info(f"💡 **Tip**: Patience pays. The optimal entry typically occurred when the RSI Gap widened to **{avg_rsi_gap_best:.1f}** (vs {avg_rsi_gap_first:.1f} initially).")
+                    else:
+                        st.info(f"💡 **Tip**: Early entry is often decent. The RSI gap at the absolute bottom ({avg_rsi_gap_best:.1f}) wasn't significantly different from the first signal.")
+
+                else:
+                    st.write("No Bullish Daily data.")
+
+            # Daily Bearish Analysis
+            with c_a2:
+                st.markdown("#### 🔴 Daily Bearish Chains")
+                df_bear = res_df_h[(res_df_h['Type']=='Bearish') & (res_df_h['Timeframe']=='Daily')]
+                chains_bear = analyze_chains(df_bear)
+                
+                if chains_bear is not None and not chains_bear.empty:
+                    avg_dur = chains_bear['Duration'].mean()
+                    count = len(chains_bear)
+                    
+                    ret_cols = [c for c in chains_bear.columns if c.startswith('Ret_')]
+                    if ret_cols:
+                        avg_rets = chains_bear[ret_cols].mean()
+                        best_period = avg_rets.idxmax().replace('Ret_', '')
+                        best_val = avg_rets.max() # Bearish returns are positive if shorting worked
+                    else:
+                        best_period, best_val = "N/A", 0
+
+                    st.markdown(f"""
+                    * **Events Found**: {count} (merged from {len(df_bear)} signals)
+                    * **Avg Time to Top**: {avg_dur:.1f} days
+                    * **Optimal Hold**: {best_period} days (Avg +{best_val:.1f}%)
+                    """)
+                    
+                    avg_rsi_gap_first = chains_bear['RSI_Gap_First'].mean()
+                    avg_rsi_gap_best = chains_bear['RSI_Gap_Best'].mean()
+                    
+                    if avg_rsi_gap_best > avg_rsi_gap_first + 1.0:
+                        st.info(f"💡 **Tip**: Patience pays. Wait for RSI Gap to widen to **{avg_rsi_gap_best:.1f}**.")
+                    else:
+                        st.info(f"💡 **Tip**: Early entry is efficient. Avg RSI Gap at peak: **{avg_rsi_gap_best:.1f}**.")
+                else:
+                    st.write("No Bearish Daily data.")
+            
+            st.divider()
+
+            # --- FILTER TO 10 YEARS FOR TABLE DISPLAY ---
+            # We calculated on full history for the analysis above, but user only wants to see 10y in table
+            cutoff_date_10y = (datetime.today() - timedelta(days=365*10)).strftime('%Y-%m-%d')
+            res_df_h_display = res_df_h[res_df_h['Signal_Date_ISO'] > cutoff_date_10y].copy()
 
             # --- DETAILED TABLES ---
             for tf in ['Daily', 'Weekly']:
@@ -1293,11 +1431,11 @@ def run_rsi_scanner_app(df_global):
                 current_periods = parse_periods(h_per_days if tf == 'Daily' else h_per_weeks)
                 for p in current_periods:
                     col_key = f"Ret_{p}"
-                    if col_key in res_df_h.columns: p_cols_to_show.append(col_key)
+                    if col_key in res_df_h_display.columns: p_cols_to_show.append(col_key)
 
                 for s_type, emoji in [('Bullish', '🟢'), ('Bearish', '🔴')]:
-                    st.subheader(f"{emoji} {tf} {s_type} History")
-                    tbl_df = res_df_h[(res_df_h['Type']==s_type) & (res_df_h['Timeframe']==tf)].copy()
+                    st.subheader(f"{emoji} {tf} {s_type} History (Last 10 Years)")
+                    tbl_df = res_df_h_display[(res_df_h_display['Type']==s_type) & (res_df_h_display['Timeframe']==tf)].copy()
                     
                     if not tbl_df.empty:
                         def style_ret(df_in):
