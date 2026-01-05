@@ -1028,7 +1028,7 @@ def run_rsi_scanner_app(df_global):
     CSV_PERIODS_WEEKS = [4, 13, 26, 52]
 
     # --- TAB NAMES ---
-    tab_div, tab_hist, tab_pct, tab_bot = st.tabs(["📉 Divergences", "📉 Divergences History", "🔢 Percentiles", "🤖 RSI Backtester"])
+    tab_div, tab_hist, tab_pct, tab_bot = st.tabs(["📉 Divergences", "📉 Divergences History", "🔢 Percentiles (WIP)", "🤖 RSI Backtester"])
 
     # --------------------------------------------------------------------------
     # TAB 1: DIVERGENCES (SCANNER)
@@ -1208,6 +1208,26 @@ def run_rsi_scanner_app(df_global):
     # TAB 2: DIV HISTORY (SINGLE TICKER + ANALYSIS)
     # --------------------------------------------------------------------------
     with tab_hist:
+        
+        with st.expander("ℹ️ Page User Guide"):
+            c_g1, c_g2 = st.columns(2)
+            with c_g1:
+                st.markdown("#### 🧠 Analysis Logic")
+                st.markdown("""
+                * **Chains vs Single Signals**: Divergences often trigger multiple times in a row as price continues to grind lower (bullish) or higher (bearish). This tool groups these consecutive signals into a single "Chain" or "Event" originating from the same starting pivot (Date 1).
+                * **Best Entry Detection**: The analysis compares the first signal in a chain vs the signal that marked the absolute bottom (or top).
+                * **Smart Tips**: Based on historical behavior for *this specific stock*, the tool suggests whether you should buy on the first signal, wait for higher volume, or wait for a wider RSI gap.
+                """)
+            with c_g2:
+                st.markdown("#### 📊 Table Columns")
+                st.markdown("""
+                * **Date 1**: The date of the first pivot point (the setup).
+                * **Date 2**: The date of the second pivot point (the trigger).
+                * **RSI 1 / RSI 2**: RSI values at the two pivot points.
+                * **Price 1 / Price 2**: Price at the two pivot points.
+                * **5d % / 21d % etc**: Percentage return if you held the trade for X days/weeks after the signal date.
+                """)
+
         c_h1, c_h2, c_h3, c_h4, c_h5, c_h6, c_h7 = st.columns(7)
         
         with c_h1:
@@ -1372,12 +1392,18 @@ def run_rsi_scanner_app(df_global):
                             
                             # Optimal Hold
                             ret_cols = [c for c in chains.columns if c.startswith('Ret_')]
+                            
                             if ret_cols:
                                 avg_rets = chains[ret_cols].mean()
-                                best_period = avg_rets.idxmax().replace('Ret_', '')
-                                best_val = avg_rets.max()
+                                # FIX: Check for Valid Index before replacing string
+                                best_idx = avg_rets.idxmax()
+                                if pd.notna(best_idx):
+                                    best_period = str(best_idx).replace('Ret_', '')
+                                    best_val = avg_rets.max()
+                                else:
+                                    best_period, best_val = "N/A", 0.0
                             else:
-                                best_period, best_val = "N/A", 0
+                                best_period, best_val = "N/A", 0.0
 
                             # Dynamic Tip Logic
                             chains_with_drawdown = chains[chains['Is_Chain']] 
@@ -1443,7 +1469,7 @@ def run_rsi_scanner_app(df_global):
                         st.caption("No signals found.")
     
     # --------------------------------------------------------------------------
-    # TAB 3: PERCENTILES
+    # TAB 3: PERCENTILES (WIP)
     # --------------------------------------------------------------------------
     with tab_pct:
         data_option_pct = st.pills("Dataset", options=options, selection_mode="single", default=options[0] if options else None, label_visibility="collapsed", key="rsi_pct_pills")
@@ -1513,12 +1539,12 @@ def run_rsi_scanner_app(df_global):
                 st.error(f"Error: {e}")
 
     # --------------------------------------------------------------------------
-    # TAB 4: BACKTESTER
+    # TAB 4: BACKTESTER (Restored Logic)
     # --------------------------------------------------------------------------
     with tab_bot:
         st.markdown('<div class="light-note" style="margin-bottom: 15px;">ℹ️ If this is buggy, just go back to the RSI Divergences tab and back here and it will work.</div>', unsafe_allow_html=True)
         
-        with st.expander("ℹ️ Page Notes: Backtester Logic"):
+        with st.expander("ℹ️ Page User Guide"):
             st.markdown("""
             * **Data Source**: Unlike the Divergences and Percentile tabs (which use limited ~10yr history files), this tab pulls **Complete Price History** via Yahoo Finance or the full Ticker Map file.
             * **Methodology**: Calculates forward returns for all historical periods matching the criteria.
