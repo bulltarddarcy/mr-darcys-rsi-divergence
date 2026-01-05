@@ -1027,7 +1027,7 @@ def run_rsi_scanner_app(df_global):
     CSV_PERIODS_DAYS = [5, 21, 63, 126, 252]
     CSV_PERIODS_WEEKS = [4, 13, 26, 52]
 
-    # --- UPDATED TAB NAMES ---
+    # --- TAB NAMES ---
     tab_div, tab_hist, tab_pct, tab_bot = st.tabs(["📉 Divergences", "📉 Divergences History", "🔢 Percentiles", "🤖 RSI Backtester"])
 
     # --------------------------------------------------------------------------
@@ -1112,6 +1112,7 @@ def run_rsi_scanner_app(df_global):
                     
                     for i, (ticker, group) in enumerate(grouped_list):
                         d_d, d_w = prepare_data(group.copy())
+                        
                         if d_d is not None: 
                             raw_results_div.extend(find_divergences(d_d, ticker, 'Daily', min_n=0, periods_input=CSV_PERIODS_DAYS, optimize_for='PF', lookback_period=div_lookback, price_source=div_source, strict_validation=strict_div, recent_days_filter=days_since, rsi_diff_threshold=div_diff))
                         if d_w is not None: 
@@ -1297,12 +1298,11 @@ def run_rsi_scanner_app(df_global):
             
             st.divider()
 
-            # --- ANALYSIS LOGIC (Chains & Optimization) ---
+            # --- ANALYSIS LOGIC (Chains & Optimization - UPDATED for Volume) ---
             def analyze_chains(df_sub):
                 if df_sub.empty: return None
                 
-                # 1. Group by P1_Date (The Start of the Divergence Formation)
-                # Grouping by P1 represents the "Event" regardless of how many times it triggered
+                # Group by P1_Date (The Start of the Divergence Chain)
                 chains = []
                 for p1_date, group in df_sub.groupby('P1_Date_ISO'):
                     group = group.sort_values('Signal_Date_ISO') # Sort chronologically
@@ -1315,13 +1315,18 @@ def run_rsi_scanner_app(df_global):
                     
                     if is_bullish:
                         best_entry_idx = group['Price2'].idxmin()
-                        worst_entry_idx = group['Price2'].idxmax() # Usually the first one, but not always
                     else:
                         best_entry_idx = group['Price2'].idxmax()
-                        worst_entry_idx = group['Price2'].idxmin()
 
                     best_sig = group.loc[best_entry_idx]
                     
+                    # Volume Analysis
+                    vol_first = first_sig.get('Day2_Volume', 0)
+                    vol_best = best_sig.get('Day2_Volume', 0)
+                    vol_confirmed = False
+                    if vol_best > vol_first:
+                         vol_confirmed = True
+
                     # Metrics for this specific chain
                     duration = (pd.to_datetime(group['Signal_Date_ISO'].max()) - pd.to_datetime(group['Signal_Date_ISO'].min())).days
                     price_drawdown = abs(first_sig['Price2'] - best_sig['Price2'])
@@ -1334,108 +1339,89 @@ def run_rsi_scanner_app(df_global):
                         'P1': p1_date,
                         'Duration': duration,
                         'Drawdown_Avoided': price_drawdown,
+                        'Is_Chain': len(group) > 1,
+                        'First_Is_Best': first_sig.name == best_sig.name,
                         'RSI_Gap_Best': abs(best_sig['RSI2'] - best_sig['RSI1']),
                         'RSI_Gap_First': abs(first_sig['RSI2'] - first_sig['RSI1']),
+                        'Vol_Confirmed': vol_confirmed,
                         **best_rets
                     })
                 
                 return pd.DataFrame(chains)
 
-            # --- DISPLAY ANALYSIS ---
-            st.markdown("### 🧠 Divergence Chain Analysis")
-            st.caption("A 'Chain' groups multiple signals stemming from the same Pivot 1 date into a single event to analyze how long divergences typically 'play out'.")
-            
-            c_a1, c_a2 = st.columns(2)
-            
-            # Daily Bullish Analysis
-            with c_a1:
-                st.markdown("#### 🟢 Daily Bullish Chains")
-                df_bull = res_df_h[(res_df_h['Type']=='Bullish') & (res_df_h['Timeframe']=='Daily')]
-                chains_bull = analyze_chains(df_bull)
+            def render_chain_card(title, df_subset):
+                st.markdown(f"#### {title}")
+                chains = analyze_chains(df_subset)
                 
-                if chains_bull is not None and not chains_bull.empty:
-                    avg_dur = chains_bull['Duration'].mean()
-                    count = len(chains_bull)
+                if chains is not None and not chains.empty:
+                    count = len(chains)
+                    avg_dur = chains['Duration'].mean()
                     
-                    # Optimal Hold (Max Avg Return among periods)
-                    ret_cols = [c for c in chains_bull.columns if c.startswith('Ret_')]
+                    # Optimal Hold
+                    ret_cols = [c for c in chains.columns if c.startswith('Ret_')]
                     if ret_cols:
-                        avg_rets = chains_bull[ret_cols].mean()
+                        avg_rets = chains[ret_cols].mean()
                         best_period = avg_rets.idxmax().replace('Ret_', '')
                         best_val = avg_rets.max()
                     else:
                         best_period, best_val = "N/A", 0
 
-                    st.markdown(f"""
-                    * **Events Found**: {count} (merged from {len(df_bull)} signals)
-                    * **Avg Time to Bottom**: {avg_dur:.1f} days
-                    * **Optimal Hold**: {best_period} days (Avg +{best_val:.1f}%)
-                    """)
-                    
-                    # Entry Optimization Hint
-                    avg_rsi_gap_first = chains_bull['RSI_Gap_First'].mean()
-                    avg_rsi_gap_best = chains_bull['RSI_Gap_Best'].mean()
-                    
-                    if avg_rsi_gap_best > avg_rsi_gap_first + 1.0:
-                        st.info(f"💡 **Tip**: Patience pays. The optimal entry typically occurred when the RSI Gap widened to **{avg_rsi_gap_best:.1f}** (vs {avg_rsi_gap_first:.1f} initially).")
+                    # Dynamic Tip Logic
+                    # 1. Did waiting for Volume help?
+                    chains_with_drawdown = chains[chains['Is_Chain']] # Only look at multi-signal events
+                    if not chains_with_drawdown.empty:
+                        vol_confirm_rate = (chains_with_drawdown['Vol_Confirmed'].sum() / len(chains_with_drawdown)) * 100
+                        avg_rsi_gap_first = chains_with_drawdown['RSI_Gap_First'].mean()
+                        avg_rsi_gap_best = chains_with_drawdown['RSI_Gap_Best'].mean()
+                        
+                        first_is_best_rate = (chains['First_Is_Best'].sum() / len(chains)) * 100
+                        
+                        tip_str = ""
+                        if first_is_best_rate > 60:
+                             tip_str = f"💡 **Tip**: Don't overthink it. The **First Signal** was the best entry {first_is_best_rate:.0f}% of the time."
+                        elif vol_confirm_rate > 60:
+                            tip_str = f"💡 **Tip**: Volume is key. The true bottom/top was accompanied by **Higher Volume** than the initial signal {vol_confirm_rate:.0f}% of the time."
+                        elif avg_rsi_gap_best > avg_rsi_gap_first + 1.5:
+                             tip_str = f"💡 **Tip**: Patience pays. Wait for the RSI Gap to widen. (Avg Best Gap: **{avg_rsi_gap_best:.1f}** vs Initial: {avg_rsi_gap_first:.1f})"
+                        else:
+                             tip_str = f"💡 **Tip**: Complex action. Chains last avg **{avg_dur:.1f} days**. Consider scaling in."
                     else:
-                        st.info(f"💡 **Tip**: Early entry is often decent. The RSI gap at the absolute bottom ({avg_rsi_gap_best:.1f}) wasn't significantly different from the first signal.")
-
-                else:
-                    st.write("No Bullish Daily data.")
-
-            # Daily Bearish Analysis
-            with c_a2:
-                st.markdown("#### 🔴 Daily Bearish Chains")
-                df_bear = res_df_h[(res_df_h['Type']=='Bearish') & (res_df_h['Timeframe']=='Daily')]
-                chains_bear = analyze_chains(df_bear)
-                
-                if chains_bear is not None and not chains_bear.empty:
-                    avg_dur = chains_bear['Duration'].mean()
-                    count = len(chains_bear)
-                    
-                    ret_cols = [c for c in chains_bear.columns if c.startswith('Ret_')]
-                    if ret_cols:
-                        avg_rets = chains_bear[ret_cols].mean()
-                        best_period = avg_rets.idxmax().replace('Ret_', '')
-                        best_val = avg_rets.max() # Bearish returns are positive if shorting worked
-                    else:
-                        best_period, best_val = "N/A", 0
+                        tip_str = "💡 **Tip**: Signals tend to be singular events (not chains) for this timeframe."
 
                     st.markdown(f"""
-                    * **Events Found**: {count} (merged from {len(df_bear)} signals)
-                    * **Avg Time to Top**: {avg_dur:.1f} days
+                    * **Events**: {count} (merged from {len(df_subset)} signals)
+                    * **Avg Duration**: {avg_dur:.1f} days
                     * **Optimal Hold**: {best_period} days (Avg +{best_val:.1f}%)
                     """)
-                    
-                    avg_rsi_gap_first = chains_bear['RSI_Gap_First'].mean()
-                    avg_rsi_gap_best = chains_bear['RSI_Gap_Best'].mean()
-                    
-                    if avg_rsi_gap_best > avg_rsi_gap_first + 1.0:
-                        st.info(f"💡 **Tip**: Patience pays. Wait for RSI Gap to widen to **{avg_rsi_gap_best:.1f}**.")
-                    else:
-                        st.info(f"💡 **Tip**: Early entry is efficient. Avg RSI Gap at peak: **{avg_rsi_gap_best:.1f}**.")
+                    st.info(tip_str)
                 else:
-                    st.write("No Bearish Daily data.")
+                    st.write("No data found.")
+
+            # --- DISPLAY ANALYSIS (2x2 Grid) ---
+            st.markdown("### 🧠 Divergence Chain Analysis")
+            st.caption("Analyzes whether divergence events occur in clusters ('chains') and identifies the characteristics of the optimal entry point (Price/RSI/Volume).")
             
+            row1_1, row1_2 = st.columns(2)
+            with row1_1: render_chain_card("🟢 Daily Bullish", res_df_h[(res_df_h['Type']=='Bullish') & (res_df_h['Timeframe']=='Daily')])
+            with row1_2: render_chain_card("🔴 Daily Bearish", res_df_h[(res_df_h['Type']=='Bearish') & (res_df_h['Timeframe']=='Daily')])
+            
+            row2_1, row2_2 = st.columns(2)
+            with row2_1: render_chain_card("🟢 Weekly Bullish", res_df_h[(res_df_h['Type']=='Bullish') & (res_df_h['Timeframe']=='Weekly')])
+            with row2_2: render_chain_card("🔴 Weekly Bearish", res_df_h[(res_df_h['Type']=='Bearish') & (res_df_h['Timeframe']=='Weekly')])
+
             st.divider()
 
-            # --- FILTER TO 10 YEARS FOR TABLE DISPLAY ---
-            # We calculated on full history for the analysis above, but user only wants to see 10y in table
-            cutoff_date_10y = (datetime.today() - timedelta(days=365*10)).strftime('%Y-%m-%d')
-            res_df_h_display = res_df_h[res_df_h['Signal_Date_ISO'] > cutoff_date_10y].copy()
-
-            # --- DETAILED TABLES ---
+            # --- DETAILED TABLES (Lifetime, 50 rows) ---
             for tf in ['Daily', 'Weekly']:
                 p_cols_to_show = []
                 current_periods = parse_periods(h_per_days if tf == 'Daily' else h_per_weeks)
                 for p in current_periods:
                     col_key = f"Ret_{p}"
-                    if col_key in res_df_h_display.columns: p_cols_to_show.append(col_key)
+                    if col_key in res_df_h.columns: p_cols_to_show.append(col_key)
 
                 for s_type, emoji in [('Bullish', '🟢'), ('Bearish', '🔴')]:
-                    st.subheader(f"{emoji} {tf} {s_type} History (Last 10 Years)")
-                    tbl_df = res_df_h_display[(res_df_h_display['Type']==s_type) & (res_df_h_display['Timeframe']==tf)].copy()
+                    st.subheader(f"{emoji} {tf} {s_type} History (Lifetime)")
+                    tbl_df = res_df_h[(res_df_h['Type']==s_type) & (res_df_h['Timeframe']==tf)].copy()
                     
                     if not tbl_df.empty:
                         def style_ret(df_in):
@@ -1464,18 +1450,19 @@ def run_rsi_scanner_app(df_global):
                         cols_base = ["P1_Date_ISO", "Signal_Date_ISO", "RSI1", "RSI2", "Price1", "Price2"]
                         final_cols = cols_base + p_cols_to_show
 
+                        # Height Calculation: Show ~50 rows
                         st.dataframe(
                             style_ret(tbl_df[final_cols]),
                             column_config=cfg,
                             hide_index=True,
                             use_container_width=True,
-                            height=(min(len(tbl_df), 100) + 1) * 35 
+                            height=(min(len(tbl_df), 50) + 1) * 35 
                         )
                     else:
                         st.caption("No signals found.")
     
     # --------------------------------------------------------------------------
-    # TAB 3: PERCENTILES (Restored Logic)
+    # TAB 3: PERCENTILES
     # --------------------------------------------------------------------------
     with tab_pct:
         data_option_pct = st.pills("Dataset", options=options, selection_mode="single", default=options[0] if options else None, label_visibility="collapsed", key="rsi_pct_pills")
@@ -1545,7 +1532,7 @@ def run_rsi_scanner_app(df_global):
                 st.error(f"Error: {e}")
 
     # --------------------------------------------------------------------------
-    # TAB 4: BACKTESTER (Restored Logic)
+    # TAB 4: BACKTESTER
     # --------------------------------------------------------------------------
     with tab_bot:
         st.markdown('<div class="light-note" style="margin-bottom: 15px;">ℹ️ If this is buggy, just go back to the RSI Divergences tab and back here and it will work.</div>', unsafe_allow_html=True)
