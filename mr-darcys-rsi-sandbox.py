@@ -361,44 +361,63 @@ def get_gdrive_binary_data(url):
         st.error(f"Download Error: {e}")
         return None
 
-@st.cache_data(ttl=900)
-def load_parquet_and_clean(url_key):
-    url = st.secrets.get(url_key)
-    if not url: return None
+@st.cache_data(ttl=3600, show_spinner="Loading Dataset...")
+def load_parquet_and_clean(key):
+    # This function fixes the "Magic Bytes" error by falling back to CSV if Parquet fails
+    if key not in st.secrets["DATA_KEYS_PARQUET"]:
+        st.error(f"Key {key} not found in secrets.")
+        return None
+        
+    url = st.secrets["DATA_KEYS_PARQUET"][key]
     
     try:
-        buffer = get_gdrive_binary_data(url)
-        if not buffer: return None
-        
-        df = pd.read_parquet(buffer, engine='pyarrow')
-        
-        rename_map = {
-            "RSI14": "RSI",
-            "W_RSI14": "W_RSI",
-            "W_EMA8": "W_EMA8",
-            "W_EMA21": "W_EMA21",
-            "EMA8": "EMA8",
-            "EMA21": "EMA21"
-        }
-        
-        actual_rename = {k: v for k, v in rename_map.items() if k in df.columns}
-        df.rename(columns=actual_rename, inplace=True)
-        
-        for col in df.columns:
-            c_up = col.upper()
-            if any(x in c_up for x in ['CLOSE', 'HIGH', 'LOW', 'OPEN', 'VOL', 'RSI', 'EMA', 'SMA']):
-                try:
-                    df[col] = df[col].astype('float64')
-                except Exception:
-                    pass
-        
-        date_cols = [c for c in df.columns if "DATE" in c.upper()]
-        if date_cols:
-            df[date_cols[0]] = pd.to_datetime(df[date_cols[0]])
+        if "drive.google.com" in url:
+            file_id = url.split('/')[-2]
+            d_url = f'https://drive.google.com/uc?id={file_id}'
+            resp = requests.get(d_url)
+        else:
+            resp = requests.get(url)
             
+        if resp.status_code != 200:
+            st.error(f"Failed to fetch data: {resp.status_code}")
+            return None
+            
+        # Try Parquet First
+        try:
+            df = pd.read_parquet(BytesIO(resp.content))
+        except Exception:
+            # Fallback: The file might be a CSV despite the key name
+            try:
+                df = pd.read_csv(BytesIO(resp.content))
+            except Exception as e:
+                st.error(f"Error loading {key}: Could not read as Parquet OR CSV. ({e})")
+                return None
+
+        # Standard Cleaning
+        df.columns = [c.strip() for c in df.columns]
+        
+        # Standardize Date Column
+        date_col = next((c for c in df.columns if 'DATE' in c.upper()), None)
+        if date_col:
+            df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
+            df = df.rename(columns={date_col: 'ChartDate'}).sort_values('ChartDate')
+            
+        # Standardize Price/Volume
+        if 'Close' not in df.columns and 'Price' in df.columns:
+            df = df.rename(columns={'Price': 'Close'})
+        if 'Close' in df.columns and 'Price' not in df.columns:
+            df['Price'] = df['Close']
+            
+        # Ensure Numeric
+        cols_to_numeric = ['Price', 'High', 'Low', 'Open', 'Volume', 'RSI', 'EMA8', 'EMA21', 'VolSMA']
+        for c in cols_to_numeric:
+            if c in df.columns:
+                df[c] = pd.to_numeric(df[c], errors='coerce')
+
         return df
+        
     except Exception as e:
-        st.error(f"Error loading {url_key}: {e}")
+        st.error(f"Critical error loading {key}: {e}")
         return None
 
 @st.cache_data(ttl=3600)
@@ -767,7 +786,7 @@ def prepare_data(df):
         
     return df_d, df_w
 
-def find_divergences(df_tf, ticker, timeframe, min_n=0, periods_input=None, optimize_for='PF', lookback_period=90, price_source='High/Low', strict_validation=True, recent_days_filter=25):
+def find_divergences(df_tf, ticker, timeframe, min_n=0, periods_input=None, optimize_for='PF', lookback_period=90, price_source='High/Low', strict_validation=True, recent_days_filter=25, rsi_diff_threshold=2.0):
     divergences = []
     n_rows = len(df_tf)
     
@@ -822,7 +841,8 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0, periods_input=None, opti
             p1_idx_rel = np.argmin(lb_rsi)
             p1_rsi = lb_rsi[p1_idx_rel]
             
-            if p2_rsi > (p1_rsi + RSI_DIFF_THRESHOLD):
+            # UPDATED LOGIC: Use dynamic rsi_diff_threshold
+            if p2_rsi > (p1_rsi + rsi_diff_threshold):
                 idx_p1_abs = lb_start + p1_idx_rel
                 subset_rsi = rsi_vals[idx_p1_abs : i + 1]
                 
@@ -844,7 +864,8 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0, periods_input=None, opti
             p1_idx_rel = np.argmax(lb_rsi)
             p1_rsi = lb_rsi[p1_idx_rel]
             
-            if p2_rsi < (p1_rsi - RSI_DIFF_THRESHOLD):
+            # UPDATED LOGIC: Use dynamic rsi_diff_threshold
+            if p2_rsi < (p1_rsi - rsi_diff_threshold):
                 idx_p1_abs = lb_start + p1_idx_rel
                 subset_rsi = rsi_vals[idx_p1_abs : i + 1]
                 
@@ -864,7 +885,7 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0, periods_input=None, opti
     # PASS 3: REPORT & METRICS
     display_threshold_idx = n_rows - recent_days_filter
     
-    # Pre-calculate indices for stats (if needed)
+    # Pre-calculate indices for stats
     bullish_indices = [x['index'] for x in potential_signals if x['type'] == 'Bullish']
     bearish_indices = [x['index'] for x in potential_signals if x['type'] == 'Bearish']
 
@@ -918,13 +939,12 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0, periods_input=None, opti
         rsi_display = f"{int(round(rsi_p1))} {'↗' if rsi_p2 > rsi_p1 else '↘'} {int(round(rsi_p2))}"
         price_display = f"${price_p1:,.2f} ↗ ${price_p2:,.2f}" if price_p2 > price_p1 else f"${price_p1:,.2f} ↘ ${price_p2:,.2f}"
 
-        # Optimization Stats (Optional Backtest within Loop)
+        # Optimization Stats
         hist_list = bullish_indices if s_type == 'Bullish' else bearish_indices
         best_stats = calculate_optimal_signal_stats(hist_list, close_vals, i, signal_type=s_type, timeframe=timeframe, periods_input=periods_input, optimize_for=optimize_for)
         
         if best_stats is None: best_stats = {"Best Period": "—", "Profit Factor": 0.0, "Win Rate": 0.0, "EV": 0.0, "N": 0}
         
-        # Min N Filter
         if best_stats["N"] < min_n: continue
 
         div_obj.update({
@@ -989,6 +1009,7 @@ def run_rsi_scanner_app(df_global):
     if 'saved_rsi_div_source' not in st.session_state: st.session_state.saved_rsi_div_source = "High/Low"
     if 'saved_rsi_div_strict' not in st.session_state: st.session_state.saved_rsi_div_strict = "Yes"
     if 'saved_rsi_div_days_since' not in st.session_state: st.session_state.saved_rsi_div_days_since = 25
+    if 'saved_rsi_div_diff' not in st.session_state: st.session_state.saved_rsi_div_diff = 2.0
     
     # History Tab State
     if 'rsi_hist_ticker' not in st.session_state: st.session_state.rsi_hist_ticker = "AMZN"
@@ -1041,7 +1062,6 @@ def run_rsi_scanner_app(df_global):
                         master[date_col_raw] = pd.to_datetime(master[date_col_raw])
                         max_dt_obj = master[date_col_raw].max()
                         target_highlight_daily = max_dt_obj.strftime('%Y-%m-%d')
-                        # Calculate start of current week (Monday)
                         days_to_subtract = max_dt_obj.weekday()
                         target_highlight_weekly = (max_dt_obj - timedelta(days=days_to_subtract)).strftime('%Y-%m-%d')
                     
@@ -1051,19 +1071,22 @@ def run_rsi_scanner_app(df_global):
                     with st.expander(f"🔍 View Scanned Tickers ({len(all_tickers)} symbols)"):
                         st.write(", ".join(all_tickers[:100]) + ("..." if len(all_tickers) > 100 else ""))
                     
-                    # --- STREAMLINED INPUTS (4 Columns) ---
-                    c_d1, c_d2, c_d3, c_d4 = st.columns(4)
+                    # --- STREAMLINED INPUTS ---
+                    # Added 'Min RSI Delta' to c_d2
+                    c_d1, c_d2, c_d3, c_d4, c_d5 = st.columns(5)
                     
                     with c_d1:
                         days_since = st.number_input("Days Since Signal", min_value=1, value=st.session_state.saved_rsi_div_days_since, step=1, key="rsi_div_days_since", on_change=save_rsi_state, args=("rsi_div_days_since", "saved_rsi_div_days_since"))
                     with c_d2:
-                        div_lookback = st.number_input("Max Candle Between Pivots", min_value=30, value=st.session_state.saved_rsi_div_lookback, step=5, key="rsi_div_lookback", on_change=save_rsi_state, args=("rsi_div_lookback", "saved_rsi_div_lookback"))
+                        div_diff = st.number_input("Min RSI Delta", min_value=0.5, value=st.session_state.saved_rsi_div_diff, step=0.5, key="rsi_div_diff", on_change=save_rsi_state, args=("rsi_div_diff", "saved_rsi_div_diff"))
                     with c_d3:
+                        div_lookback = st.number_input("Max Candle Between Pivots", min_value=30, value=st.session_state.saved_rsi_div_lookback, step=5, key="rsi_div_lookback", on_change=save_rsi_state, args=("rsi_div_lookback", "saved_rsi_div_lookback"))
+                    with c_d4:
                          curr_strict = st.session_state.saved_rsi_div_strict
                          idx_strict = ["Yes", "No"].index(curr_strict) if curr_strict in ["Yes", "No"] else 0
                          strict_div_str = st.selectbox("Strict 50-Cross Invalidation", ["Yes", "No"], index=idx_strict, key="rsi_div_strict", on_change=save_rsi_state, args=("rsi_div_strict", "saved_rsi_div_strict"))
                          strict_div = (strict_div_str == "Yes")
-                    with c_d4:
+                    with c_d5:
                          curr_source = st.session_state.saved_rsi_div_source
                          idx_source = ["High/Low", "Close"].index(curr_source) if curr_source in ["High/Low", "Close"] else 0
                          div_source = st.selectbox("Candle Price Methodology", ["High/Low", "Close"], index=idx_source, key="rsi_div_source", on_change=save_rsi_state, args=("rsi_div_source", "saved_rsi_div_source"))
@@ -1077,11 +1100,10 @@ def run_rsi_scanner_app(df_global):
                     for i, (ticker, group) in enumerate(grouped_list):
                         d_d, d_w = prepare_data(group.copy())
                         
-                        # We pass CSV_PERIODS just so the "Raw" CSV download has data.
                         if d_d is not None: 
-                            raw_results_div.extend(find_divergences(d_d, ticker, 'Daily', min_n=0, periods_input=CSV_PERIODS_DAYS, optimize_for='PF', lookback_period=div_lookback, price_source=div_source, strict_validation=strict_div, recent_days_filter=days_since))
+                            raw_results_div.extend(find_divergences(d_d, ticker, 'Daily', min_n=0, periods_input=CSV_PERIODS_DAYS, optimize_for='PF', lookback_period=div_lookback, price_source=div_source, strict_validation=strict_div, recent_days_filter=days_since, rsi_diff_threshold=div_diff))
                         if d_w is not None: 
-                            raw_results_div.extend(find_divergences(d_w, ticker, 'Weekly', min_n=0, periods_input=CSV_PERIODS_WEEKS, optimize_for='PF', lookback_period=div_lookback, price_source=div_source, strict_validation=strict_div, recent_days_filter=days_since))
+                            raw_results_div.extend(find_divergences(d_w, ticker, 'Weekly', min_n=0, periods_input=CSV_PERIODS_WEEKS, optimize_for='PF', lookback_period=div_lookback, price_source=div_source, strict_validation=strict_div, recent_days_filter=days_since, rsi_diff_threshold=div_diff))
                         if i % 10 == 0 or i == total_groups - 1: progress_bar.progress((i + 1) / total_groups)
                     
                     progress_bar.empty()
@@ -1132,18 +1154,15 @@ def run_rsi_scanner_app(df_global):
                                     st.subheader(f"{emoji} {tf} {s_type} Signals")
                                     tbl_df = consolidated[(consolidated['Type']==s_type) & (consolidated['Timeframe']==tf)].copy()
                                     
-                                    # Dynamic Price Header based on Methodology
                                     if div_source == 'Close':
                                         price_header = "Close Price Δ"
                                     else:
                                         price_header = "Low Price Δ" if s_type == 'Bullish' else "High Price Δ"
 
                                     if not tbl_df.empty:
-                                        # Highlighting Logic
                                         def style_div_df(df_in):
                                             def highlight_row(row):
                                                 styles = [''] * len(row)
-                                                # Check if Signal Date matches Target
                                                 if target_highlight and row['Signal_Date_ISO'] == target_highlight:
                                                     if 'Date_Display' in df_in.columns:
                                                         idx = df_in.columns.get_loc('Date_Display')
@@ -1176,7 +1195,8 @@ def run_rsi_scanner_app(df_global):
     # TAB 2: DIV HISTORY (SINGLE TICKER + ANALYSIS)
     # --------------------------------------------------------------------------
     with tab_hist:
-        c_h1, c_h2, c_h3, c_h4, c_h5, c_h6 = st.columns(6)
+        # Added 7th column for Min RSI Delta here too for consistency/testing
+        c_h1, c_h2, c_h3, c_h4, c_h5, c_h6, c_h7 = st.columns(7)
         
         with c_h1:
             hist_ticker_in = st.text_input("Ticker", value=st.session_state.rsi_hist_ticker, key="rsi_hist_ticker_in").strip().upper()
@@ -1184,18 +1204,20 @@ def run_rsi_scanner_app(df_global):
         with c_h2:
             h_lookback = st.number_input("Max Candle Between Pivots", min_value=30, value=90, step=5, key="rsi_hist_lookback")
         with c_h3:
+            h_diff = st.number_input("Min RSI Delta", min_value=0.5, value=2.0, step=0.5, key="rsi_hist_diff")
+        with c_h4:
             h_strict_str = st.selectbox("Strict 50-Cross Invalidation", ["Yes", "No"], index=0, key="rsi_hist_strict")
             h_strict = (h_strict_str == "Yes")
-        with c_h4:
-            h_source = st.selectbox("Candle Price Methodology", ["High/Low", "Close"], index=0, key="rsi_hist_source")
         with c_h5:
-            h_per_days = st.text_input("Periods (Days)", value="5, 21, 63, 126, 252", key="rsi_hist_p_days")
+            h_source = st.selectbox("Candle Price Methodology", ["High/Low", "Close"], index=0, key="rsi_hist_source")
         with c_h6:
+            h_per_days = st.text_input("Periods (Days)", value="5, 21, 63, 126, 252", key="rsi_hist_p_days")
+        with c_h7:
             h_per_weeks = st.text_input("Periods (Weeks)", value="4, 13, 26, 52", key="rsi_hist_p_weeks")
 
         current_params = {
             "t": hist_ticker_in, "lb": h_lookback, "str": h_strict, "src": h_source, 
-            "pd": h_per_days, "pw": h_per_weeks
+            "pd": h_per_days, "pw": h_per_weeks, "diff": h_diff
         }
         
         run_hist = False
@@ -1222,11 +1244,10 @@ def run_rsi_scanner_app(df_global):
                         p_days_parsed = parse_periods(h_per_days)
                         p_weeks_parsed = parse_periods(h_per_weeks)
                         
-                        # Note: We pass recent_days_filter=99999 to get ALL history
                         if d_d_h is not None:
-                            raw_results_hist.extend(find_divergences(d_d_h, hist_ticker_in, 'Daily', min_n=0, periods_input=p_days_parsed, lookback_period=h_lookback, price_source=h_source, strict_validation=h_strict, recent_days_filter=99999))
+                            raw_results_hist.extend(find_divergences(d_d_h, hist_ticker_in, 'Daily', min_n=0, periods_input=p_days_parsed, lookback_period=h_lookback, price_source=h_source, strict_validation=h_strict, recent_days_filter=99999, rsi_diff_threshold=h_diff))
                         if d_w_h is not None:
-                            raw_results_hist.extend(find_divergences(d_w_h, hist_ticker_in, 'Weekly', min_n=0, periods_input=p_weeks_parsed, lookback_period=h_lookback, price_source=h_source, strict_validation=h_strict, recent_days_filter=99999))
+                            raw_results_hist.extend(find_divergences(d_w_h, hist_ticker_in, 'Weekly', min_n=0, periods_input=p_weeks_parsed, lookback_period=h_lookback, price_source=h_source, strict_validation=h_strict, recent_days_filter=99999, rsi_diff_threshold=h_diff))
                             
                         st.session_state.rsi_hist_results = pd.DataFrame(raw_results_hist)
                         st.session_state.rsi_hist_last_run_params = current_params
@@ -1240,11 +1261,10 @@ def run_rsi_scanner_app(df_global):
             res_df_h = st.session_state.rsi_hist_results.copy()
             res_df_h = res_df_h.sort_values(by='Signal_Date_ISO', ascending=False)
             
-            # --- DOWNLOAD BUTTON FOR SINGLE TICKER HISTORY ---
+            # --- DOWNLOAD BUTTON ---
             csv_export_h = res_df_h.rename(columns={"Signal_Date_ISO": "Day2", "P1_Date_ISO": "Day1"})
             csv_export_h["Type"] = csv_export_h["Timeframe"] + " " + csv_export_h["Type"]
             
-            # Use same sort/filling logic as Scanner
             d_p_cols = [c for c in csv_export_h.columns if c.startswith("Daily_Price")]
             w_p_cols = [c for c in csv_export_h.columns if c.startswith("Weekly_Price")]
             d_v_cols = [c for c in csv_export_h.columns if c.startswith("Daily_Vol")]
@@ -1266,7 +1286,7 @@ def run_rsi_scanner_app(df_global):
 
             st.divider()
 
-            # --- 2. DETAILED TABLES ---
+            # --- DETAILED TABLES ---
             for tf in ['Daily', 'Weekly']:
                 p_cols_to_show = []
                 current_periods = parse_periods(h_per_days if tf == 'Daily' else h_per_weeks)
