@@ -1126,7 +1126,7 @@ def run_rsi_scanner_app(df_global):
                         
                         # --- DOWNLOAD BUTTON ---
                         csv_export_df = df_all_results.rename(columns={"Signal_Date_ISO": "Day2", "P1_Date_ISO": "Day1"})
-                        csv_export_df["Type"] = csv_export_df["Timeframe"] + " " + csv_export_df["Type"]
+                        csv_export_df["Type"] = csv_export_df["Type"] + " " + csv_export_df["Type"]
                         file_label = data_option_div.replace(" ", "_") if data_option_div else "dataset"
 
                         # Sort Dynamic Columns
@@ -1545,14 +1545,29 @@ def run_rsi_scanner_app(df_global):
         st.markdown('<div class="light-note" style="margin-bottom: 15px;">ℹ️ If this is buggy, just go back to the RSI Divergences tab and back here and it will work.</div>', unsafe_allow_html=True)
         
         with st.expander("ℹ️ Page User Guide"):
-            st.markdown("""
-            * **Data Source**: Unlike the Divergences and Percentile tabs (which use limited ~10yr history files), this tab pulls **Complete Price History** via Yahoo Finance or the full Ticker Map file.
-            * **Methodology**: Calculates forward returns for all historical periods matching the criteria.
-            * **Metrics**:
-                * **Profit Factor**: Gross Wins / Gross Losses.
-                * **Win Rate**: Percentage of trades that closed positive.
-                * **EV**: Average Return % per trade.
-            """)
+            c1, c2 = st.columns(2)
+            with c1:
+                st.markdown("#### 🧠 Methodology")
+                st.markdown("""
+                * **Data Source**: Uses **Full Price History** via Yahoo Finance (or Parquet if available) for the specific ticker entered.
+                * **The Logic**: It scans the last **X years** of data. Every time the RSI (14) entered the range defined by `Current RSI ± Tolerance`, the system records that date as a "Signal".
+                * **The Test**: For every signal found, it fast-forwards 1, 5, 10, ... 252 trading days to see what happened to the price.
+                """)
+            with c2:
+                st.markdown("#### 📊 Key Metrics")
+                st.markdown("""
+                * **Profit Factor (PF)**: `Gross Wins / Gross Losses`. 
+                    * Above 1.5 is good. Above 2.0 is excellent.
+                * **Win Rate (WR)**: Percentage of trades that ended positive.
+                * **EV (Expected Value)**: The average return percentage per trade.
+                * **SQN (System Quality Number)**: A metric for the "easiness" of the trading system.
+                    * Formula: `(Avg Trade / Std Dev) * sqrt(N)`
+                    * **< 1.6**: Poor / Hard to trade.
+                    * **1.6 - 2.0**: Average.
+                    * **2.0 - 2.9**: Good.
+                    * **> 3.0**: Excellent.
+                    * **> 5.0**: Holy Grail.
+                """)
 
         c_left, c_right = st.columns([1, 6])
         
@@ -1623,7 +1638,14 @@ def run_rsi_scanner_app(df_global):
                             valid_indices = match_indices[match_indices + p < total_len]
                             
                             if len(valid_indices) == 0:
-                                results.append({"Days": p, "Win Rate": np.nan, "EV": np.nan, "Count": 0, "Profit Factor": np.nan})
+                                results.append({
+                                    "Days": p, 
+                                    "Win Rate": np.nan, 
+                                    "EV": np.nan, 
+                                    "SQN": np.nan,
+                                    "Count": 0, 
+                                    "Profit Factor": np.nan
+                                })
                                 continue
                                 
                             entry_prices = full_close[valid_indices]
@@ -1641,12 +1663,26 @@ def run_rsi_scanner_app(df_global):
                             win_rate = np.mean(returns > 0) * 100
                             avg_ret = np.mean(returns) * 100
                             
+                            # --- SQN CALC ---
+                            # SQN = (Avg Trade / Std Dev) * Sqrt(N)
+                            # Note: Avg Trade and Std Dev must be in the same units (e.g. both raw or both %).
+                            # Here we use raw returns for calculation
+                            avg_ret_raw = np.mean(returns)
+                            std_dev_raw = np.std(returns)
+                            n = len(valid_indices)
+                            
+                            if std_dev_raw > 0 and n > 0:
+                                sqn = (avg_ret_raw / std_dev_raw) * np.sqrt(n)
+                            else:
+                                sqn = 0.0
+                            
                             results.append({
                                 "Days": p, 
                                 "Profit Factor": pf, 
                                 "Win Rate": win_rate, 
-                                "EV": avg_ret, 
-                                "Count": len(valid_indices)
+                                "EV": avg_ret,
+                                "SQN": sqn,
+                                "Count": n
                             })
 
                         res_df = pd.DataFrame(results)
@@ -1674,10 +1710,16 @@ def run_rsi_scanner_app(df_global):
                                 format_func = lambda x: f"{x:+.2f}%" if pd.notnull(x) else "—"
                                 format_wr = lambda x: f"{x:.1f}%" if pd.notnull(x) else "—"
                                 format_pf = lambda x: f"{x:.2f}" if pd.notnull(x) else "—"
+                                format_sqn = lambda x: f"{x:.2f}" if pd.notnull(x) else "—"
 
                                 st.dataframe(
                                     res_df.style
-                                    .format({"Win Rate": format_wr, "EV": format_func, "Profit Factor": format_pf})
+                                    .format({
+                                        "Win Rate": format_wr, 
+                                        "EV": format_func, 
+                                        "Profit Factor": format_pf,
+                                        "SQN": format_sqn
+                                    })
                                     .map(highlight_ret, subset=["EV"])
                                     .apply(highlight_best, axis=1)
                                     .set_table_styles([dict(selector="th", props=[("font-weight", "bold"), ("background-color", "#f0f2f6")])]),
@@ -1687,8 +1729,10 @@ def run_rsi_scanner_app(df_global):
                                         "Profit Factor": st.column_config.NumberColumn("Profit Factor"),
                                         "Win Rate": st.column_config.TextColumn("Win Rate"),
                                         "EV": st.column_config.TextColumn("EV"),
+                                        "SQN": st.column_config.NumberColumn("SQN", help="System Quality Number"),
                                         "Count": st.column_config.NumberColumn("Count")
                                     },
+                                    column_order=["Days", "Profit Factor", "Win Rate", "EV", "SQN", "Count"],
                                     hide_index=True,
                                     height=get_table_height(res_df, max_rows=50)
                                 )
@@ -1823,6 +1867,12 @@ def run_database_app(df):
 
     def save_db_state(key, saved_key):
         st.session_state[saved_key] = st.session_state[key]
+        
+    # --- CALLBACK FOR DATE BUTTONS ---
+    # This must run before the widget is re-rendered to avoid the StreamlitAPIException
+    def set_start_date_cb(new_date):
+        st.session_state.saved_db_start = new_date
+        st.session_state.db_start = new_date
     
     c1, c2, c3, c4 = st.columns(4, gap="medium")
     with c1:
@@ -1846,26 +1896,12 @@ def run_database_app(df):
         
         today = date.today()
         
-        # --- FIX: Update both the saved variable AND the widget key ---
-        def set_start_date(new_start):
-            st.session_state.saved_db_start = new_start
-            st.session_state.db_start = new_start # <--- This forces the widget to update
-            st.rerun()
-
-        if d_btn1.button("MTD", use_container_width=True, help="Month to Date"):
-            set_start_date(today.replace(day=1))
-            
-        if d_btn2.button("YTD", use_container_width=True, help="Year to Date"):
-            set_start_date(today.replace(month=1, day=1))
-            
-        if d_btn3.button("L30D", use_container_width=True, help="Last 30 Days"):
-            set_start_date(today - timedelta(days=30))
-            
-        if d_btn4.button("L60D", use_container_width=True, help="Last 60 Days"):
-            set_start_date(today - timedelta(days=60))
-            
-        if d_btn5.button("L90D", use_container_width=True, help="Last 90 Days"):
-            set_start_date(today - timedelta(days=90))
+        # We use on_click callbacks to safely update the session state before the next render
+        d_btn1.button("MTD", use_container_width=True, help="Month to Date", on_click=set_start_date_cb, args=(today.replace(day=1),))
+        d_btn2.button("YTD", use_container_width=True, help="Year to Date", on_click=set_start_date_cb, args=(today.replace(month=1, day=1),))
+        d_btn3.button("L30D", use_container_width=True, help="Last 30 Days", on_click=set_start_date_cb, args=(today - timedelta(days=30),))
+        d_btn4.button("L60D", use_container_width=True, help="Last 60 Days", on_click=set_start_date_cb, args=(today - timedelta(days=60),))
+        d_btn5.button("L90D", use_container_width=True, help="Last 90 Days", on_click=set_start_date_cb, args=(today - timedelta(days=90),))
 
     # --- FILTERING LOGIC ---
     f = df.copy()
