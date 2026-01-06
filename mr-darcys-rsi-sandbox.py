@@ -1069,15 +1069,25 @@ def run_rsi_scanner_app(df_global):
                 
                 if master is not None and not master.empty:
                     target_highlight_daily = None
-                    target_highlight_weekly = None
+                    highlight_list_weekly = []
                     
                     date_col_raw = next((c for c in master.columns if 'DATE' in c.upper()), None)
                     if date_col_raw:
                         master[date_col_raw] = pd.to_datetime(master[date_col_raw])
                         max_dt_obj = master[date_col_raw].max()
+                        
+                        # Daily Highlight: Exactly the last available date
                         target_highlight_daily = max_dt_obj.strftime('%Y-%m-%d')
+                        
+                        # Weekly Highlight: The Monday of the current data week AND the Monday of the previous week
                         days_to_subtract = max_dt_obj.weekday()
-                        target_highlight_weekly = (max_dt_obj - timedelta(days=days_to_subtract)).strftime('%Y-%m-%d')
+                        current_week_monday = (max_dt_obj - timedelta(days=days_to_subtract))
+                        prev_week_monday = current_week_monday - timedelta(days=7)
+                        
+                        highlight_list_weekly = [
+                            current_week_monday.strftime('%Y-%m-%d'),
+                            prev_week_monday.strftime('%Y-%m-%d')
+                        ]
                     
                     t_col = next((c for c in master.columns if c.strip().upper() in ['TICKER', 'SYMBOL']), None)
                     all_tickers = sorted(master[t_col].unique())
@@ -1160,7 +1170,12 @@ def run_rsi_scanner_app(df_global):
                             consolidated = res_div_df.groupby(['Ticker', 'Type', 'Timeframe']).head(1)
                             
                             for tf in ['Daily', 'Weekly']:
-                                target_highlight = target_highlight_weekly if tf == 'Weekly' else target_highlight_daily
+                                # Highlight logic: Single Date for Daily, List for Weekly
+                                if tf == 'Weekly':
+                                    targets = highlight_list_weekly
+                                else:
+                                    targets = [target_highlight_daily] if target_highlight_daily else []
+                                    
                                 date_header = "Week Δ" if tf == 'Weekly' else "Day Δ"
                                 
                                 for s_type, emoji in [('Bullish', '🟢'), ('Bearish', '🔴')]:
@@ -1176,7 +1191,8 @@ def run_rsi_scanner_app(df_global):
                                         def style_div_df(df_in):
                                             def highlight_row(row):
                                                 styles = [''] * len(row)
-                                                if target_highlight and row['Signal_Date_ISO'] == target_highlight:
+                                                # Check if the signal date is in our target list
+                                                if row['Signal_Date_ISO'] in targets:
                                                     if 'Date_Display' in df_in.columns:
                                                         idx = df_in.columns.get_loc('Date_Display')
                                                         styles[idx] = 'background-color: rgba(255, 244, 229, 0.7); color: #e67e22; font-weight: bold;'
@@ -1545,14 +1561,28 @@ def run_rsi_scanner_app(df_global):
         st.markdown('<div class="light-note" style="margin-bottom: 15px;">ℹ️ If this is buggy, just go back to the RSI Divergences tab and back here and it will work.</div>', unsafe_allow_html=True)
         
         with st.expander("ℹ️ Page User Guide"):
-            st.markdown("""
-            * **Data Source**: Unlike the Divergences and Percentile tabs (which use limited ~10yr history files), this tab pulls **Complete Price History** via Yahoo Finance or the full Ticker Map file.
-            * **Methodology**: Calculates forward returns for all historical periods matching the criteria.
-            * **Metrics**:
-                * **Profit Factor**: Gross Wins / Gross Losses.
-                * **Win Rate**: Percentage of trades that closed positive.
-                * **EV**: Average Return % per trade.
-            """)
+            col_guide_a, col_guide_b = st.columns(2)
+            with col_guide_a:
+                st.markdown("#### 🤔 What is this tool?")
+                st.markdown("This tool scans the **entire price history** (e.g., last 10 years) of a stock to find every instance where the RSI matched your criteria. It then 'simulates' a trade to see what would have happened if you bought and held.")
+                st.markdown("#### 🎯 Why use it?")
+                st.markdown("To validate your trade ideas. If a stock hits RSI 30, does it *actually* bounce historically? Or does it typically keep crashing? This tool gives you the hard data so you don't trade blind.")
+
+            with col_guide_b:
+                st.markdown("#### 📊 How to Read the Data")
+                st.markdown("""
+                * **Profit Factor**: The most critical metric. Calculated as `Total Gains / Total Losses`.
+                    * **> 1.5**: Strong strategy.
+                    * **> 2.0**: Excellent.
+                    * **< 1.0**: Losing strategy.
+                * **Win Rate**: How often the trade makes money (e.g. 65% = 6.5 wins out of 10).
+                * **EV (Expected Value)**: The average return (%) you can expect per trade.
+                * **SQN (System Quality Number)**: Measures risk-adjusted performance.
+                    * **< 1.6**: Hard to trade / Volatile.
+                    * **1.6 - 3.0**: Good / Average.
+                    * **> 3.0**: Excellent / Holy Grail.
+                * **Count**: Sample size. (Higher is better).
+                """)
 
         c_left, c_right = st.columns([1, 6])
         
@@ -1623,7 +1653,7 @@ def run_rsi_scanner_app(df_global):
                             valid_indices = match_indices[match_indices + p < total_len]
                             
                             if len(valid_indices) == 0:
-                                results.append({"Days": p, "Win Rate": np.nan, "EV": np.nan, "Count": 0, "Profit Factor": np.nan})
+                                results.append({"Days": p, "Win Rate": np.nan, "EV": np.nan, "Count": 0, "Profit Factor": np.nan, "SQN": 0.0})
                                 continue
                                 
                             entry_prices = full_close[valid_indices]
@@ -1641,12 +1671,21 @@ def run_rsi_scanner_app(df_global):
                             win_rate = np.mean(returns > 0) * 100
                             avg_ret = np.mean(returns) * 100
                             
+                            # --- SQN CALCULATION ---
+                            std_dev = np.std(returns) * 100
+                            count = len(valid_indices)
+                            if std_dev > 0 and count > 0:
+                                sqn = (avg_ret / std_dev) * np.sqrt(count)
+                            else:
+                                sqn = 0.0
+                            
                             results.append({
                                 "Days": p, 
                                 "Profit Factor": pf, 
                                 "Win Rate": win_rate, 
                                 "EV": avg_ret, 
-                                "Count": len(valid_indices)
+                                "SQN": sqn,
+                                "Count": count
                             })
 
                         res_df = pd.DataFrame(results)
@@ -1674,10 +1713,11 @@ def run_rsi_scanner_app(df_global):
                                 format_func = lambda x: f"{x:+.2f}%" if pd.notnull(x) else "—"
                                 format_wr = lambda x: f"{x:.1f}%" if pd.notnull(x) else "—"
                                 format_pf = lambda x: f"{x:.2f}" if pd.notnull(x) else "—"
+                                format_sqn = lambda x: f"{x:.1f}" if pd.notnull(x) else "—"
 
                                 st.dataframe(
                                     res_df.style
-                                    .format({"Win Rate": format_wr, "EV": format_func, "Profit Factor": format_pf})
+                                    .format({"Win Rate": format_wr, "EV": format_func, "Profit Factor": format_pf, "SQN": format_sqn})
                                     .map(highlight_ret, subset=["EV"])
                                     .apply(highlight_best, axis=1)
                                     .set_table_styles([dict(selector="th", props=[("font-weight", "bold"), ("background-color", "#f0f2f6")])]),
@@ -1687,6 +1727,7 @@ def run_rsi_scanner_app(df_global):
                                         "Profit Factor": st.column_config.NumberColumn("Profit Factor"),
                                         "Win Rate": st.column_config.TextColumn("Win Rate"),
                                         "EV": st.column_config.TextColumn("EV"),
+                                        "SQN": st.column_config.NumberColumn("SQN"),
                                         "Count": st.column_config.NumberColumn("Count")
                                     },
                                     hide_index=True,
