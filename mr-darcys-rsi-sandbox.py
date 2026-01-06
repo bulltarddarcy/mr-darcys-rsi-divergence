@@ -1542,32 +1542,36 @@ def run_rsi_scanner_app(df_global):
     # TAB 4: BACKTESTER (Restored Logic)
     # --------------------------------------------------------------------------
     with tab_bot:
-        st.markdown('<div class="light-note" style="margin-bottom: 15px;">ℹ️ If this is buggy, just go back to the RSI Divergences tab and back here and it will work.</div>', unsafe_allow_html=True)
-        
         with st.expander("ℹ️ Page User Guide"):
-            c1, c2 = st.columns(2)
-            with c1:
-                st.markdown("#### 🧠 Methodology")
-                st.markdown("""
-                * **Data Source**: Uses **Full Price History** via Yahoo Finance (or Parquet if available) for the specific ticker entered.
-                * **The Logic**: It scans the last **X years** of data. Every time the RSI (14) entered the range defined by `Current RSI ± Tolerance`, the system records that date as a "Signal".
-                * **The Test**: For every signal found, it fast-forwards 1, 5, 10, ... 252 trading days to see what happened to the price.
-                """)
-            with c2:
-                st.markdown("#### 📊 Key Metrics")
-                st.markdown("""
-                * **Profit Factor (PF)**: `Gross Wins / Gross Losses`. 
-                    * Above 1.5 is good. Above 2.0 is excellent.
-                * **Win Rate (WR)**: Percentage of trades that ended positive.
-                * **EV (Expected Value)**: Represents the average profit or loss per trade expressed as a percentage. It's calculated by dividing the total P&L by the number of trades. A positive EV indicates a profitable system on average, while negative EV suggests losses. This metric answers the fundamental question: "How much do I make (or lose) per trade on average?" However, EV alone doesn't account for consistency or risk - a high EV could come from a few large wins masking many small losses.
-                * **SQN (System Quality Number)**: Measures the quality and reliability of a trading system by evaluating how consistently it generates returns relative to their variability. It combines the average return, standard deviation, and sample size into a single metric that indicates whether your edge is statistically significant. SQN is essentially a Sharpe Ratio scaled by the square root of the number of trades. Values above 2.0 indicate an average or better system, while values above 3.0 suggest excellent performance. Unlike EV, SQN accounts for both the magnitude and consistency of returns.
-                    * Formula: `(Avg Trade / Std Dev) * sqrt(N)`
-                    * **< 1.6**: Poor / Hard to trade.
-                    * **1.6 - 2.0**: Average.
-                    * **2.0 - 2.9**: Good.
-                    * **> 3.0**: Excellent.
-                    * **> 5.0**: Holy Grail.
-                """)
+            st.markdown("#### 🧠 Methodology")
+            st.markdown("""
+            The backtesting logic expands on the following:
+            * **Data Source**: Uses **Full Price History** via Yahoo Finance (or Parquet if available) for the specific ticker entered.
+            * **The Logic**: It scans the last **X years** of data. Every time the RSI (14) entered the range defined by **Current RSI ± Tolerance**, the system records that date as a "Signal".
+            * **The Test**: For every signal found, it fast-forwards 1, 5, 10, ... 252 trading days to see what happened to the price.
+            """)
+            
+            st.markdown("#### ⚙️ Settings & Inputs")
+            st.markdown("""
+            * **Ticker**: The stock symbol to analyze.
+            * **Lookback Years**: The historical period to scan for signals.
+            * **RSI Tolerance**: The +/- range around the current RSI value to define a signal match.
+            """)
+            
+            st.markdown("#### 📊 Key Metrics")
+            st.markdown("""
+            * **Days**: The holding period for the trade.
+            * **Profit Factor (PF)**: Gross Wins / Gross Losses. Above 1.5 is good. Above 2.0 is excellent.
+            * **Win Rate (WR)**: Percentage of trades that ended positive.
+            * **EV (Expected Value)**: The average return percentage per trade.
+            * **SQN (System Quality Number)**: A metric for the "easiness" of the trading system. Formula: `(Avg Trade / Std Dev) * sqrt(N)`.
+                * **< 1.6**: Poor / Hard to trade.
+                * **1.6 - 2.0**: Average.
+                * **2.0 - 2.9**: Good.
+                * **> 3.0**: Excellent.
+                * **> 5.0**: Holy Grail.
+            * **Count**: The number of historical signals found.
+            """)
 
         c_left, c_right = st.columns([1, 6])
         
