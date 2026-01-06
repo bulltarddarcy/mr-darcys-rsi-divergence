@@ -1832,42 +1832,11 @@ def run_database_app(df):
     with c4:
         db_exp_end = st.date_input("Expiration Range (end)", value=st.session_state.saved_db_exp, key="db_exp", on_change=save_db_state, args=("db_exp", "saved_db_exp"))
     
-    # --- ORDER TYPES & QUICK DATE BUTTONS ---
-    ot1, ot2, ot3, ot_dates = st.columns([1.2, 1.2, 1.2, 5.0], gap="small")
-    
+    ot1, ot2, ot3, ot_pad = st.columns([1.5, 1.5, 1.5, 5.5])
     with ot1: inc_cb = st.checkbox("Calls Bought", value=st.session_state.saved_db_inc_cb, key="db_inc_cb", on_change=save_db_state, args=("db_inc_cb", "saved_db_inc_cb"))
     with ot2: inc_ps = st.checkbox("Puts Sold", value=st.session_state.saved_db_inc_ps, key="db_inc_ps", on_change=save_db_state, args=("db_inc_ps", "saved_db_inc_ps"))
     with ot3: inc_pb = st.checkbox("Puts Bought", value=st.session_state.saved_db_inc_pb, key="db_inc_pb", on_change=save_db_state, args=("db_inc_pb", "saved_db_inc_pb"))
     
-    with ot_dates:
-        # Spacer
-        st.write("") 
-        d_btn1, d_btn2, d_btn3, d_btn4, d_btn5 = st.columns(5)
-        
-        today = date.today()
-        
-        # --- FIX: Update both the saved variable AND the widget key ---
-        def set_start_date(new_start):
-            st.session_state.saved_db_start = new_start
-            st.session_state.db_start = new_start # <--- This forces the widget to update
-            st.rerun()
-
-        if d_btn1.button("MTD", use_container_width=True, help="Month to Date"):
-            set_start_date(today.replace(day=1))
-            
-        if d_btn2.button("YTD", use_container_width=True, help="Year to Date"):
-            set_start_date(today.replace(month=1, day=1))
-            
-        if d_btn3.button("L30D", use_container_width=True, help="Last 30 Days"):
-            set_start_date(today - timedelta(days=30))
-            
-        if d_btn4.button("L60D", use_container_width=True, help="Last 60 Days"):
-            set_start_date(today - timedelta(days=60))
-            
-        if d_btn5.button("L90D", use_container_width=True, help="Last 90 Days"):
-            set_start_date(today - timedelta(days=90))
-
-    # --- FILTERING LOGIC ---
     f = df.copy()
     if db_ticker: f = f[f["Symbol"].astype(str).str.upper().eq(db_ticker)]
     if start_date: f = f[f["Trade Date"].dt.date >= start_date]
