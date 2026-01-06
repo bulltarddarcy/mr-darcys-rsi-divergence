@@ -1558,7 +1558,6 @@ def run_rsi_scanner_app(df_global):
     # TAB 4: BACKTESTER (Restored Logic)
     # --------------------------------------------------------------------------
     with tab_bot:
-        st.markdown('<div class="light-note" style="margin-bottom: 15px;">ℹ️ If this is buggy, just go back to the RSI Divergences tab and back here and it will work.</div>', unsafe_allow_html=True)
         
         with st.expander("ℹ️ Page User Guide"):
             #col_guide_a, col_guide_b = st.columns(2)
