@@ -244,7 +244,11 @@ def get_max_trade_date(df):
             return valid_dates.max().date()
     return date.today() - timedelta(days=1)
 
+
 def get_confirmed_gdrive_data(url):
+    """
+    Downloads CSV data from Google Drive with safety timeouts to prevent hanging.
+    """
     try:
         file_id = ""
         if 'id=' in url:
@@ -256,7 +260,9 @@ def get_confirmed_gdrive_data(url):
             
         download_url = "https://docs.google.com/uc?export=download"
         session = requests.Session()
-        response = session.get(download_url, params={'id': file_id}, stream=True)
+        
+        # 10-second timeout prevents the "Infinite Spinner" if Drive is slow
+        response = session.get(download_url, params={'id': file_id}, stream=True, timeout=10)
         
         confirm_token = None
         for key, value in response.cookies.items():
@@ -269,12 +275,19 @@ def get_confirmed_gdrive_data(url):
             if match: confirm_token = match.group(1)
 
         if confirm_token:
-            response = session.get(download_url, params={'id': file_id, 'confirm': confirm_token}, stream=True)
+            # Second request to bypass the warning screen
+            response = session.get(download_url, params={'id': file_id, 'confirm': confirm_token}, stream=True, timeout=10)
         
-        if response.text.strip().startswith("<!DOCTYPE html>"): return "HTML_ERROR"
+        if response.text.strip().startswith("<!DOCTYPE html>"): 
+            return "HTML_ERROR"
             
         return StringIO(response.text)
+    except requests.exceptions.Timeout:
+        # Fails gracefully so the script can move to Yahoo fallback
+        print(f"Drive timeout for URL: {url}")
+        return None
     except Exception as e:
+        print(f"Drive Error: {e}")
         return None
 
 @st.cache_data(ttl=3600)
@@ -329,6 +342,9 @@ def get_parquet_config():
 DATA_KEYS_PARQUET = get_parquet_config()
 
 def get_gdrive_binary_data(url):
+    """
+    Downloads binary data (Parquet) from Google Drive with safety timeouts.
+    """
     try:
         file_id = ""
         if 'id=' in url:
@@ -340,7 +356,9 @@ def get_gdrive_binary_data(url):
             
         download_url = "https://docs.google.com/uc?export=download"
         session = requests.Session()
-        response = session.get(download_url, params={'id': file_id}, stream=True)
+        
+        # Added timeout=10 to stop the request if the connection hangs
+        response = session.get(download_url, params={'id': file_id}, stream=True, timeout=10)
         
         confirm_token = None
         for key, value in response.cookies.items():
@@ -349,17 +367,23 @@ def get_gdrive_binary_data(url):
                 break
         
         if not confirm_token:
+            # Check for confirm token in HTML content if necessary
             if b"<!DOCTYPE html>" in response.content[:200]:
                 match = re.search(r'confirm=([0-9A-Za-z_]+)', response.text)
                 if match: confirm_token = match.group(1)
 
         if confirm_token:
-            response = session.get(download_url, params={'id': file_id, 'confirm': confirm_token}, stream=True)
+            response = session.get(download_url, params={'id': file_id, 'confirm': confirm_token}, stream=True, timeout=10)
             
         return BytesIO(response.content)
+    except requests.exceptions.Timeout:
+        # Ensure the app doesn't crash; just returns None for the fallback
+        st.warning("⚠️ Google Drive connection timed out. Falling back to alternative source...")
+        return None
     except Exception as e:
         st.error(f"Download Error: {e}")
         return None
+
 
 @st.cache_data(ttl=3600, show_spinner="Loading Dataset...")
 def load_parquet_and_clean(key):
