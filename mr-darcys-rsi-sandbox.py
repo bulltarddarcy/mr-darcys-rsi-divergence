@@ -3323,7 +3323,7 @@ def run_ema_distance_app(df_global):
     )
     
     # --- TABLE 2: Combo Over-Extension Signals ---
-    st.subheader("🔥 Combo Over-Extension Signals")
+    st.subheader("Combo Over-Extension Signals")
 
     t8_90 = thresholds['Dist_8']['p90']
     t21_80 = thresholds['Dist_21']['p80']
