@@ -885,6 +885,7 @@ def run_price_divergences_app(df_global):
                         if d_d is not None:
                             daily_divs = find_divergences(d_d, ticker, 'Daily', min_n=0, periods_input=CSV_PERIODS_DAYS, optimize_for='PF', lookback_period=div_lookback, price_source=div_source, strict_validation=strict_div, recent_days_filter=days_since, rsi_diff_threshold=div_diff)
                             
+                            # Inject RSI Percentiles
                             if daily_divs and 'RSI' in d_d.columns:
                                 all_rsi = d_d['RSI'].dropna().values
                                 if len(all_rsi) > 0:
@@ -901,6 +902,7 @@ def run_price_divergences_app(df_global):
                         if d_w is not None: 
                             weekly_divs = find_divergences(d_w, ticker, 'Weekly', min_n=0, periods_input=CSV_PERIODS_WEEKS, optimize_for='PF', lookback_period=div_lookback, price_source=div_source, strict_validation=strict_div, recent_days_filter=days_since, rsi_diff_threshold=div_diff)
                             
+                            # Inject RSI Percentiles
                             if weekly_divs and 'RSI' in d_w.columns:
                                 all_rsi_w = d_w['RSI'].dropna().values
                                 if len(all_rsi_w) > 0:
@@ -936,6 +938,7 @@ def run_price_divergences_app(df_global):
                                     st.subheader(f"{emoji} {tf} {s_type} Signals")
                                     tbl_df = consolidated[(consolidated['Type']==s_type) & (consolidated['Timeframe']==tf)].copy()
                                     price_header = "Close Price Δ" if div_source == 'Close' else ("Low Price Δ" if s_type == 'Bullish' else "High Price Δ")
+                                    
                                     pct_col_title = "RSI Low %ile" if s_type == 'Bullish' else "RSI High %ile"
 
                                     if not tbl_df.empty:
@@ -1024,14 +1027,12 @@ def run_price_divergences_app(df_global):
                         
                         if d_d_h is not None: 
                             d_daily = find_divergences(d_d_h, hist_ticker_in, 'Daily', min_n=0, periods_input=p_days_parsed, lookback_period=h_lookback, price_source=h_source, strict_validation=h_strict, recent_days_filter=99999, rsi_diff_threshold=h_diff)
-                            # Inject Volume Immediately
-                            d_daily = inject_volume(d_daily, d_d_h)
+                            d_daily = inject_volume(d_daily, d_d_h) # Inject Vol
                             raw_results_hist.extend(d_daily)
                             
                         if d_w_h is not None: 
                             d_weekly = find_divergences(d_w_h, hist_ticker_in, 'Weekly', min_n=0, periods_input=p_weeks_parsed, lookback_period=h_lookback, price_source=h_source, strict_validation=h_strict, recent_days_filter=99999, rsi_diff_threshold=h_diff)
-                            # Inject Volume Immediately
-                            d_weekly = inject_volume(d_weekly, d_w_h)
+                            d_weekly = inject_volume(d_weekly, d_w_h) # Inject Vol
                             raw_results_hist.extend(d_weekly)
                             
                         st.session_state.rsi_hist_results = pd.DataFrame(raw_results_hist)
@@ -1042,7 +1043,56 @@ def run_price_divergences_app(df_global):
                 except Exception as e: st.error(f"Error: {e}")
         
         # ==============================================================================
-        # DOWNLOAD SECTION (Added per request)
+        # EXISTING TABLES DISPLAY
+        # ==============================================================================
+        if st.session_state.rsi_hist_results is not None and not st.session_state.rsi_hist_results.empty:
+            res_df_h = st.session_state.rsi_hist_results.copy().sort_values(by='Signal_Date_ISO', ascending=False)
+            
+            for tf in ['Daily', 'Weekly']:
+                p_cols_to_show = []
+                current_periods = parse_periods(h_per_days if tf == 'Daily' else h_per_weeks)
+                for p in current_periods:
+                    col_key = f"Ret_{p}"
+                    if col_key in res_df_h.columns: p_cols_to_show.append(col_key)
+
+                for s_type, emoji in [('Bullish', '🟢'), ('Bearish', '🔴')]:
+                    st.subheader(f"{emoji} {tf} {s_type} History")
+                    tbl_df = res_df_h[(res_df_h['Type']==s_type) & (res_df_h['Timeframe']==tf)].copy()
+                    
+                    if not tbl_df.empty:
+                        def style_ret(df_in):
+                            def highlight_val(val):
+                                if pd.isna(val): return ''
+                                color = '#1e7e34' if val > 0 else '#c5221f'
+                                return f'color: {color}; font-weight: bold;'
+                            style_obj = df_in.style
+                            for p_c in p_cols_to_show: style_obj = style_obj.map(highlight_val, subset=[p_c])
+                            return style_obj
+
+                        cfg = {
+                            "P1_Date_ISO": st.column_config.TextColumn("Date 1", width="medium"),
+                            "Signal_Date_ISO": st.column_config.TextColumn("Date 2", width="medium"),
+                            "RSI1": st.column_config.NumberColumn("RSI 1", format="%.0f"),
+                            "RSI2": st.column_config.NumberColumn("RSI 2", format="%.0f"),
+                            "Price1": st.column_config.NumberColumn("Price 1", format="$%.2f"),
+                            "Price2": st.column_config.NumberColumn("Price 2", format="$%.2f"),
+                        }
+                        for p_c in p_cols_to_show:
+                            days = p_c.split('_')[1]
+                            cfg[p_c] = st.column_config.NumberColumn(f"{days}{'d' if tf=='Daily' else 'w'} %", format="%+.2f%%")
+                        
+                        cols_base = ["P1_Date_ISO", "Signal_Date_ISO", "RSI1", "RSI2", "Price1", "Price2"]
+                        st.dataframe(
+                            style_ret(tbl_df[cols_base + p_cols_to_show]),
+                            column_config=cfg,
+                            hide_index=True,
+                            use_container_width=True,
+                            height=(min(len(tbl_df), 50) + 1) * 35 
+                        )
+                    else: st.caption("No signals found.")
+        
+        # ==============================================================================
+        # DOWNLOAD SECTION (MOVED TO BOTTOM)
         # ==============================================================================
         st.divider()
         st.subheader("💾 Data Downloads")
@@ -1130,57 +1180,7 @@ def run_price_divergences_app(df_global):
                     mime="text/csv",
                     key="dl_bulk_ticker_hist"
                 )
-
         st.divider()
-
-        # ==============================================================================
-        # EXISTING TABLES DISPLAY
-        # ==============================================================================
-        if st.session_state.rsi_hist_results is not None and not st.session_state.rsi_hist_results.empty:
-            res_df_h = st.session_state.rsi_hist_results.copy().sort_values(by='Signal_Date_ISO', ascending=False)
-            
-            for tf in ['Daily', 'Weekly']:
-                p_cols_to_show = []
-                current_periods = parse_periods(h_per_days if tf == 'Daily' else h_per_weeks)
-                for p in current_periods:
-                    col_key = f"Ret_{p}"
-                    if col_key in res_df_h.columns: p_cols_to_show.append(col_key)
-
-                for s_type, emoji in [('Bullish', '🟢'), ('Bearish', '🔴')]:
-                    st.subheader(f"{emoji} {tf} {s_type} History")
-                    tbl_df = res_df_h[(res_df_h['Type']==s_type) & (res_df_h['Timeframe']==tf)].copy()
-                    
-                    if not tbl_df.empty:
-                        def style_ret(df_in):
-                            def highlight_val(val):
-                                if pd.isna(val): return ''
-                                color = '#1e7e34' if val > 0 else '#c5221f'
-                                return f'color: {color}; font-weight: bold;'
-                            style_obj = df_in.style
-                            for p_c in p_cols_to_show: style_obj = style_obj.map(highlight_val, subset=[p_c])
-                            return style_obj
-
-                        cfg = {
-                            "P1_Date_ISO": st.column_config.TextColumn("Date 1", width="medium"),
-                            "Signal_Date_ISO": st.column_config.TextColumn("Date 2", width="medium"),
-                            "RSI1": st.column_config.NumberColumn("RSI 1", format="%.0f"),
-                            "RSI2": st.column_config.NumberColumn("RSI 2", format="%.0f"),
-                            "Price1": st.column_config.NumberColumn("Price 1", format="$%.2f"),
-                            "Price2": st.column_config.NumberColumn("Price 2", format="$%.2f"),
-                        }
-                        for p_c in p_cols_to_show:
-                            days = p_c.split('_')[1]
-                            cfg[p_c] = st.column_config.NumberColumn(f"{days}{'d' if tf=='Daily' else 'w'} %", format="%+.2f%%")
-                        
-                        cols_base = ["P1_Date_ISO", "Signal_Date_ISO", "RSI1", "RSI2", "Price1", "Price2"]
-                        st.dataframe(
-                            style_ret(tbl_df[cols_base + p_cols_to_show]),
-                            column_config=cfg,
-                            hide_index=True,
-                            use_container_width=True,
-                            height=(min(len(tbl_df), 50) + 1) * 35 
-                        )
-                    else: st.caption("No signals found.")
 
 def run_rsi_scanner_app(df_global):
     st.title("🤖 RSI Scanner")
