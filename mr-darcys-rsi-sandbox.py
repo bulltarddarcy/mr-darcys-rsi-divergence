@@ -247,45 +247,64 @@ def get_max_trade_date(df):
 
 import re
 
-
 def get_gdrive_binary_data(url):
     """
-    Uses Regex to find the File ID regardless of URL format or parameters.
+    Robust Google Drive downloader.
+    Uses Session Cookies to bypass 'Virus Scan' and 'High Traffic' warnings automatically.
     """
     try:
-        # 1. Improved ID Extraction: Targets the 25-45 character string between /d/ and /view
-        # This is much safer than .split('/')
+        # 1. Extract ID
         match = re.search(r'/d/([a-zA-Z0-9_-]{25,})', url)
         if not match:
-            # Fallback for ?id= format
             match = re.search(r'id=([a-zA-Z0-9_-]{25,})', url)
             
         if not match:
-            st.error(f"Could not find a valid Google Drive ID in URL: {url}")
+            st.error(f"Invalid Google Drive URL: {url}")
             return None
             
         file_id = match.group(1)
-        download_url = f'https://drive.google.com/uc?export=download&id={file_id}'
         
-        # 2. Use a Session to handle potential redirects/cookies
+        # 2. Standard Download URL
+        download_url = "https://drive.google.com/uc?export=download"
         session = requests.Session()
-        response = session.get(download_url, stream=True, timeout=50)
         
-        # 3. Handle the "Virus Scan" confirmation automatically
-        if response.text.strip().startswith("<!DOCTYPE html>"):
-            confirm_match = re.search(r'confirm=([0-9A-Za-z-_]+)', response.text)
-            if confirm_match:
-                confirm_token = confirm_match.group(1)
-                response = session.get(download_url + f"&confirm={confirm_token}", stream=True)
-
+        # 3. First Attempt: Try to get the file
+        # We allow a longer timeout (50s) to handle server lags
+        response = session.get(download_url, params={'id': file_id}, stream=True, timeout=50)
+        
+        # 4. Check for the Warning Token in Cookies
+        # Google sets a cookie named 'download_warning_...' when it intercepts the download.
+        token = None
+        for key, value in session.cookies.items():
+            if key.startswith('download_warning'):
+                token = value
+                break
+        
+        # 5. If we found a warning token, we automatically send it back to confirm
+        if token:
+            params = {'id': file_id, 'confirm': token}
+            response = session.get(download_url, params=params, stream=True, timeout=50)
+            
+        # 6. Final Validation
         if response.status_code == 200:
-            return BytesIO(response.content)
-        else:
-            st.error(f"GDrive API returned status {response.status_code}")
-            return None
-    except Exception as e:
-        st.error(f"G-Drive Download Error: {e}")
+            # Peek at the first 100 bytes to ensure it's not still an HTML error page
+            try:
+                chunk = next(response.iter_content(chunk_size=100), b"")
+            except StopIteration:
+                return None
+            
+            # If the file content starts with "<!DOCTYPE html", the bypass failed (likely a hard 24hr ban)
+            if chunk.strip().startswith(b"<!DOCTYPE html"):
+                return None
+            
+            # Success: Stitch the chunk back together with the rest of the stream
+            return BytesIO(chunk + response.raw.read())
+            
         return None
+
+    except Exception as e:
+        return None
+
 
 @st.cache_data(ttl=3600, show_spinner="Loading Dataset...")
 def load_parquet_and_clean(key):
