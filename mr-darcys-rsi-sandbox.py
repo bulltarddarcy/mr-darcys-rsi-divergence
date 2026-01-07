@@ -387,7 +387,6 @@ def get_gdrive_binary_data(url):
 
 @st.cache_data(ttl=3600, show_spinner="Loading Dataset...")
 def load_parquet_and_clean(key):
-    # FIX: Check st.secrets directly for the key (removed incorrect nested lookup)
     if key not in st.secrets:
         st.error(f"Key '{key}' not found in Streamlit Secrets.")
         return None
@@ -395,45 +394,43 @@ def load_parquet_and_clean(key):
     url = st.secrets[key]
     
     try:
-        # Handle Google Drive vs Direct Links
+        # Handle Google Drive using your robust helper
         if "drive.google.com" in url:
-            file_id = url.split('/')[-2]
-            d_url = f'https://drive.google.com/uc?id={file_id}'
-            resp = requests.get(d_url)
+            buffer = get_gdrive_binary_data(url)
+            if not buffer:
+                return None
+            content = buffer.getvalue()
         else:
+            # Handle direct links
             resp = requests.get(url)
-            
-        if resp.status_code != 200:
-            st.error(f"Failed to fetch data for {key}: {resp.status_code}")
-            return None
+            if resp.status_code != 200:
+                st.error(f"Failed to fetch data: {resp.status_code}")
+                return None
+            content = resp.content
             
         # Try Parquet First
         try:
-            df = pd.read_parquet(BytesIO(resp.content))
+            df = pd.read_parquet(BytesIO(content))
         except Exception:
-            # Fallback: The file might be a CSV despite the key name (Fixes "Magic Bytes" error)
+            # Fallback for CSV files
             try:
-                df = pd.read_csv(BytesIO(resp.content))
+                df = pd.read_csv(BytesIO(content))
             except Exception as e:
                 st.error(f"Error loading {key}: Could not read as Parquet OR CSV. ({e})")
                 return None
 
-        # Standard Cleaning
+        # --- Rest of your standard cleaning logic remains the same ---
         df.columns = [c.strip() for c in df.columns]
-        
-        # Standardize Date Column
         date_col = next((c for c in df.columns if 'DATE' in c.upper()), None)
         if date_col:
             df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
             df = df.rename(columns={date_col: 'ChartDate'}).sort_values('ChartDate')
             
-        # Standardize Price/Volume
         if 'Close' not in df.columns and 'Price' in df.columns:
             df = df.rename(columns={'Price': 'Close'})
         if 'Close' in df.columns and 'Price' not in df.columns:
             df['Price'] = df['Close']
             
-        # Ensure Numeric
         cols_to_numeric = ['Price', 'High', 'Low', 'Open', 'Volume', 'RSI', 'EMA8', 'EMA21', 'VolSMA']
         for c in cols_to_numeric:
             if c in df.columns:
@@ -444,6 +441,7 @@ def load_parquet_and_clean(key):
     except Exception as e:
         st.error(f"Critical error loading {key}: {e}")
         return None
+
 
 @st.cache_data(ttl=3600)
 def load_ticker_map():
