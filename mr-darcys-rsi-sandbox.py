@@ -427,15 +427,29 @@ def load_ticker_map():
 def get_ticker_technicals(ticker: str, mapping: dict):
     if not mapping or ticker not in mapping:
         return None
+    
     file_id = mapping[ticker]
     file_url = f"https://drive.google.com/uc?export=download&id={file_id}"
-    buffer = get_confirmed_gdrive_data(file_url)
-    if buffer and buffer != "HTML_ERROR":
+    
+    # FIXED: Changed from 'get_confirmed_gdrive_data' to 'get_gdrive_binary_data'
+    buffer = get_gdrive_binary_data(file_url)
+    
+    if buffer:
         try:
             df = pd.read_csv(buffer)
+            
+            # 1. Clean Column Names
             df.columns = [c.strip().upper() for c in df.columns]
+            
+            # 2. Ensure we can identify the Date column (Column A or named "DATE")
+            # If the first column is named something weird, we rename it to DATE
+            if "DATE" not in df.columns:
+                first_col = df.columns[0]
+                df.rename(columns={first_col: "DATE"}, inplace=True)
+
             return df
-        except:
+        except Exception as e:
+            print(f"Error parsing CSV for {ticker}: {e}")
             return None
     return None
 
