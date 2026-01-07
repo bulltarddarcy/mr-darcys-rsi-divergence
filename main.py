@@ -1780,24 +1780,24 @@ def run_ema_distance_app(df_global):
 
     with st.expander("ℹ️ Table User Guide"):
         st.markdown(f"""
-            **1. Key Metrics Tracked**
+            **1. Key Metrics Tracked.**
             The app calculates the percentage distance (the "Gap") between the current price and five different moving averages:
             * 8-day and 21-day EMA: Short-term momentum and "swing" levels.
             * 50-day, 100-day, and 200-day SMA: Medium to long-term trend baselines.
 
-            **2. The "Rubber Band" Logic (Percentiles)**
+            **2. The "Rubber Band" Logic (Percentiles).**
             Rather than just showing the current gap,Rather than just showing the current ga the app looks at 10 years of history for that specific ticker to see how rare the current gap is. It calculates:
             * **p50 (Median):** The typical distance from the average.
             * **p70/p80 (Uptrend):** These levels generally occur in strong uptrends.
             * **p90/p95 (Extremes):** The levels reached only 10% or 5% of the time historically.
 
-            **3. Visual Highlighting System**
+            **3. Visual Highlighting System.**
             The table uses a traffic-light system to categorize the current price action:
             * 🟢 **Buy Zone (Green):** Triggered if the Gap is ≤ p50 (Median) AND price is > 8-EMA. Suggests a "pullback to the mean" in an uptrend.
             * 🟡 **Warning Zone (Yellow):** Triggered if the gap is between p50 and p90. Price is extending but not yet extreme.
             * 🔴 **Sell/Trim Zone (Red):** Triggered if the gap is $\ge$ p90. Price is statistically over-extended.
 
-            **4. Data Sources**
+            **4. Data Sources.**
             All Close Prices are sourced directly from Yahoo Finance.
                     """)
 
