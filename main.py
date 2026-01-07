@@ -862,18 +862,27 @@ def run_price_divergences_app(df_global):
     # TAB 2: DIV HISTORY
     # --------------------------------------------------------------------------
     with tab_hist:
-        c_h1, c_h2, c_h3, c_h4, c_h5, c_h6, c_h7 = st.columns(7)
+        # --- ROW 1 ---
+        c_h1, c_h2, c_h3, c_h4 = st.columns(4)
         with c_h1:
             hist_ticker_in = st.text_input("Ticker", value=st.session_state.rsi_hist_ticker, key="rsi_hist_ticker_in").strip().upper()
             st.session_state.rsi_hist_ticker = hist_ticker_in
-        with c_h2: h_lookback = st.number_input("Max Candle Between Pivots", min_value=30, value=90, step=5, key="rsi_hist_lookback")
-        with c_h3: h_diff = st.number_input("Min RSI Delta", min_value=0.5, value=2.0, step=0.5, key="rsi_hist_diff")
+        with c_h2: 
+            h_lookback = st.number_input("Max Days Btwn Pivots", min_value=30, value=90, step=5, key="rsi_hist_lookback")
+        with c_h3: 
+            h_diff = st.number_input("Min RSI Delta", min_value=0.5, value=2.0, step=0.5, key="rsi_hist_diff")
         with c_h4:
-            h_strict_str = st.selectbox("Strict 50-Cross Invalidation", ["Yes", "No"], index=0, key="rsi_hist_strict")
+            h_strict_str = st.selectbox("50-Cross Inval", ["Yes", "No"], index=0, key="rsi_hist_strict")
             h_strict = (h_strict_str == "Yes")
-        with c_h5: h_source = st.selectbox("Candle Price Methodology", ["High/Low", "Close"], index=0, key="rsi_hist_source")
-        with c_h6: h_per_days = st.text_input("Periods (Days)", value="5, 21, 63, 126, 252", key="rsi_hist_p_days")
-        with c_h7: h_per_weeks = st.text_input("Periods (Weeks)", value="4, 13, 26, 52", key="rsi_hist_p_weeks")
+
+        # --- ROW 2 ---
+        c_h5, c_h6, c_h7 = st.columns(3)
+        with c_h5: 
+            h_source = st.selectbox("Candle Price Method", ["High/Low", "Close"], index=0, key="rsi_hist_source")
+        with c_h6: 
+            h_per_days = st.text_input("Periods (Days)", value="5, 21, 63, 126, 252", key="rsi_hist_p_days")
+        with c_h7: 
+            h_per_weeks = st.text_input("Periods (Weeks)", value="4, 13, 26, 52", key="rsi_hist_p_weeks")
 
         current_params = {"t": hist_ticker_in, "lb": h_lookback, "str": h_strict, "src": h_source, "pd": h_per_days, "pw": h_per_weeks, "diff": h_diff}
         
