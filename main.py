@@ -697,7 +697,6 @@ def run_strike_zones_app(df):
 
 def run_price_divergences_app(df_global):
     st.title("📉 Price Divergences")
-    from datetime import timedelta
     
     st.markdown("""
         <style>
@@ -713,8 +712,6 @@ def run_price_divergences_app(df_global):
             font-weight: 600;
             border: 1px solid rgba(128, 128, 128, 0.2);
         }
-        .alpha-pos { color: #1e7e34; }
-        .alpha-neg { color: #c5221f; }
         </style>
         """, unsafe_allow_html=True)
 
@@ -740,27 +737,6 @@ def run_price_divergences_app(df_global):
     CSV_PERIODS_DAYS = [5, 21, 63, 126, 252]
     CSV_PERIODS_WEEKS = [4, 13, 26, 52]
 
-    # --- HELPER: BENCHMARK RETURNS ---
-    @st.cache_data(ttl=3600)
-    def get_benchmark_data():
-        tm = load_ticker_map()
-        benchmarks = {}
-        for sym in ["SPY", "QQQ"]:
-            try:
-                df = fetch_history_optimized(sym, tm)
-                if df is not None and not df.empty:
-                    df.columns = [c.strip().upper() for c in df.columns]
-                    d_col = next((c for c in df.columns if 'DATE' in c), None)
-                    c_col = next((c for c in df.columns if 'CLOSE' in c), None)
-                    o_col = next((c for c in df.columns if 'OPEN' in c), None)
-                    
-                    if d_col and c_col and o_col:
-                        df[d_col] = pd.to_datetime(df[d_col])
-                        df = df.set_index(d_col).sort_index()
-                        benchmarks[sym] = df[[o_col, c_col]].rename(columns={o_col: 'OPEN', c_col: 'CLOSE'})
-            except Exception: pass
-        return benchmarks
-
     # --- TABS ---
     tab_div, tab_hist = st.tabs(["📉 Active/Recent Divergences", "📜 Divergences History"])
 
@@ -780,18 +756,13 @@ def run_price_divergences_app(df_global):
                 * **Min RSI Delta**: The minimum required difference between the two RSI pivot points.
                 """)
             with c_guide2:
-                st.markdown("#### 📊 Metrics & Benchmarking")
+                st.markdown("#### 📊 Table Columns")
                 st.markdown("""
-                * **Return Δ**: Calculated from the **OPEN of the Next Trading Day (T+1)** to the Last Close.
-                * **Win Rate**: Percentage of signals where this trade is currently profitable.
-                * **Relative Performance (vs SPY/QQQ)**:
-                    * **Main Number (e.g. +7.1%)**: The **Alpha** (Strategy Return minus Index Return).
-                    * **Bracket Number (e.g. +1.0%)**: The **Index Return** (Assumes buying SPY/QQQ at the Open of the same T+1 day).
+                * **Return Δ**: % Change from the Signal Price (P2) to the Last Close.
+                * **RSI %ile**: The historical percentile rank of the signal RSI. Yellow cells indicate extreme readings (<10% or >90%).
                 """)
         
         if data_option_div:
-            benchmarks = get_benchmark_data()
-            
             try:
                 key = dataset_map[data_option_div]
                 master = load_parquet_and_clean(key)
@@ -837,77 +808,20 @@ def run_price_divergences_app(df_global):
                     for i, (ticker, group) in enumerate(grouped_list):
                         d_d, d_w = prepare_data(group.copy())
                         
-                        # Helper to map Signal Date -> Next Trading Day Open/Date
-                        def create_next_day_map(df_in):
-                            d_lookup = df_in.copy()
-                            
-                            # 1. Find Date Column
-                            date_c = next((c for c in d_lookup.columns if 'DATE' in c.upper()), None)
-                            if not date_c:
-                                if isinstance(d_lookup.index, pd.DatetimeIndex):
-                                    d_lookup = d_lookup.reset_index()
-                                    date_c = d_lookup.columns[0]
-                                else: return {}
-
-                            # 2. Find Open Column (Robust)
-                            open_c = next((c for c in d_lookup.columns if 'OPEN' in c.upper()), None)
-                            if not open_c: return {}
-
-                            d_lookup[date_c] = pd.to_datetime(d_lookup[date_c])
-                            
-                            # 3. CRITICAL: Sort by Date Ascending so shift(-1) gets the FUTURE row
-                            d_lookup = d_lookup.sort_values(by=date_c, ascending=True)
-                            
-                            # 4. Shift to get Next Day data on the Current Day row
-                            d_lookup['Next_Open'] = d_lookup[open_c].shift(-1)
-                            d_lookup['Next_Date'] = d_lookup[date_c].shift(-1)
-                            
-                            d_lookup['Date_Str'] = d_lookup[date_c].apply(lambda x: x.strftime('%Y-%m-%d') if pd.notnull(x) else '')
-                            
-                            lookup_map = {}
-                            for _, r in d_lookup.iterrows():
-                                if r['Date_Str']:
-                                    lookup_map[r['Date_Str']] = {
-                                        'open': r['Next_Open'],
-                                        'date': r['Next_Date']
-                                    }
-                            return lookup_map
-
                         # --- Process Daily ---
                         if d_d is not None and not d_d.empty:
                             daily_divs = find_divergences(d_d, ticker, 'Daily', min_n=0, periods_input=CSV_PERIODS_DAYS, optimize_for='PF', lookback_period=div_lookback, price_source=div_source, strict_validation=strict_div, recent_days_filter=days_since, rsi_diff_threshold=div_diff)
                             
-                            curr_close_d = float(d_d['Price'].iloc[-1]) if 'Price' in d_d.columns else 0.0
-                            next_map_d = create_next_day_map(d_d)
+                            # Get safe numeric last close
+                            curr_close_d = float(d_d['Price'].iloc[-1])
 
                             if daily_divs:
-                                all_rsi = d_d['RSI'].dropna().values if 'RSI' in d_d.columns else []
+                                all_rsi = d_d['RSI'].dropna().values
                                 has_rsi_vals = len(all_rsi) > 0
-                                
                                 for div in daily_divs:
+                                    # Fix Last Close here to ensure it's a float
                                     div['Last_Close'] = curr_close_d
-                                    div['SPY_Ret'] = 0.0
-                                    div['QQQ_Ret'] = 0.0
-                                    div['Entry_Price'] = np.nan 
                                     
-                                    sig_iso = div['Signal_Date_ISO']
-                                    next_info = next_map_d.get(sig_iso)
-                                    
-                                    if next_info and pd.notnull(next_info['open']):
-                                        entry_price = next_info['open']
-                                        exec_date = next_info['date']
-                                        div['Entry_Price'] = entry_price
-                                        
-                                        try:
-                                            for b_sym, b_df in benchmarks.items():
-                                                if not b_df.empty:
-                                                    idx_loc = b_df.index.searchsorted(exec_date)
-                                                    if idx_loc < len(b_df):
-                                                        b_entry = b_df.iloc[idx_loc]['OPEN']
-                                                        b_exit = b_df.iloc[-1]['CLOSE']
-                                                        div[f'{b_sym}_Ret'] = ((b_exit - b_entry) / b_entry) * 100
-                                        except Exception: pass
-
                                     if has_rsi_vals:
                                         p1 = (all_rsi < div['RSI1']).mean() * 100
                                         p2 = (all_rsi < div['RSI2']).mean() * 100
@@ -925,36 +839,16 @@ def run_price_divergences_app(df_global):
                         if d_w is not None and not d_w.empty: 
                             weekly_divs = find_divergences(d_w, ticker, 'Weekly', min_n=0, periods_input=CSV_PERIODS_WEEKS, optimize_for='PF', lookback_period=div_lookback, price_source=div_source, strict_validation=strict_div, recent_days_filter=days_since, rsi_diff_threshold=div_diff)
                             
-                            curr_close_w = float(d_w['Price'].iloc[-1]) if 'Price' in d_w.columns else 0.0
-                            next_map_w = create_next_day_map(d_w)
+                            # Get safe numeric last close
+                            curr_close_w = float(d_w['Price'].iloc[-1])
 
                             if weekly_divs:
-                                all_rsi_w = d_w['RSI'].dropna().values if 'RSI' in d_w.columns else []
+                                all_rsi_w = d_w['RSI'].dropna().values
                                 has_rsi_vals_w = len(all_rsi_w) > 0
                                 for div in weekly_divs:
+                                    # Fix Last Close here
                                     div['Last_Close'] = curr_close_w
-                                    div['SPY_Ret'] = 0.0
-                                    div['QQQ_Ret'] = 0.0
-                                    div['Entry_Price'] = np.nan
 
-                                    sig_iso = div['Signal_Date_ISO']
-                                    next_info = next_map_w.get(sig_iso)
-                                    
-                                    if next_info and pd.notnull(next_info['open']):
-                                        entry_price = next_info['open']
-                                        exec_date = next_info['date']
-                                        div['Entry_Price'] = entry_price
-                                        
-                                        try:
-                                            for b_sym, b_df in benchmarks.items():
-                                                if not b_df.empty:
-                                                    idx_loc = b_df.index.searchsorted(exec_date)
-                                                    if idx_loc < len(b_df):
-                                                        b_entry = b_df.iloc[idx_loc]['OPEN']
-                                                        b_exit = b_df.iloc[-1]['CLOSE']
-                                                        div[f'{b_sym}_Ret'] = ((b_exit - b_entry) / b_entry) * 100
-                                        except Exception: pass
-                                    
                                     if has_rsi_vals_w:
                                         p1 = (all_rsi_w < div['RSI1']).mean() * 100
                                         p2 = (all_rsi_w < div['RSI2']).mean() * 100
@@ -980,12 +874,11 @@ def run_price_divergences_app(df_global):
                             st.warning(f"No signals found in the last {days_since} days.")
                         else:
                             # --- CALCULATE RETURN SINCE SIGNAL ---
-                            res_div_df['Entry_Price'] = pd.to_numeric(res_div_df['Entry_Price'], errors='coerce')
-                            res_div_df['Last_Close'] = pd.to_numeric(res_div_df['Last_Close'], errors='coerce')
+                            # Ensure numeric types (Last_Close is now guaranteed float from loop above)
+                            res_div_df['Price2'] = pd.to_numeric(res_div_df['Price2'], errors='coerce')
                             
-                            # If Entry Price is NaN (tomorrow hasn't happened), Return is 0
-                            res_div_df['Return_Since_Signal'] = ((res_div_df['Last_Close'] - res_div_df['Entry_Price']) / res_div_df['Entry_Price']) * 100
-                            res_div_df['Return_Since_Signal'] = res_div_df['Return_Since_Signal'].fillna(0.0)
+                            # Calculate % difference
+                            res_div_df['Return_Since_Signal'] = ((res_div_df['Last_Close'] - res_div_df['Price2']) / res_div_df['Price2']) * 100
                             
                             res_div_df = res_div_df.sort_values(by='Signal_Date_ISO', ascending=False)
                             consolidated = res_div_df.groupby(['Ticker', 'Type', 'Timeframe']).head(1)
@@ -1008,37 +901,21 @@ def run_price_divergences_app(df_global):
                                         count_sigs = len(tbl_df)
                                         
                                         if s_type == 'Bullish':
-                                            raw_ret = tbl_df['Return_Since_Signal']
-                                            avg_return = raw_ret.mean()
-                                            win_rate = (raw_ret > 0).mean() * 100
-                                            
-                                            spy_avg = tbl_df['SPY_Ret'].mean() if 'SPY_Ret' in tbl_df.columns else 0.0
-                                            qqq_avg = tbl_df['QQQ_Ret'].mean() if 'QQQ_Ret' in tbl_df.columns else 0.0
-                                            
+                                            win_rate = (tbl_df['Return_Since_Signal'] > 0).mean() * 100
+                                            avg_return = tbl_df['Return_Since_Signal'].mean()
                                         else:
-                                            # Bearish
-                                            raw_ret = tbl_df['Return_Since_Signal'] * -1
-                                            avg_return = raw_ret.mean()
-                                            win_rate = (raw_ret > 0).mean() * 100
-                                            
-                                            spy_avg = tbl_df['SPY_Ret'].mean() if 'SPY_Ret' in tbl_df.columns else 0.0
-                                            qqq_avg = tbl_df['QQQ_Ret'].mean() if 'QQQ_Ret' in tbl_df.columns else 0.0
-
-                                        spy_diff = avg_return - spy_avg
-                                        qqq_diff = avg_return - qqq_avg
-                                        
-                                        spy_cls = "alpha-pos" if spy_diff > 0 else "alpha-neg"
-                                        qqq_cls = "alpha-pos" if qqq_diff > 0 else "alpha-neg"
+                                            # For bearish, price going down (negative return) is a win
+                                            win_rate = (tbl_df['Return_Since_Signal'] < 0).mean() * 100
+                                            # Invert return sign for display (Short profit)
+                                            avg_return = tbl_df['Return_Since_Signal'].mean() * -1
 
                                         st.subheader(f"{emoji} {tf} {s_type} Signals")
                                         
                                         st.markdown(f"""
-                                        <div style="margin-bottom: 10px; display: flex; gap: 10px; flex-wrap: wrap;">
+                                        <div style="margin-bottom: 10px;">
                                             <span class="metric-box">Count: {count_sigs}</span>
                                             <span class="metric-box">Win Rate: {win_rate:.1f}%</span>
                                             <span class="metric-box">Avg Return: {avg_return:+.1f}%</span>
-                                            <span class="metric-box">vs SPY: <span class="{spy_cls}">{spy_diff:+.1f}%</span> <span style="font-weight:normal; font-size:0.9em; color:#888;">({spy_avg:+.1f}%)</span></span>
-                                            <span class="metric-box">vs QQQ: <span class="{qqq_cls}">{qqq_diff:+.1f}%</span> <span style="font-weight:normal; font-size:0.9em; color:#888;">({qqq_avg:+.1f}%)</span></span>
                                         </div>
                                         """, unsafe_allow_html=True)
 
@@ -1046,16 +923,19 @@ def run_price_divergences_app(df_global):
                                             def highlight_cells(row):
                                                 styles = [''] * len(row)
                                                 
+                                                # 1. Date Highlight
                                                 if row['Signal_Date_ISO'] in targets:
                                                     if 'Date_Display' in df_in.columns:
                                                         idx = df_in.columns.get_loc('Date_Display')
                                                         styles[idx] = 'background-color: rgba(255, 244, 229, 0.7); color: #e67e22; font-weight: bold;'
                                                 
+                                                # 2. RSI Percentile Highlight
                                                 if row.get('Extreme_Flag', False):
                                                     if 'RSI2_Pct' in df_in.columns:
                                                         idx_p = df_in.columns.get_loc('RSI2_Pct')
                                                         styles[idx_p] = 'background-color: rgba(255, 235, 59, 0.25); color: #f57f17; font-weight: bold;'
 
+                                                # 3. Return Column Color Logic
                                                 if 'Return_Since_Signal' in df_in.columns:
                                                     val = row['Return_Since_Signal']
                                                     idx_r = df_in.columns.get_loc('Return_Since_Signal')
@@ -1133,6 +1013,7 @@ def run_price_divergences_app(df_global):
                     
                     if df_h is not None and not df_h.empty:
                         d_d_h, d_w_h = prepare_data(df_h.copy())
+                        # If weekly missing, fabricate it
                         if d_w_h is None and d_d_h is not None:
                             temp_w = d_d_h.copy().resample('W').agg({'Price': 'last', 'High': 'max', 'Low': 'min', 'Volume': 'sum'}).dropna()
                             temp_w = add_technicals(temp_w)
