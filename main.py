@@ -1096,7 +1096,6 @@ def run_rsi_scanner_app(df_global):
             * **Count:** The sample size. *Warning: Be skeptical of stats derived from fewer than 10 trades.*
             """)
 
-        # --- NEW SECTION ADDED HERE ---
         with st.expander("View Scanned Tickers"):
             t_map = load_ticker_map()
             if t_map:
@@ -1104,7 +1103,6 @@ def run_rsi_scanner_app(df_global):
                 st.write(", ".join(valid_tickers))
             else:
                 st.caption("No tickers currently loaded in the map.")
-        # ------------------------------
 
         c_left, c_right = st.columns([1, 6])
         with c_left:
@@ -1211,6 +1209,34 @@ def run_rsi_scanner_app(df_global):
     with tab_pct:
         data_option_pct = st.pills("Dataset", options=options, selection_mode="single", default=options[0] if options else None, label_visibility="collapsed", key="rsi_pct_pills")
         
+        # --- NEW: User Guide & Ticker List ---
+        with st.expander("ℹ️ Page User Guide: RSI Percentiles", expanded=False):
+            st.markdown("""
+            ### 🎯 Goal
+            This scanner identifies **live** or **recent** opportunities where RSI is transitioning out of an extreme zone.
+            
+            ### ⚙️ How it works
+            1. **Scan Universe:** It loops through every ticker in the selected **Dataset** (from your database).
+            2. **Percentile Calculation:** For each ticker, it calculates the historical RSI distribution.
+               * *Example:* If RSI is 30, but historically the stock *rarely* goes below 35, that 30 is a very significant "extreme."
+            3. **Signal Trigger:** A signal is generated when RSI crosses out of the "Low Zone" (Bullish) or "High Zone" (Bearish).
+            
+            ### 🔢 Metrics Explained
+            * **RSI Transition:** The movement of RSI that triggered the signal (e.g., "28 → 32").
+            * **SQN (System Quality Number):** Scores the historical quality of this specific signal. **> 2.0** is good, **> 5.0** is elite.
+            * **EV Target:** The theoretical price target based on the average historical return of this signal.
+            * **Win Rate:** How often this signal has resulted in a profit historically.
+            """)
+
+        with st.expander("View Scanned Tickers"):
+            t_map_pct = load_ticker_map()
+            if t_map_pct:
+                valid_tickers_pct = sorted([t for t in t_map_pct.keys() if not t.endswith('_PARQUET')])
+                st.write(", ".join(valid_tickers_pct))
+            else:
+                st.caption("No tickers currently loaded in the map.")
+        # -------------------------------------
+
         c_p1, c_p2, c_p3, c_p4 = st.columns(4)
         with c_p1: pct_low = st.number_input("RSI Low (e.g. 10)", min_value=1, max_value=40, value=st.session_state.saved_rsi_pct_low, step=1, key="rsi_pct_low", on_change=save_rsi_state, args=("rsi_pct_low", "saved_rsi_pct_low"))
         with c_p2: pct_high = st.number_input("RSI High (e.g. 90)", min_value=60, max_value=99, value=st.session_state.saved_rsi_pct_high, step=1, key="rsi_pct_high", on_change=save_rsi_state, args=("rsi_pct_high", "saved_rsi_pct_high"))
