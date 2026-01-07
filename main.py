@@ -1453,29 +1453,6 @@ def run_seasonality_app(df_global):
     if 'seas_scan_results' not in st.session_state: st.session_state.seas_scan_results = None
     if 'seas_scan_csvs' not in st.session_state: st.session_state.seas_scan_csvs = None
     if 'seas_scan_active' not in st.session_state: st.session_state.seas_scan_active = False
-    
-    # --- Helper: Optimized Data Fetching (Parquet > CSV > Yahoo) ---
-    def fetch_history_optimized(ticker_sym, t_map):
-        pq_key = f"{ticker_sym}_PARQUET"
-        if pq_key in t_map:
-            try:
-                file_id = t_map[pq_key]
-                url = f"https://drive.google.com/uc?export=download&id={file_id}"
-                buffer = get_gdrive_binary_data(url)
-                if buffer:
-                    df = pd.read_parquet(buffer, engine='pyarrow')
-                    if isinstance(df.index, pd.DatetimeIndex):
-                        df = df.reset_index()
-                    elif df.index.name and 'DATE' in df.index.name.upper():
-                        df = df.reset_index()
-                    elif 'Date' not in df.columns and 'DATE' not in df.columns:
-                        df = df.reset_index()
-                    return df
-            except Exception:
-                pass 
-        if ticker_sym in t_map:
-            return get_ticker_technicals(ticker_sym, t_map)
-        return fetch_yahoo_data(ticker_sym)
 
     # --- Helper: Finance Formatting ---
     def fmt_finance(val):
