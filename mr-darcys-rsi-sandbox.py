@@ -388,47 +388,89 @@ DATA_KEYS_PARQUET = get_parquet_config()
 
 def get_gdrive_binary_data(url):
     """
-    Downloads binary data from Google Drive, automatically handling 
-    the 'Virus Scan Warning' confirmation for Parquet files.
+    Final robust version: Handles 'unscannable' warnings, 
+    cookie persistence, and regex ID extraction.
     """
     try:
-        # 1. Improved ID Extraction (Handles all URL variants)
+        # 1. Extract File ID using a strict regex
         match = re.search(r'(?:id=|[d/])([a-zA-Z0-9_-]{25,})', url)
         if not match:
             return None
         file_id = match.group(1)
-        
+            
         download_url = "https://docs.google.com/uc?export=download"
         session = requests.Session()
+        # Set a standard browser header to avoid bot-blocking
+        headers = {'User-Agent': 'Mozilla/5.0'}
         
-        # 2. Initial request to get the file or the warning page
-        response = session.get(download_url, params={'id': file_id}, stream=True)
+        # 2. Initial Attempt
+        params = {'id': file_id}
+        response = session.get(download_url, params=params, stream=True, timeout=20, headers=headers)
         
-        # 3. Check if Google served an HTML warning page instead of the file
-        # We look for a 'confirm' token in the cookies or the HTML content
-        confirm_token = None
-        for key, value in response.cookies.items():
-            if key.startswith('download_warning'):
-                confirm_token = value
-                break
+        # 3. Check if we hit the 'Large/Unscannable File' HTML page
+        if response.text.strip().startswith("<!DOCTYPE html>"):
+            # Search for the confirm token in the HTML content
+            # Google puts it in links like: confirm=xxxx&id=...
+            confirm_match = re.search(r'confirm=([0-9A-Za-z-_]+)', response.text)
+            if confirm_match:
+                confirm_token = confirm_match.group(1)
+                # Re-request with the confirmation token
+                params['confirm'] = confirm_token
+                response = session.get(download_url, params=params, stream=True, timeout=20, headers=headers)
         
-        if not confirm_token:
-            # If not in cookies, search the HTML text for 'confirm=xxxx'
-            # (Google sometimes embeds it in the 'Download Anyway' link)
-            match = re.search(r'confirm=([0-9A-Za-z-_]+)', response.text)
-            if match:
-                confirm_token = match.group(1)
-
-        # 4. If we found a token, resubmit the request with the confirmation
-        if confirm_token:
-            response = session.get(download_url, params={'id': file_id, 'confirm': confirm_token}, stream=True)
-            
         if response.status_code == 200:
             return BytesIO(response.content)
+            
         return None
-    except Exception:
+    except Exception as e:
+        st.error(f"G-Drive Sync Error: {e}")
         return None
 
+@st.cache_data(ttl=3600, show_spinner="Loading Dataset...")
+def load_parquet_and_clean(key):
+    # Ensure key is stripped of any hidden newline characters from PARQUET_CONFIG
+    clean_key = key.strip()
+    
+    if clean_key not in st.secrets:
+        st.error(f"Secret Key '{clean_key}' not found. Check PARQUET_CONFIG spelling.")
+        return None
+        
+    url = st.secrets[clean_key]
+    
+    try:
+        buffer = get_gdrive_binary_data(url)
+        if not buffer:
+            return None
+            
+        content = buffer.getvalue()
+        
+        # Double check: if it still starts with HTML, the bypass failed
+        if content.startswith(b"<!DOCTYPE"):
+            st.error(f"Could not bypass G-Drive security for {clean_key}. Try re-saving the file in Drive.")
+            return None
+
+        # Standard Parquet -> Dataframe Logic
+        try:
+            df = pd.read_parquet(BytesIO(content))
+        except Exception:
+            df = pd.read_csv(BytesIO(content))
+
+        # --- Your existing cleaning code here ---
+        df.columns = [c.strip() for c in df.columns]
+        date_col = next((c for c in df.columns if 'DATE' in c.upper()), None)
+        if date_col:
+            df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
+            df = df.rename(columns={date_col: 'ChartDate'}).sort_values('ChartDate')
+        
+        # Ensure Price column exists
+        if 'Close' in df.columns and 'Price' not in df.columns:
+            df['Price'] = df['Close']
+            
+        return df
+        
+    except Exception as e:
+        st.error(f"Error processing {clean_key}: {e}")
+        return None
 
 @st.cache_data(ttl=3600, show_spinner="Loading Dataset...")
 def load_parquet_and_clean(key):
