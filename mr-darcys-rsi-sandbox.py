@@ -3163,7 +3163,7 @@ def run_seasonality_app(df_global):
                 )
 
 def run_ema_distance_app(df_global):
-    # Helper function defined inside scope to prevent "not defined" errors
+    # Helper function for backtesting drawdowns
     def run_backtest(signal_series, price_data, low_data, lookforward=30, drawdown_thresh=-0.08):
         idxs = signal_series[signal_series].index
         if len(idxs) == 0: return 0, 0, 0
@@ -3204,13 +3204,7 @@ def run_ema_distance_app(df_global):
         st.warning("Please enter a ticker.")
         return
 
-    # Percentage formatting to 1 decimal place
-    def fmt_pct(val):
-        if pd.isna(val): return ""
-        if val < 0: return f"({abs(val):.1f}%)"
-        return f"{val:.1f}%"
-
-    # 2. Data Fetching
+    # 2. Data Fetching & Calculations
     with st.spinner(f"Crunching data for {ticker}..."):
         try:
             t_obj = yf.Ticker(ticker)
@@ -3221,56 +3215,33 @@ def run_ema_distance_app(df_global):
             df = df.reset_index()
             df.columns = [c.upper() for c in df.columns]
             
-            # Defining date_col to prevent "not defined" error
             date_col = next((c for c in df.columns if 'DATE' in c), "DATE")
-            close_col = 'CLOSE' if 'CLOSE' in df.columns else 'Close'
-            low_col = 'LOW' if 'LOW' in df.columns else 'Low'
+            close_col = 'CLOSE'
+            low_col = 'LOW'
             df[date_col] = pd.to_datetime(df[date_col])
+
+            # Technicals
+            df['EMA_8'] = df[close_col].ewm(span=8, adjust=False).mean()
+            df['EMA_21'] = df[close_col].ewm(span=21, adjust=False).mean()
+            df['SMA_50'] = df[close_col].rolling(window=50).mean()
+            df['SMA_100'] = df[close_col].rolling(window=100).mean()
+            df['SMA_200'] = df[close_col].rolling(window=200).mean()
+            
+            # Gaps
+            df['Dist_8'] = ((df[close_col] - df['EMA_8']) / df['EMA_8']) * 100
+            df['Dist_21'] = ((df[close_col] - df['EMA_21']) / df['EMA_21']) * 100
+            df['Dist_50'] = ((df[close_col] - df['SMA_50']) / df['SMA_50']) * 100
+            df['Dist_100'] = ((df[close_col] - df['SMA_100']) / df['SMA_100']) * 100
+            df['Dist_200'] = ((df[close_col] - df['SMA_200']) / df['SMA_200']) * 100
+            df_clean = df.dropna(subset=['EMA_8', 'SMA_200']).copy()
+            
         except Exception as e:
             st.error(f"Error fetching data: {e}")
             return
 
-    # Calculations strictly using Close prices
-    df['EMA_8'] = df[close_col].ewm(span=8, adjust=False).mean()
-    df['EMA_21'] = df[close_col].ewm(span=21, adjust=False).mean()
-    df['SMA_50'] = df[close_col].rolling(window=50).mean()
-    df['SMA_100'] = df[close_col].rolling(window=100).mean()
-    df['SMA_200'] = df[close_col].rolling(window=200).mean()
-    
-    # Distance Gaps
-    df['Dist_8'] = ((df[close_col] - df['EMA_8']) / df['EMA_8']) * 100
-    df['Dist_21'] = ((df[close_col] - df['EMA_21']) / df['EMA_21']) * 100
-    df['Dist_50'] = ((df[close_col] - df['SMA_50']) / df['SMA_50']) * 100
-    df['Dist_100'] = ((df[close_col] - df['SMA_100']) / df['SMA_100']) * 100
-    df['Dist_200'] = ((df[close_col] - df['SMA_200']) / df['SMA_200']) * 100
-    df_clean = df.dropna(subset=['EMA_8', 'EMA_21', 'SMA_50', 'SMA_100', 'SMA_200']).copy()
-    
-    # Current Distance for Reference Line
-    current_dist_50 = df_clean['Dist_50'].iloc[-1]
-
     # --- TABLE 1: Main Stats ---
     st.subheader(f"{ticker} vs Moving Avgs & Percentiles")
-
-    with st.expander("ℹ️ Table User Guide"):
-        st.markdown(f"""
-**1. Key Metrics Tracked**
-The app calculates the percentage distance (the "Gap") between the current price and five different moving averages:
-* 8-day and 21-day EMA: Short-term momentum and "swing" levels.
-* 50-day, 100-day, and 200-day SMA: Medium to long-term trend baselines.
-
-**2. The "Rubber Band" Logic (Percentiles)**
-Rather than just showing the current gap, the app looks at 10 years of history for that specific ticker to see how rare the current gap is. It calculates:
-* **p50 (Median):** The typical distance from the average.
-* **p70/p80 (Uptrend):** These levels generally occur in strong uptrends.
-* **p90/p95 (Extremes):** The levels reached only 10% or 5% of the time historically.
-
-**3. Visual Highlighting System**
-The table uses a traffic-light system to categorize the current price action:
-* 🟢 **Buy Zone (Green):** Triggered if the Gap is ≤ p50 (Median) AND price is > 8-EMA. Suggests a "pullback to the mean" in an uptrend.
-* 🟡 **Warning Zone (Yellow):** Triggered if the gap is between p50 and p90. Price is extending but not yet extreme.
-* 🔴 **Sell/Trim Zone (Red):** Triggered if the gap is $\ge$ p90. Price is statistically over-extended.
-        """)
-
+    
     stats_data = []
     thresholds = {} 
     current_price = df_clean[close_col].iloc[-1]
@@ -3301,189 +3272,70 @@ The table uses a traffic-light system to categorize the current price action:
         idx_gap = df_stats.columns.get_loc("Gap")
         if gap >= p90: styles[idx_gap] = 'background-color: #fce8e6; color: #c5221f; font-weight: bold;'
         elif gap <= p50 and (current_price > current_ema8): styles[idx_gap] = 'background-color: #e6f4ea; color: #1e7e34; font-weight: bold;'
-        elif gap > p50 and gap < p90: styles[idx_gap] = 'background-color: #fff8e1; color: #d68f00;'
         return styles
 
-    st.dataframe(
-        df_stats.style.apply(color_combined, axis=1).format(fmt_pct, subset=["Gap", "Avg", "p50", "p70", "p80", "p90", "p95"]),
-        use_container_width=True, hide_index=True,
-        column_config={"Price": st.column_config.NumberColumn("Price", format="$%.2f"), "MA Level": st.column_config.NumberColumn("MA Level", format="$%.2f")}
-    )
+    st.dataframe(df_stats.style.apply(color_combined, axis=1).format("{:.1f}%", subset=["Gap", "Avg", "p50", "p70", "p80", "p90", "p95"]), use_container_width=True, hide_index=True)
     
-    # --- TABLE 2: Combo Over-Extension Signals ---
-    st.subheader("🔥 Combo Over-Extension Signals")
-
-    t8_90 = thresholds['Dist_8']['p90']
-    t21_80 = thresholds['Dist_21']['p80']
-    t50_80 = thresholds['Dist_50']['p80']
-    
-    m_d = (df_clean['Dist_8'] >= t8_90) & (df_clean['Dist_21'] >= t21_80)
-    m_fs = (df_clean['Dist_8'] >= t8_90) & (df_clean['Dist_50'] >= t50_80)
-    m_t = (df_clean['Dist_8'] >= t8_90) & (df_clean['Dist_21'] >= t21_80) & (df_clean['Dist_50'] >= t50_80)
-    
-    res_d = run_backtest(m_d, df_clean[close_col], df_clean[low_col])
-    res_fs = run_backtest(m_fs, df_clean[close_col], df_clean[low_col])
-    res_t = run_backtest(m_t, df_clean[close_col], df_clean[low_col])
-
-    # Status Emoji Logic
-    d_active = "✅" if bool(m_d.iloc[-1]) else "❌"
-    fs_active = "✅" if bool(m_fs.iloc[-1]) else "❌"
-    t_active = "✅" if bool(m_t.iloc[-1]) else "❌"
-
-    # Updated column headers for Draw Down
-    combo_rows = [
-        {
-            "Combo Rule": "Double EMA", 
-            "Triggers": "(8-EMA Gap ≥ p90), (21-EMA Gap ≥ p80)",
-            "Occurrences": res_d[0], "Hit Rate (>=8% Draw Down)": res_d[1], "Median Days to Draw Down": f"{int(res_d[2])} days", 
-            "Active Today?": d_active, "raw_status": bool(m_d.iloc[-1])
-        },
-        {
-            "Combo Rule": "Fast vs Swing", 
-            "Triggers": "(8-EMA gap ≥ p90), (50-SMA gap ≥ p80)",
-            "Occurrences": res_fs[0], "Hit Rate (>=8% Draw Down)": res_fs[1], "Median Days to Draw Down": f"{int(res_fs[2])} days", 
-            "Active Today?": fs_active, "raw_status": bool(m_fs.iloc[-1])
-        },
-        {
-            "Combo Rule": "Triple Stack", 
-            "Triggers": "(8-EMA gap ≥ p90), (50-SMA gap ≥ p80), (21-EMA gap ≥ p80)",
-            "Occurrences": res_t[0], "Hit Rate (>=8% Draw Down)": res_t[1], "Median Days to Draw Down": f"{int(res_t[2])} days", 
-            "Active Today?": t_active, "raw_status": bool(m_t.iloc[-1])
-        }
-    ]
-    
-    df_combo = pd.DataFrame(combo_rows)
-
-    # Style: Bold row only if raw_status is True
-    def style_combo(row):
-        return ['font-weight: bold;' if row['raw_status'] else ''] * len(row)
-
-    st.dataframe(
-        df_combo.style.apply(style_combo, axis=1).format({"Hit Rate (>=8% Draw Down)": "{:.1f}%"}),
-        use_container_width=True, hide_index=True,
-        column_config={
-            "Triggers": st.column_config.TextColumn("Trigger Conditions", width="large"),
-            "Active Today?": st.column_config.TextColumn("Active Today?", width="small")
-        },
-        column_order=["Combo Rule", "Triggers", "Occurrences", "Hit Rate (>=8% Draw Down)", "Median Days to Draw Down", "Active Today?"]
-    )
-
-    # --- CHART: Visualization ---
+    # --- CHART ---
     st.subheader("Visualizing the % Distance from 50 SMA")
-    
     chart_data = pd.DataFrame({
         'Date': pd.to_datetime(df_clean[date_col]), 
         'Distance (%)': df_clean['Dist_50']
-    })
-    chart_data = chart_data[chart_data['Date'] >= (chart_data['Date'].max() - timedelta(days=730))]
+    }).tail(500)
 
-    # Base bar chart
     bars = alt.Chart(chart_data).mark_bar().encode(
         x='Date:T', 
         y=alt.Y('Distance (%)', title='% Dist from 50 SMA'),
         color=alt.condition(alt.datum['Distance (%)'] > 0, alt.value("#1e7e34"), alt.value("#c5221f"))
     )
+    st.altair_chart(bars, use_container_width=True)
 
-    # Horizontal Rule representing Current % Distance
-    rule = alt.Chart(pd.DataFrame({'y': [current_dist_50]})).mark_rule(
-        color='#333', 
-        strokeDash=[5, 5], 
-        strokeWidth=2
-    ).encode(y='y:Q')
+# --- 3. CSS STYLING & NAVIGATION ---
 
-    # Combined Chart
-    final_chart = (bars + rule).properties(height=300)
-    st.altair_chart(final_chart, use_container_width=True)
-
-st.markdown("""<style>
+st.markdown("""
+<style>
 .block-container{padding-top:3.5rem;padding-bottom:1rem;}
 .zones-panel{padding:14px 0; border-radius:10px;}
 .zone-row{display:flex; align-items:center; gap:10px; margin:8px 0;}
 .zone-label{width:90px; font-weight:700; text-align:right; flex-shrink: 0; font-size: 13px;}
-.zone-wrapper{
-    flex-grow: 1; 
-    position: relative; 
-    height: 24px; 
-    background-color: rgba(0,0,0,0.03);
-    border-radius: 4px;
-    overflow: hidden;
-}
-.zone-bar{
-    position: absolute;
-    left: 0; 
-    top: 0; 
-    bottom: 0; 
-    z-index: 1;
-    border-radius: 3px;
-    opacity: 0.65;
-}
+.zone-wrapper{flex-grow: 1; position: relative; height: 24px; background-color: rgba(0,0,0,0.03); border-radius: 4px; overflow: hidden;}
+.zone-bar{position: absolute; left: 0; top: 0; bottom: 0; z-index: 1; border-radius: 3px; opacity: 0.65;}
 .zone-bull{background-color: #71d28a;}
 .zone-bear{background-color: #f29ca0;}
-.zone-value{
-    position: absolute;
-    right: 8px;
-    top: 0;
-    bottom: 0;
-    display: flex;
-    align-items: center;
-    z-index: 2;
-    font-size: 12px; 
-    font-weight: 700;
-    color: #1f1f1f;
-    white-space: nowrap;
-    text-shadow: 0 0 4px rgba(255,255,255,0.8);
-}
+.zone-value{position: absolute; right: 8px; top: 0; bottom: 0; display: flex; align-items: center; z-index: 2; font-size: 12px; font-weight: 700; color: #1f1f1f; text-shadow: 0 0 4px rgba(255,255,255,0.8);}
 .price-divider { display: flex; align-items: center; justify-content: center; position: relative; margin: 24px 0; width: 100%; }
-.price-divider::before, .price-divider::after { content: ""; flex-grow: 1; height: 2px; background: #66b7ff; opacity: 0.4; }
-.price-badge { background: rgba(102, 183, 255, 0.1); color: #66b7ff; border: 1px solid rgba(102, 183, 255, 0.5); border-radius: 16px; padding: 6px 14px; font-weight: 800; font-size: 12px; letter-spacing: 0.5px; white-space: nowrap; margin: 0 12px; z-index: 1; }
+.price-badge { background: rgba(102, 183, 255, 0.1); color: #66b7ff; border: 1px solid rgba(102, 183, 255, 0.5); border-radius: 16px; padding: 6px 14px; font-weight: 800; font-size: 12px; margin: 0 12px; z-index: 1; }
 .metric-row{display:flex;gap:10px;flex-wrap:wrap;margin:.35rem 0 .75rem 0}
 .badge{background: rgba(128, 128, 128, 0.08); border: 1px solid rgba(128, 128, 128, 0.2); border-radius:18px; padding:6px 10px; font-weight:700}
-.price-badge-header{background: rgba(102, 183, 255, 0.1); border: 1px solid #66b7ff; border-radius:18px; padding:6px 10px; font-weight:800}
-.light-note { opacity: 0.7; font-size: 14px; margin-bottom: 10px; }
-
-</style>""", unsafe_allow_html=True)
+</style>
+""", unsafe_allow_html=True)
 
 try:
     sheet_url = st.secrets["GSHEET_URL"]
     df_global = load_and_clean_data(sheet_url)
     
-    # 1. Database Date (from Google Sheet)
-    db_date = df_global["Trade Date"].max().strftime("%d %b %y")
+    db_date = df_global["Trade Date"].max().strftime("%d %b %y") if not df_global.empty else "N/A"
     
-    # 2. Price History Date (fetch AAPL as proxy for latest market data)
-    price_date = "Syncing..."
-    try:
-        # We use AAPL as the standard "heartbeat" for the market data feed
-        df_aapl = fetch_yahoo_data("AAPL")
-        if df_aapl is not None and not df_aapl.empty:
-            # FIX: Use 'DATE' (uppercase) because fetch_yahoo_data capitalizes columns
-            price_date = pd.to_datetime(df_aapl['DATE']).max().strftime("%d %b %y")
-        else:
-            # FIX: If fetch fails (returns None), explicitly set to Offline
-            price_date = "Offline"
-    except Exception:
-        price_date = "Offline"
+    # Simple logic to determine if price history is live
+    price_date = "Offline"
+    df_aapl = fetch_yahoo_data("AAPL")
+    if df_aapl is not None and not df_aapl.empty:
+        price_date = pd.to_datetime(df_aapl['DATE']).max().strftime("%d %b %y")
 
+    # Navigation Setup
     pg = st.navigation([
         st.Page(lambda: run_database_app(df_global), title="Database", icon="📂", url_path="options_db", default=True),
         st.Page(lambda: run_rankings_app(df_global), title="Rankings", icon="🏆", url_path="rankings"),
         st.Page(lambda: run_pivot_tables_app(df_global), title="Pivot Tables", icon="🎯", url_path="pivot_tables"),
         st.Page(lambda: run_strike_zones_app(df_global), title="Strike Zones", icon="📊", url_path="strike_zones"),
         st.Page(lambda: run_rsi_scanner_app(df_global), title="RSI Scanner", icon="📈", url_path="rsi_scanner"),
-        st.Page(lambda: run_seasonality_app(df_global), title="Seasonality", icon="📅", url_path="seasonality"),
         st.Page(lambda: run_ema_distance_app(df_global), title="EMA Distance", icon="📏", url_path="ema_distance"),
     ])
 
-    st.sidebar.caption("🖥️ Everything is best viewed with a wide desktop monitor in light mode.")
-    
-    # Updated Sidebar Dates
     st.sidebar.caption(f"💾 **Database:** {db_date}")
     st.sidebar.caption(f"📈 **Price History:** {price_date}")
     
     pg.run()
-    
-    # Global padding at the bottom of the page
-    st.markdown("<br><br><br><br>", unsafe_allow_html=True)
     
 except Exception as e: 
     st.error(f"Error initializing dashboard: {e}")
