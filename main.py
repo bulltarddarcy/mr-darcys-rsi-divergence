@@ -697,7 +697,7 @@ def run_strike_zones_app(df):
 
 def run_price_divergences_app(df_global):
     st.title("📉 Price Divergences")
-    from datetime import timedelta # Ensure this is available for benchmark calc
+    from datetime import timedelta
     
     st.markdown("""
         <style>
@@ -756,8 +756,7 @@ def run_price_divergences_app(df_global):
                         df[d_col] = pd.to_datetime(df[d_col])
                         df = df.set_index(d_col).sort_index()
                         benchmarks[sym] = df[[c_col]]
-            except Exception:
-                pass
+            except Exception: pass
         return benchmarks
 
     # --- TABS ---
@@ -781,7 +780,7 @@ def run_price_divergences_app(df_global):
             with c_guide2:
                 st.markdown("#### 📊 Table Metrics & Benchmarks")
                 st.markdown("""
-                * **Return Δ:** % Change from the Signal Price (P2) to the Last Close.
+                * **Return Δ:** % Change from the **CLOSE** of the Signal Date to the Last Close. (Prev. used Lows/Highs).
                 * **Win Rate:** Percentage of current active signals that are in profit.
                 * **Relative Performance (vs SPY/QQQ):**
                     * **Main Number (e.g. +7.1%):** The **Alpha**. This is how much the strategy outperformed the index (Strategy Avg - Index Avg).
@@ -789,7 +788,6 @@ def run_price_divergences_app(df_global):
                 """)
         
         if data_option_div:
-            # 1. Load Benchmarks
             benchmarks = get_benchmark_data()
             
             try:
@@ -842,6 +840,12 @@ def run_price_divergences_app(df_global):
                             daily_divs = find_divergences(d_d, ticker, 'Daily', min_n=0, periods_input=CSV_PERIODS_DAYS, optimize_for='PF', lookback_period=div_lookback, price_source=div_source, strict_validation=strict_div, recent_days_filter=days_since, rsi_diff_threshold=div_diff)
                             
                             curr_close_d = float(d_d['Price'].iloc[-1]) if 'Price' in d_d.columns else 0.0
+                            
+                            # Create a quick Date->Close lookup map for this ticker
+                            # We use this to correct the Entry Price (using Close instead of Low)
+                            date_col_d = next((c for c in d_d.columns if 'DATE' in c.upper()), 'Date')
+                            d_d['Date_Str'] = d_d[date_col_d].apply(lambda x: x.strftime('%Y-%m-%d') if pd.notnull(x) else '')
+                            price_map_d = pd.Series(d_d['Price'].values, index=d_d['Date_Str']).to_dict()
 
                             if daily_divs:
                                 all_rsi = d_d['RSI'].dropna().values if 'RSI' in d_d.columns else []
@@ -850,11 +854,16 @@ def run_price_divergences_app(df_global):
                                 for div in daily_divs:
                                     div['Last_Close'] = curr_close_d
                                     
-                                    # Safe Benchmark Calculation
+                                    # OVERRIDE: Use the CLOSE of the signal date as the entry price
+                                    # Fallback to div['Price2'] (Low) only if lookup fails
+                                    sig_iso = div['Signal_Date_ISO']
+                                    div['Entry_Price'] = price_map_d.get(sig_iso, div['Price2'])
+                                    
+                                    # Benchmark Logic
                                     div['SPY_Ret'] = 0.0
                                     div['QQQ_Ret'] = 0.0
                                     try:
-                                        sig_dt = pd.to_datetime(div['Signal_Date_ISO'])
+                                        sig_dt = pd.to_datetime(sig_iso)
                                         for b_sym, b_df in benchmarks.items():
                                             if not b_df.empty:
                                                 idx_loc = b_df.index.searchsorted(sig_dt)
@@ -882,6 +891,10 @@ def run_price_divergences_app(df_global):
                             weekly_divs = find_divergences(d_w, ticker, 'Weekly', min_n=0, periods_input=CSV_PERIODS_WEEKS, optimize_for='PF', lookback_period=div_lookback, price_source=div_source, strict_validation=strict_div, recent_days_filter=days_since, rsi_diff_threshold=div_diff)
                             
                             curr_close_w = float(d_w['Price'].iloc[-1]) if 'Price' in d_w.columns else 0.0
+                            
+                            date_col_w = next((c for c in d_w.columns if 'DATE' in c.upper()), 'Date')
+                            d_w['Date_Str'] = d_w[date_col_w].apply(lambda x: x.strftime('%Y-%m-%d') if pd.notnull(x) else '')
+                            price_map_w = pd.Series(d_w['Price'].values, index=d_w['Date_Str']).to_dict()
 
                             if weekly_divs:
                                 all_rsi_w = d_w['RSI'].dropna().values if 'RSI' in d_w.columns else []
@@ -889,11 +902,16 @@ def run_price_divergences_app(df_global):
                                 for div in weekly_divs:
                                     div['Last_Close'] = curr_close_w
                                     
-                                    # Safe Benchmark Calculation
+                                    # OVERRIDE: Use Close of signal date
+                                    sig_iso = div['Signal_Date_ISO']
+                                    div['Entry_Price'] = price_map_w.get(sig_iso, div['Price2'])
+                                    
+                                    # Benchmark Logic
                                     div['SPY_Ret'] = 0.0
                                     div['QQQ_Ret'] = 0.0
                                     try:
-                                        sig_dt = pd.to_datetime(div['Signal_Date_ISO'])
+                                        sig_dt = pd.to_datetime(sig_iso)
+                                        # Approximation for Weekly: +4 days to get Friday
                                         approx_friday = sig_dt + timedelta(days=4)
                                         
                                         for b_sym, b_df in benchmarks.items():
@@ -930,9 +948,11 @@ def run_price_divergences_app(df_global):
                             st.warning(f"No signals found in the last {days_since} days.")
                         else:
                             # --- CALCULATE RETURN SINCE SIGNAL ---
-                            res_div_df['Price2'] = pd.to_numeric(res_div_df['Price2'], errors='coerce')
+                            # Use Entry_Price (Close) instead of Price2 (Low/High)
+                            res_div_df['Entry_Price'] = pd.to_numeric(res_div_df['Entry_Price'], errors='coerce')
                             res_div_df['Last_Close'] = pd.to_numeric(res_div_df['Last_Close'], errors='coerce')
-                            res_div_df['Return_Since_Signal'] = ((res_div_df['Last_Close'] - res_div_df['Price2']) / res_div_df['Price2']) * 100
+                            
+                            res_div_df['Return_Since_Signal'] = ((res_div_df['Last_Close'] - res_div_df['Entry_Price']) / res_div_df['Entry_Price']) * 100
                             
                             res_div_df = res_div_df.sort_values(by='Signal_Date_ISO', ascending=False)
                             consolidated = res_div_df.groupby(['Ticker', 'Type', 'Timeframe']).head(1)
