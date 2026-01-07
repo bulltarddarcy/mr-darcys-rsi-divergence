@@ -247,92 +247,94 @@ def get_max_trade_date(df):
 
 import re
 
+
 def get_gdrive_binary_data(url):
     """
-    Robustly extracts the File ID and forces a direct download from GDrive.
+    Uses Regex to find the File ID regardless of URL format or parameters.
     """
     try:
-        # 1. Precise ID extraction using regex (handles /d/, /file/d/, and id=)
-        # This covers cases like /view?usp=sharing and /view?usp=drive_link
-        match = re.search(r'(?:id=|[d/])([a-zA-Z0-9_-]{25,})', url)
+        # 1. Improved ID Extraction: Targets the 25-45 character string between /d/ and /view
+        # This is much safer than .split('/')
+        match = re.search(r'/d/([a-zA-Z0-9_-]{25,})', url)
         if not match:
-            return None
-        file_id = match.group(1)
+            # Fallback for ?id= format
+            match = re.search(r'id=([a-zA-Z0-9_-]{25,})', url)
             
-        # 2. Construct direct download URL
-        # Adding '&confirm=t' is a common trick to bypass the scan screen for public files
-        download_url = f"https://drive.google.com/uc?export=download&id={file_id}&confirm=t"
+        if not match:
+            st.error(f"Could not find a valid Google Drive ID in URL: {url}")
+            return None
+            
+        file_id = match.group(1)
+        download_url = f'https://drive.google.com/uc?export=download&id={file_id}'
         
+        # 2. Use a Session to handle potential redirects/cookies
         session = requests.Session()
-        # Set a browser-like User-Agent to prevent bot-detection issues
-        headers = {'User-Agent': 'Mozilla/5.0'}
+        response = session.get(download_url, stream=True, timeout=20)
         
-        response = session.get(download_url, stream=True, timeout=15, headers=headers)
-        
-        # 3. Check if we actually got the file or an HTML warning page
+        # 3. Handle the "Virus Scan" confirmation automatically
         if response.text.strip().startswith("<!DOCTYPE html>"):
-            # If still getting HTML, we hunt for the specific confirm token in the page
-            token_match = re.search(r'confirm=([0-9A-Za-z-_]+)', response.text)
-            if token_match:
-                confirm_token = token_match.group(1)
-                response = session.get(download_url.replace("&confirm=t", f"&confirm={confirm_token}"), 
-                                       stream=True, headers=headers)
-        
+            confirm_match = re.search(r'confirm=([0-9A-Za-z-_]+)', response.text)
+            if confirm_match:
+                confirm_token = confirm_match.group(1)
+                response = session.get(download_url + f"&confirm={confirm_token}", stream=True)
+
         if response.status_code == 200:
             return BytesIO(response.content)
-        return None
+        else:
+            st.error(f"GDrive API returned status {response.status_code}")
+            return None
     except Exception as e:
-        print(f"G-Drive Download Error: {e}")
+        st.error(f"G-Drive Download Error: {e}")
         return None
 
 @st.cache_data(ttl=3600, show_spinner="Loading Dataset...")
 def load_parquet_and_clean(key):
-    # Sanitize the key string to prevent whitespace issues from PARQUET_CONFIG
+    # Ensure key has no hidden whitespace
     clean_key = key.strip()
+    
     if clean_key not in st.secrets:
-        st.error(f"Key '{clean_key}' not found in Streamlit Secrets.")
+        st.error(f"Secret Key '{clean_key}' not found in secrets.toml")
         return None
         
     url = st.secrets[clean_key]
     
     try:
         buffer = get_gdrive_binary_data(url)
-        if buffer is None:
+        if not buffer:
             return None
-
+            
         content = buffer.getvalue()
         
-        # Try Parquet First, then CSV fallback
+        # Verify we didn't just download an HTML error page
+        if content.startswith(b"<!DOCTYPE"):
+            st.error(f"File {clean_key} failed: Google Drive sent HTML instead of data. Check permissions.")
+            return None
+
+        # Try Parquet, Fallback to CSV
         try:
             df = pd.read_parquet(BytesIO(content))
         except Exception:
             try:
                 df = pd.read_csv(BytesIO(content))
             except Exception as e:
-                st.error(f"Parsing error for {clean_key}: {e}")
+                st.error(f"Data format error for {clean_key}: {e}")
                 return None
 
-        # Standard Cleaning Logic
+        # --- Standard Cleaning Logic ---
         df.columns = [c.strip() for c in df.columns]
         date_col = next((c for c in df.columns if 'DATE' in c.upper()), None)
         if date_col:
             df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
             df = df.rename(columns={date_col: 'ChartDate'}).sort_values('ChartDate')
-            
-        if 'Close' not in df.columns and 'Price' in df.columns:
-            df = df.rename(columns={'Price': 'Close'})
+        
         if 'Close' in df.columns and 'Price' not in df.columns:
             df['Price'] = df['Close']
             
-        cols_to_numeric = ['Price', 'High', 'Low', 'Open', 'Volume', 'RSI', 'EMA8', 'EMA21', 'VolSMA']
-        for c in cols_to_numeric:
-            if c in df.columns:
-                df[c] = pd.to_numeric(df[c], errors='coerce')
-
         return df
     except Exception as e:
-        st.error(f"Critical error loading {clean_key}: {e}")
+        st.error(f"Fatal error processing {clean_key}: {e}")
         return None
+
 
 @st.cache_data(ttl=3600)
 def get_parquet_config():
@@ -385,150 +387,6 @@ def get_parquet_config():
 
 DATA_KEYS_PARQUET = get_parquet_config()
 
-
-def get_gdrive_binary_data(url):
-    """
-    Final robust version: Handles 'unscannable' warnings, 
-    cookie persistence, and regex ID extraction.
-    """
-    try:
-        # 1. Extract File ID using a strict regex
-        match = re.search(r'(?:id=|[d/])([a-zA-Z0-9_-]{25,})', url)
-        if not match:
-            return None
-        file_id = match.group(1)
-            
-        download_url = "https://docs.google.com/uc?export=download"
-        session = requests.Session()
-        # Set a standard browser header to avoid bot-blocking
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        
-        # 2. Initial Attempt
-        params = {'id': file_id}
-        response = session.get(download_url, params=params, stream=True, timeout=20, headers=headers)
-        
-        # 3. Check if we hit the 'Large/Unscannable File' HTML page
-        if response.text.strip().startswith("<!DOCTYPE html>"):
-            # Search for the confirm token in the HTML content
-            # Google puts it in links like: confirm=xxxx&id=...
-            confirm_match = re.search(r'confirm=([0-9A-Za-z-_]+)', response.text)
-            if confirm_match:
-                confirm_token = confirm_match.group(1)
-                # Re-request with the confirmation token
-                params['confirm'] = confirm_token
-                response = session.get(download_url, params=params, stream=True, timeout=20, headers=headers)
-        
-        if response.status_code == 200:
-            return BytesIO(response.content)
-            
-        return None
-    except Exception as e:
-        st.error(f"G-Drive Sync Error: {e}")
-        return None
-
-@st.cache_data(ttl=3600, show_spinner="Loading Dataset...")
-def load_parquet_and_clean(key):
-    # Ensure key is stripped of any hidden newline characters from PARQUET_CONFIG
-    clean_key = key.strip()
-    
-    if clean_key not in st.secrets:
-        st.error(f"Secret Key '{clean_key}' not found. Check PARQUET_CONFIG spelling.")
-        return None
-        
-    url = st.secrets[clean_key]
-    
-    try:
-        buffer = get_gdrive_binary_data(url)
-        if not buffer:
-            return None
-            
-        content = buffer.getvalue()
-        
-        # Double check: if it still starts with HTML, the bypass failed
-        if content.startswith(b"<!DOCTYPE"):
-            st.error(f"Could not bypass G-Drive security for {clean_key}. Try re-saving the file in Drive.")
-            return None
-
-        # Standard Parquet -> Dataframe Logic
-        try:
-            df = pd.read_parquet(BytesIO(content))
-        except Exception:
-            df = pd.read_csv(BytesIO(content))
-
-        # --- Your existing cleaning code here ---
-        df.columns = [c.strip() for c in df.columns]
-        date_col = next((c for c in df.columns if 'DATE' in c.upper()), None)
-        if date_col:
-            df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
-            df = df.rename(columns={date_col: 'ChartDate'}).sort_values('ChartDate')
-        
-        # Ensure Price column exists
-        if 'Close' in df.columns and 'Price' not in df.columns:
-            df['Price'] = df['Close']
-            
-        return df
-        
-    except Exception as e:
-        st.error(f"Error processing {clean_key}: {e}")
-        return None
-
-@st.cache_data(ttl=3600, show_spinner="Loading Dataset...")
-def load_parquet_and_clean(key):
-    # 1. Fetch the URL from secrets based on the key (e.g., PARQUET_SP100)
-    if key not in st.secrets:
-        st.error(f"Key '{key}' not found in Streamlit Secrets.")
-        return None
-        
-    url = st.secrets[key]
-    
-    try:
-        # 2. Use your existing robust binary helper to handle Google Drive
-        # This function handles confirmation tokens for large files (SP500/SP100)
-        buffer = get_gdrive_binary_data(url)
-        
-        if not buffer:
-            st.error(f"Could not retrieve data for {key}. Check if the Drive link is public.")
-            return None
-            
-        content = buffer.getvalue()
-
-        # 3. Try Parquet First, then Fallback to CSV
-        try:
-            df = pd.read_parquet(BytesIO(content))
-        except Exception:
-            try:
-                # Sometimes these files are actually CSVs despite the name
-                df = pd.read_csv(BytesIO(content))
-            except Exception as e:
-                st.error(f"Error reading {key}: {e}")
-                return None
-
-        # 4. Standardize Columns
-        df.columns = [c.strip() for c in df.columns]
-        
-        # Look for a Date column
-        date_col = next((c for c in df.columns if 'DATE' in c.upper()), None)
-        if date_col:
-            df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
-            df = df.rename(columns={date_col: 'ChartDate'}).sort_values('ChartDate')
-            
-        # Ensure Price/Close consistency
-        if 'Close' not in df.columns and 'Price' in df.columns:
-            df = df.rename(columns={'Price': 'Close'})
-        if 'Close' in df.columns and 'Price' not in df.columns:
-            df['Price'] = df['Close']
-            
-        # Ensure Numeric for calculations
-        cols_to_numeric = ['Price', 'High', 'Low', 'Open', 'Volume', 'RSI', 'EMA8', 'EMA21', 'VolSMA']
-        for c in cols_to_numeric:
-            if c in df.columns:
-                df[c] = pd.to_numeric(df[c], errors='coerce')
-
-        return df
-        
-    except Exception as e:
-        st.error(f"Critical error loading {key}: {e}")
-        return None
 
 
 @st.cache_data(ttl=3600)
