@@ -1089,11 +1089,21 @@ def run_rsi_scanner_app(df_global):
                 * 🟢 **3.0 - 5.0:** Excellent.
                 * 🚀 **> 5.0:** "Holy Grail" (Extremely rare and consistent).
 
-            #### 3. Win Rate & EV
-            * **Win Rate:** The percentage of historical trades that ended in profit ($> 0\\%$). *Target: > 60%*.
-            * **EV (Expected Value):** The average return per trade.
-                * *Interpretation:* If EV is $+2.5\\%$, it means historically, every time this RSI setup occurred, the stock gained an average of $2.5\\%$ over this timeframe.
-            * **Count:** The sample size. *Warning: Be skeptical of stats derived from fewer than 10 trades.*
+            #### 3. Win Rate
+            * **Purpose:** Measures the reliability of the strategy. It answers: "How often does this trade end in profit?"
+            * **Calculation:** $\\frac{\\text{Winning Trades}}{\\text{Total Trades}} \\times 100$
+            * **Context:** High win rates (>60%) are psychologically easier to trade. However, a high win rate alone is not enough; it must be backed by a positive EV (avoiding strategies that win small often but suffer catastrophic losses).
+
+            #### 4. EV (Expected Value)
+            * **Purpose:** The "Mathematical Edge." It combines the Win Rate with the average size of wins and losses to show the true value of the trade.
+            * **Calculation:** The arithmetic mean (average) of all percentage returns for the period.
+            * **Interpretation:** If EV is **+2.5%** for a 21-day hold, it means historically, every time this specific RSI signal triggered, the stock gained an average of 2.5% over the next month.
+            * **Target:** Look for positive EV. Higher is better.
+
+            #### 5. Count (N)
+            * **Definition:** The number of historical trade samples included in the calculation.
+            * **Note on Decreasing N:** You may notice 'N' drops for longer holding periods (e.g., 252 days). This occurs because recent signals (e.g., from 6 months ago) have completed their short-term holds but have not yet existed long enough to complete the 252-day hold.
+            * **Warning:** Statistical significance requires sample size. Be skeptical of metrics derived from fewer than 10-15 trades.
             """)
 
         with st.expander("View Scanned Tickers"):
