@@ -2669,38 +2669,12 @@ def fetch_history_optimized(ticker_sym, t_map):
 def run_seasonality_app(df_global):
     st.title("📅 Seasonality")
     
-    # --- 0. SESSION STATE INITIALIZATION (Persistence Layer) ---
-    # Single Ticker Memory
+    # --- 0. SESSION STATE INITIALIZATION ---
     if 'seas_single_df' not in st.session_state: st.session_state.seas_single_df = None
     if 'seas_single_last_ticker' not in st.session_state: st.session_state.seas_single_last_ticker = ""
-    
-    # Scanner Memory
     if 'seas_scan_results' not in st.session_state: st.session_state.seas_scan_results = None
     if 'seas_scan_csvs' not in st.session_state: st.session_state.seas_scan_csvs = None
     if 'seas_scan_active' not in st.session_state: st.session_state.seas_scan_active = False
-    
-    # --- Helper: Optimized Data Fetching (Parquet > CSV > Yahoo) ---
-    def fetch_history_optimized(ticker_sym, t_map):
-        pq_key = f"{ticker_sym}_PARQUET"
-        if pq_key in t_map:
-            try:
-                file_id = t_map[pq_key]
-                url = f"https://drive.google.com/uc?export=download&id={file_id}"
-                buffer = get_gdrive_binary_data(url)
-                if buffer:
-                    df = pd.read_parquet(buffer, engine='pyarrow')
-                    if isinstance(df.index, pd.DatetimeIndex):
-                        df = df.reset_index()
-                    elif df.index.name and 'DATE' in df.index.name.upper():
-                        df = df.reset_index()
-                    elif 'Date' not in df.columns and 'DATE' not in df.columns:
-                        df = df.reset_index()
-                    return df
-            except Exception:
-                pass 
-        if ticker_sym in t_map:
-            return get_ticker_technicals(ticker_sym, t_map)
-        return fetch_yahoo_data(ticker_sym)
 
     # --- Helper: Finance Formatting ---
     def fmt_finance(val):
@@ -2710,50 +2684,46 @@ def run_seasonality_app(df_global):
         return f"{val:.1f}%"
 
     # Create Tabs
-    tab_single, tab_scan = st.tabs(["🔎 Single Ticker Analysis", "🚀 Opportunity Scanner"])
+    tab_single, tab_scan = st.tabs(["🔎 Single Ticker Analysis (Yahoo Finance)", "🚀 Opportunity Scanner"])
     
     # ==============================================================================
-    # TAB 1: SINGLE TICKER ANALYSIS
+    # TAB 1: SINGLE TICKER ANALYSIS (FORCED TO YAHOO FINANCE)
     # ==============================================================================
     with tab_single:
         with st.expander("ℹ️ Page Notes: Methodology"):
             st.markdown("""
             **📊 Calendar Month Performance**
-            * **Year Total:** The **Compounded Return** for that year (Start Price vs End Price), not the sum of months.
+            * **Year Total:** The **Compounded Return** for that year (Start Price vs End Price).
             * **Month Average:** The **AVERAGE** return for that specific month across the selected history.
+            * **Data Source:** This specific view pulls live/historical data directly from **Yahoo Finance**.
             """)
 
         c1, c2, c3 = st.columns([1, 1, 1])
         with c1:
-            # We use the key to maintain the input state, but we manually check for changes below
             ticker_input = st.text_input("Ticker", value="SPY", key="seas_ticker").strip().upper()
             
         if not ticker_input:
             st.info("Please enter a ticker symbol.")
         else:
-            ticker_map = load_ticker_map()
-            
-            # --- PERSISTENCE LOGIC ---
-            # Only fetch if the ticker changed OR if we have no data stored yet
+            # --- PERSISTENCE LOGIC: YAHOO ONLY ---
             if (ticker_input != st.session_state.seas_single_last_ticker) or (st.session_state.seas_single_df is None):
-                with st.spinner(f"Fetching history for {ticker_input}..."):
-                    fetched_df = fetch_history_optimized(ticker_input, ticker_map)
-                    # Store in session state
+                with st.spinner(f"Fetching {ticker_input} history from Yahoo Finance..."):
+                    # Use existing global helper function for Yahoo data
+                    fetched_df = fetch_yahoo_data(ticker_input)
                     st.session_state.seas_single_df = fetched_df
                     st.session_state.seas_single_last_ticker = ticker_input
             
-            # Use data from memory
             df = st.session_state.seas_single_df
 
             if df is None or df.empty:
-                st.error(f"Could not load data for {ticker_input}. Check the ticker symbol.")
+                st.error(f"Could not load Yahoo Finance data for {ticker_input}.")
             else:
                 df.columns = [c.strip().upper() for c in df.columns]
                 date_col = next((c for c in df.columns if 'DATE' in c), None)
                 close_col = next((c for c in df.columns if 'CLOSE' in c), None)
                 
                 if not date_col or not close_col:
-                    st.error("Data source format error: Missing Date or Close columns.")
+                    st.error("Data format error: Missing Date or Close columns.")
                 else:
                     df[date_col] = pd.to_datetime(df[date_col])
                     df = df.set_index(date_col).sort_index()
@@ -2776,182 +2746,73 @@ def run_seasonality_app(df_global):
                     curr_df = season_df[season_df['Year'] == current_year].copy()
                     
                     if hist_df.empty:
-                        st.warning("Not enough historical full-year data available.")
+                        st.warning("Not enough historical data available.")
                     else:
                         min_avail_year = int(hist_df['Year'].min())
                         max_avail_year = int(hist_df['Year'].max())
                         
                         with c2:
-                            start_year = st.number_input("Start Year (History)", min_value=min_avail_year, max_value=max_avail_year, value=max_avail_year-10 if max_avail_year-10 >= min_avail_year else min_avail_year, key="seas_start")
+                            start_year = st.number_input("Start Year", min_value=min_avail_year, max_value=max_avail_year, value=max_avail_year-10 if max_avail_year-10 >= min_avail_year else min_avail_year, key="seas_start")
                         with c3:
-                            end_year = st.number_input("End Year (History)", min_value=start_year, max_value=max_avail_year, value=max_avail_year, key="seas_end")
+                            end_year = st.number_input("End Year", min_value=start_year, max_value=max_avail_year, value=max_avail_year, key="seas_end")
 
                         mask = (hist_df['Year'] >= start_year) & (hist_df['Year'] <= end_year)
                         hist_filtered = hist_df[mask].copy()
                         
                         if hist_filtered.empty:
-                            st.warning("No data in selected date range.")
+                            st.warning("No data in selected range.")
                         else:
                             month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
                             
-                            # --- STATS ---
                             avg_stats = hist_filtered.groupby('Month')['Pct'].mean().reindex(range(1, 13), fill_value=0)
                             win_rates = hist_filtered.groupby('Month')['Pct'].apply(lambda x: (x > 0).mean() * 100).reindex(range(1, 13), fill_value=0)
 
-                            # --- OUTLOOK ---
+                            # --- Outlook Logic ---
                             cur_val = curr_df.groupby('Month')['Pct'].sum().reindex(range(1, 13)).get(current_month, 0.0)
-                            if pd.isna(cur_val): cur_val = 0.0
-                            
                             hist_avg = avg_stats.get(current_month, 0.0)
-                            diff = cur_val - hist_avg
-                            if diff > 0:
-                                context_str = f"Outperforming Hist Avg of {fmt_finance(hist_avg)}"
-                            else:
-                                context_str = f"Underperforming Hist Avg of {fmt_finance(hist_avg)}"
-                            
                             cur_color = "#71d28a" if cur_val > 0 else "#f29ca0"
 
-                            idx_next = (current_month % 12) + 1
-                            idx_next_2 = ((current_month + 1) % 12) + 1
-                            nm_name = month_names[idx_next-1]
-                            nnm_name = month_names[idx_next_2-1]
-                            nm_avg = avg_stats.get(idx_next, 0.0)
-                            nm_wr = win_rates.get(idx_next, 0.0)
-                            nnm_avg = avg_stats.get(idx_next_2, 0.0)
-
-                            if nm_avg >= 1.5 and nm_wr >= 65:
-                                positioning = "🚀 <b>Strong Bullish.</b> Historically a standout month."
-                            elif nm_avg > 0 and nm_wr >= 50:
-                                positioning = "↗️ <b>Mildly Bullish.</b> Positive bias, moderate conviction."
-                            elif nm_avg < 0 and nm_avg > -1.0:
-                                positioning = "⚠️ <b>Choppy/Weak.</b> Historically drags or trends flat."
-                            else:
-                                positioning = "🐻 <b>Bearish.</b> Historically a weak month."
-
-                            trend_vs = "improves" if nnm_avg > nm_avg else "weakens"
-                            
                             st.markdown(f"""
                             <div style="background-color: rgba(128,128,128,0.05); border-left: 5px solid #66b7ff; padding: 15px; border-radius: 4px; margin-bottom: 25px;">
-                                <div style="font-weight: bold; font-size: 1.1em; margin-bottom: 8px; color: #444;">🤖 Seasonal Outlook</div>
-                                <div style="margin-bottom: 4px;">• <b>Current ({month_names[current_month-1]}):</b> <span style="color:{cur_color}; font-weight:bold;">{fmt_finance(cur_val)}</span>. {context_str}.</div>
-                                <div style="margin-bottom: 4px;">• <b>Next Month ({nm_name}):</b> {positioning} (Avg: {fmt_finance(nm_avg)}, Win Rate: {nm_wr:.1f}%)</div>
-                                <div>• <b>Following ({nnm_name}):</b> Seasonality {trend_vs} to an average of <b>{fmt_finance(nnm_avg)}</b>.</div>
+                                <div style="font-weight: bold; font-size: 1.1em; margin-bottom: 8px; color: #444;">🤖 Seasonal Outlook ({ticker_input})</div>
+                                <div style="margin-bottom: 4px;">• <b>{month_names[current_month-1]} (Current):</b> <span style="color:{cur_color}; font-weight:bold;">{fmt_finance(cur_val)}</span> vs Hist Avg: {fmt_finance(hist_avg)}</div>
+                                <div>• <b>Next Month ({month_names[current_month % 12]}):</b> Historically averages <b>{fmt_finance(avg_stats.get((current_month % 12) + 1, 0.0))}</b> with a <b>{win_rates.get((current_month % 12) + 1, 0.0):.1f}%</b> win rate.</div>
                             </div>
                             """, unsafe_allow_html=True)
 
+                            # Charts and Heatmap
                             col_chart1, col_chart2 = st.columns(2, gap="medium")
 
-                            # --- CHART 1: Performance (Line) ---
                             with col_chart1:
-                                st.subheader(f"📈 Performance Tracking")
+                                st.subheader("📈 Cumulative Growth")
                                 hist_cumsum = avg_stats.cumsum()
-                                line_data_hist = pd.DataFrame({
-                                    'Month': range(1, 13), 'MonthName': month_names,
-                                    'Value': hist_cumsum.values, 'Type': f'Avg ({start_year}-{end_year})'
-                                })
+                                line_data = pd.DataFrame({'Month': month_names, 'Value': hist_cumsum.values, 'Type': 'Historical Avg'})
+                                st.altair_chart(alt.Chart(line_data).mark_line(point=True).encode(
+                                    x=alt.X('Month', sort=month_names), y='Value', tooltip=['Month', 'Value']
+                                ).properties(height=350), use_container_width=True)
 
-                                curr_monthly_stats = curr_df.groupby('Month')['Pct'].sum().reindex(range(1, 13)) 
-                                curr_cumsum = curr_monthly_stats.cumsum()
-                                valid_curr_indices = curr_monthly_stats.dropna().index
-                                
-                                line_data_curr = pd.DataFrame({
-                                    'Month': valid_curr_indices,
-                                    'MonthName': [month_names[i-1] for i in valid_curr_indices],
-                                    'Value': curr_cumsum.loc[valid_curr_indices].values,
-                                    'Type': f'Current Year ({current_year})'
-                                })
-                                combined_line_data = pd.concat([line_data_hist, line_data_curr])
-                                combined_line_data['Label'] = combined_line_data['Value'].apply(fmt_finance)
-
-                                line_base = alt.Chart(combined_line_data).encode(
-                                    x=alt.X('MonthName', sort=month_names, title='Month'),
-                                    y=alt.Y('Value', title='Cumulative Return (%)'),
-                                    color=alt.Color('Type', legend=alt.Legend(orient='bottom', title=None))
-                                )
-                                st.altair_chart((line_base.mark_line(point=True) + line_base.mark_text(dy=-10, fontSize=12, fontWeight='bold').encode(text='Label')).properties(height=350).configure_axis(labelFontSize=11, titleFontSize=13), use_container_width=True)
-
-                            # --- CHART 2: Monthly Returns (Bar) ---
                             with col_chart2:
-                                st.subheader(f"📊 Monthly Returns")
-                                hist_bar_data = pd.DataFrame({'Month': range(1, 13), 'MonthName': month_names, 'Value': avg_stats.values, 'Type': 'Historical Avg'})
-                                
-                                completed_curr_df = curr_df[curr_df['Month'] < current_month].copy()
-                                curr_bar_data = pd.DataFrame()
-                                if not completed_curr_df.empty:
-                                    curr_vals = completed_curr_df.groupby('Month')['Pct'].mean()
-                                    curr_bar_data = pd.DataFrame({'Month': curr_vals.index, 'MonthName': [month_names[i-1] for i in curr_vals.index], 'Value': curr_vals.values, 'Type': f'{current_year} Actual'})
-                                
-                                combined_bar_data = pd.concat([hist_bar_data, curr_bar_data])
-                                combined_bar_data['Label'] = combined_bar_data['Value'].apply(fmt_finance)
-
-                                combined_bar_data['LabelY'] = combined_bar_data['Value'].apply(lambda x: max(0, x))
-
-                                base = alt.Chart(combined_bar_data).encode(x=alt.X('MonthName', sort=month_names, title=None))
-                                bars = base.mark_bar().encode(
-                                    y=alt.Y('Value', title='Return (%)'), xOffset='Type',
+                                st.subheader("📊 Average Returns by Month")
+                                bar_data = pd.DataFrame({'Month': month_names, 'Value': avg_stats.values})
+                                st.altair_chart(alt.Chart(bar_data).mark_bar().encode(
+                                    x=alt.X('Month', sort=month_names),
+                                    y='Value',
                                     color=alt.condition(alt.datum.Value > 0, alt.value("#71d28a"), alt.value("#f29ca0"))
-                                )
-                                
-                                text = base.mark_text(
-                                    dy=-10, fontSize=11, fontWeight='bold', color='black'
-                                ).encode(
-                                    y=alt.Y('LabelY'),
-                                    xOffset='Type', 
-                                    text='Label'
-                                )
+                                ).properties(height=350), use_container_width=True)
 
-                                st.altair_chart((bars + text).properties(height=350).configure_axis(labelFontSize=11, titleFontSize=13), use_container_width=True)
-
-                            # --- CARDS ---
-                            st.markdown("##### 🎯 Historical Win Rate & Expectancy")
-                            cols = st.columns(6); cols2 = st.columns(6)
-                            for i in range(12):
-                                mn = month_names[i]
-                                wr = win_rates.loc[i+1]
-                                avg = avg_stats.loc[i+1]
-                                border_color = "#71d28a" if avg > 0 else "#f29ca0"
-                                target_col = cols[i] if i < 6 else cols2[i-6]
-                                target_col.markdown(f"""<div style="background-color: rgba(128,128,128,0.05); border-radius: 8px; padding: 8px 5px; text-align: center; margin-bottom: 10px; border-bottom: 3px solid {border_color};"><div style="font-size: 0.85rem; font-weight: bold; color: #555;">{mn}</div><div style="font-size: 0.75rem; color: #888; margin-top:2px;">Win Rate</div><div style="font-size: 1.0rem; font-weight: 700;">{wr:.1f}%</div><div style="font-size: 0.75rem; color: #888; margin-top:2px;">Avg Rtn</div><div style="font-size: 0.9rem; font-weight: 600; color: {'#1f7a1f' if avg > 0 else '#a11f1f'};">{fmt_finance(avg)}</div></div>""", unsafe_allow_html=True)
-
-                            # --- HEATMAP ---
-                            st.markdown("---"); st.subheader("🗓️ Monthly Returns Heatmap")
+                            # --- Heatmap ---
+                            st.markdown("---")
                             pivot_hist = hist_filtered.pivot(index='Year', columns='Month', values='Pct')
-                            if not completed_curr_df.empty:
-                                pivot_curr = completed_curr_df.pivot(index='Year', columns='Month', values='Pct')
-                                full_pivot = pd.concat([pivot_curr, pivot_hist])
-                            else: full_pivot = pivot_hist
-
-                            full_pivot.columns = [month_names[c-1] for c in full_pivot.columns]
-                            for m in month_names:
-                                if m not in full_pivot.columns: full_pivot[m] = np.nan
-                            full_pivot = full_pivot[month_names].sort_index(ascending=False)
+                            pivot_hist.columns = [month_names[c-1] for c in pivot_hist.columns]
+                            pivot_hist = pivot_hist.sort_index(ascending=False)
                             
-                            full_pivot["Year Total"] = full_pivot.apply(
-                                lambda x: ((1 + x/100).prod(skipna=True) - 1) * 100 if x.notna().any() else np.nan, 
-                                axis=1
-                            )
-                            
-                            avg_row = full_pivot[month_names].mean(axis=0)
-                            avg_row["Year Total"] = full_pivot["Year Total"].mean()
-                            avg_row.name = "Month Average"
-                            
-                            full_pivot = pd.concat([full_pivot, avg_row.to_frame().T])
-
                             def color_map(val):
                                 if pd.isna(val): return ""
-                                if val == 0: return "color: #888;"
                                 color = "#1f7a1f" if val > 0 else "#a11f1f"
-                                bg_color = "rgba(113, 210, 138, 0.2)" if val > 0 else "rgba(242, 156, 160, 0.2)"
-                                return f'background-color: {bg_color}; color: {color}; font-weight: 500;'
-                            
-                            heatmap_config = {c: st.column_config.Column(width="small") for c in full_pivot.columns}
-                            
-                            st.dataframe(
-                                full_pivot.style.format(fmt_finance).applymap(color_map), 
-                                use_container_width=True, 
-                                height=(len(full_pivot)+1)*35+3,
-                                column_config=heatmap_config
-                            )
+                                bg = "rgba(113, 210, 138, 0.15)" if val > 0 else "rgba(242, 156, 160, 0.15)"
+                                return f'background-color: {bg}; color: {color};'
+
+                            st.dataframe(pivot_hist.style.format(fmt_finance).applymap(color_map), use_container_width=True)
 
     # ==============================================================================
     # TAB 2: OPPORTUNITY SCANNER
