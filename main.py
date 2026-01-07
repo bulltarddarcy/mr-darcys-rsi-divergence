@@ -736,6 +736,7 @@ def run_price_divergences_app(df_global):
     with tab_div:
         data_option_div = st.pills("Dataset", options=options, selection_mode="single", default=options[0] if options else None, label_visibility="collapsed", key="rsi_div_pills")
         
+        # --- UPDATED USER GUIDE FOR CLARITY ---
         with st.expander("ℹ️ Page User Guide"):
             c_guide1, c_guide2 = st.columns(2)
             with c_guide1:
@@ -749,9 +750,11 @@ def run_price_divergences_app(df_global):
             with c_guide2:
                 st.markdown("#### 📊 Table Columns")
                 st.markdown("""
-                * **Tags**: `EMA8`/`EMA21` (Price vs EMA), `V_HI` (High Vol), `V_GROW` (Vol Growth).
                 * **RSI Δ**: RSI value at first pivot vs second pivot.
                 * **Price Δ**: Price at first pivot vs second pivot.
+                * **RSI %ile (New)**: The historical percentile rank of the **2nd Pivot (The Signal Candle)**.
+                    * **Value**: Shows how rare the signal RSI is (e.g., **5** = Bottom 5% of all history).
+                    * **Highlighting**: The cell turns YELLOW if **EITHER** pivot (1 or 2) was historically extreme (<10% or >90%).
                 """)
         
         if data_option_div:
@@ -799,10 +802,42 @@ def run_price_divergences_app(df_global):
                     
                     for i, (ticker, group) in enumerate(grouped_list):
                         d_d, d_w = prepare_data(group.copy())
-                        if d_d is not None: 
-                            raw_results_div.extend(find_divergences(d_d, ticker, 'Daily', min_n=0, periods_input=CSV_PERIODS_DAYS, optimize_for='PF', lookback_period=div_lookback, price_source=div_source, strict_validation=strict_div, recent_days_filter=days_since, rsi_diff_threshold=div_diff))
+                        
+                        # --- Process Daily ---
+                        if d_d is not None:
+                            daily_divs = find_divergences(d_d, ticker, 'Daily', min_n=0, periods_input=CSV_PERIODS_DAYS, optimize_for='PF', lookback_period=div_lookback, price_source=div_source, strict_validation=strict_div, recent_days_filter=days_since, rsi_diff_threshold=div_diff)
+                            
+                            # Inject RSI Percentiles
+                            if daily_divs and 'RSI' in d_d.columns:
+                                all_rsi = d_d['RSI'].dropna().values
+                                if len(all_rsi) > 0:
+                                    for div in daily_divs:
+                                        # Calculate percentile (0-100) for both pivots
+                                        p1 = (all_rsi < div['RSI1']).mean() * 100
+                                        p2 = (all_rsi < div['RSI2']).mean() * 100
+                                        div['RSI1_Pct'] = p1
+                                        div['RSI2_Pct'] = p2
+                                        div['Extreme_Flag'] = (p1 < 10 or p2 < 10) if div['Type'] == 'Bullish' else (p1 > 90 or p2 > 90)
+                            
+                            raw_results_div.extend(daily_divs)
+                        
+                        # --- Process Weekly ---
                         if d_w is not None: 
-                            raw_results_div.extend(find_divergences(d_w, ticker, 'Weekly', min_n=0, periods_input=CSV_PERIODS_WEEKS, optimize_for='PF', lookback_period=div_lookback, price_source=div_source, strict_validation=strict_div, recent_days_filter=days_since, rsi_diff_threshold=div_diff))
+                            weekly_divs = find_divergences(d_w, ticker, 'Weekly', min_n=0, periods_input=CSV_PERIODS_WEEKS, optimize_for='PF', lookback_period=div_lookback, price_source=div_source, strict_validation=strict_div, recent_days_filter=days_since, rsi_diff_threshold=div_diff)
+                            
+                            # Inject RSI Percentiles
+                            if weekly_divs and 'RSI' in d_w.columns:
+                                all_rsi_w = d_w['RSI'].dropna().values
+                                if len(all_rsi_w) > 0:
+                                    for div in weekly_divs:
+                                        p1 = (all_rsi_w < div['RSI1']).mean() * 100
+                                        p2 = (all_rsi_w < div['RSI2']).mean() * 100
+                                        div['RSI1_Pct'] = p1
+                                        div['RSI2_Pct'] = p2
+                                        div['Extreme_Flag'] = (p1 < 10 or p2 < 10) if div['Type'] == 'Bullish' else (p1 > 90 or p2 > 90)
+
+                            raw_results_div.extend(weekly_divs)
+                            
                         if i % 10 == 0 or i == total_groups - 1: progress_bar.progress((i + 1) / total_groups)
                     
                     progress_bar.empty()
@@ -826,17 +861,38 @@ def run_price_divergences_app(df_global):
                                     st.subheader(f"{emoji} {tf} {s_type} Signals")
                                     tbl_df = consolidated[(consolidated['Type']==s_type) & (consolidated['Timeframe']==tf)].copy()
                                     price_header = "Close Price Δ" if div_source == 'Close' else ("Low Price Δ" if s_type == 'Bullish' else "High Price Δ")
+                                    
+                                    # Handle Percentile Column Naming and Logic
+                                    pct_col_title = "RSI Low %ile" if s_type == 'Bullish' else "RSI High %ile"
 
                                     if not tbl_df.empty:
+                                        # Fill NaN percentiles if any
+                                        if 'RSI2_Pct' not in tbl_df.columns: tbl_df['RSI2_Pct'] = 50
+                                        if 'Extreme_Flag' not in tbl_df.columns: tbl_df['Extreme_Flag'] = False
+
                                         def style_div_df(df_in):
-                                            def highlight_row(row):
+                                            # We need to map styles based on column names
+                                            # Pandas Styler is row-based mainly, need to identify columns by name
+                                            
+                                            def highlight_cells(row):
                                                 styles = [''] * len(row)
+                                                
+                                                # 1. Date Highlight
                                                 if row['Signal_Date_ISO'] in targets:
                                                     if 'Date_Display' in df_in.columns:
                                                         idx = df_in.columns.get_loc('Date_Display')
                                                         styles[idx] = 'background-color: rgba(255, 244, 229, 0.7); color: #e67e22; font-weight: bold;'
+                                                
+                                                # 2. RSI Percentile Highlight
+                                                # Check if the Extreme_Flag is True
+                                                if row.get('Extreme_Flag', False):
+                                                    if 'RSI2_Pct' in df_in.columns:
+                                                        idx_p = df_in.columns.get_loc('RSI2_Pct')
+                                                        # Yellow highlight for extreme RSI
+                                                        styles[idx_p] = 'background-color: rgba(255, 235, 59, 0.25); color: #f57f17; font-weight: bold;'
+
                                                 return styles
-                                            return df_in.style.apply(highlight_row, axis=1)
+                                            return df_in.style.apply(highlight_cells, axis=1)
 
                                         st.dataframe(
                                             style_div_df(tbl_df),
@@ -845,10 +901,11 @@ def run_price_divergences_app(df_global):
                                                 "Tags": st.column_config.ListColumn("Tags"), 
                                                 "Date_Display": st.column_config.TextColumn(date_header),
                                                 "RSI_Display": st.column_config.TextColumn("RSI Δ"),
+                                                "RSI2_Pct": st.column_config.NumberColumn(pct_col_title, format="%d", help="Percentile rank of the signal RSI relative to ticker history."),
                                                 "Price_Display": st.column_config.TextColumn(price_header),
                                                 "Last_Close": st.column_config.TextColumn("Last Close"),
                                             },
-                                            column_order=["Ticker", "Tags", "Date_Display", "RSI_Display", "Price_Display", "Last_Close"],
+                                            column_order=["Ticker", "Tags", "Date_Display", "RSI_Display", "Price_Display", "Last_Close", "RSI2_Pct"],
                                             hide_index=True,
                                             use_container_width=True,
                                             height=get_table_height(tbl_df, max_rows=50)
