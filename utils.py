@@ -145,10 +145,13 @@ def load_parquet_and_clean(key):
         try:
             df = pd.read_parquet(BytesIO(content))
             
-            # --- FIX: Check if Date is hidden in the Index ---
-            # This matches the logic you already use in fetch_history_optimized
-            if df.index.name and 'DATE' in str(df.index.name).upper():
-                df = df.reset_index()
+            # --- THE FIX: Check if Date is hidden in the Index ---
+            # SP100 likely has the date as the index, while others have it as a column.
+            # We force it out of the index so the rest of the script can see it.
+            if isinstance(df.index, pd.DatetimeIndex):
+                df.reset_index(inplace=True)
+            elif df.index.name and 'DATE' in str(df.index.name).upper():
+                df.reset_index(inplace=True)
                 
         except Exception:
             try:
@@ -158,16 +161,27 @@ def load_parquet_and_clean(key):
                 return None
 
         # --- Standard Cleaning Logic ---
-        df.columns = [c.strip() for c in df.columns]
+        df.columns = [str(c).strip() for c in df.columns]
         
-        # Now this will successfully find the date column
+        # 1. Find Date Column
+        # We look for DATE, or 'index' (which happens if we reset an unnamed index)
         date_col = next((c for c in df.columns if 'DATE' in c.upper()), None)
+        
+        # Fallback: Check if 'index' column exists and holds dates
+        if not date_col and 'index' in df.columns:
+            if pd.api.types.is_datetime64_any_dtype(df['index']):
+                 date_col = 'index'
+
         if date_col:
             df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
             df = df.rename(columns={date_col: 'ChartDate'}).sort_values('ChartDate')
         
-        if 'Close' in df.columns and 'Price' not in df.columns:
-            df['Price'] = df['Close']
+        # 2. Find Price/Close Column
+        if 'Price' not in df.columns:
+            # Case-insensitive search for 'Close'
+            close_col = next((c for c in df.columns if c.upper() == 'CLOSE'), None)
+            if close_col:
+                df['Price'] = df[close_col]
             
         return df
     except Exception as e:
