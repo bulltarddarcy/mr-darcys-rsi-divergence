@@ -716,6 +716,9 @@ def run_price_divergences_app(df_global):
     if 'rsi_hist_ticker' not in st.session_state: st.session_state.rsi_hist_ticker = "AMZN"
     if 'rsi_hist_results' not in st.session_state: st.session_state.rsi_hist_results = None
     if 'rsi_hist_last_run_params' not in st.session_state: st.session_state.rsi_hist_last_run_params = {}
+    
+    # Bulk History State
+    if 'rsi_hist_bulk_df' not in st.session_state: st.session_state.rsi_hist_bulk_df = None
 
     def save_rsi_state(key, saved_key):
         st.session_state[saved_key] = st.session_state[key]
@@ -726,6 +729,76 @@ def run_price_divergences_app(df_global):
     # CSV Hardcoded Defaults
     CSV_PERIODS_DAYS = [5, 21, 63, 126, 252]
     CSV_PERIODS_WEEKS = [4, 13, 26, 52]
+
+    # --- HELPER FUNCTIONS FOR EXPORT ---
+    def inject_volume(results_list, data_df):
+        """Looks up Volume for P1 and Signal dates and adds to results."""
+        if not results_list or data_df is None or data_df.empty:
+            return results_list
+        
+        # 1. Identify Volume Column
+        vol_col = next((c for c in data_df.columns if c.strip().upper() == 'VOLUME'), None)
+        if not vol_col: return results_list
+
+        # 2. Identify Date Index/Column for Lookup
+        lookup = {}
+        # Try to create a map: 'YYYY-MM-DD' -> Volume
+        try:
+            temp_df = data_df.copy()
+            date_col = next((c for c in temp_df.columns if 'DATE' in c.upper()), None)
+            
+            if date_col:
+                temp_df[date_col] = pd.to_datetime(temp_df[date_col])
+                temp_df['__date_str'] = temp_df[date_col].dt.strftime('%Y-%m-%d')
+                lookup = dict(zip(temp_df['__date_str'], temp_df[vol_col]))
+            elif isinstance(temp_df.index, pd.DatetimeIndex):
+                # If date is in index
+                temp_df['__date_str'] = temp_df.index.strftime('%Y-%m-%d')
+                lookup = dict(zip(temp_df['__date_str'], temp_df[vol_col]))
+        except:
+            return results_list
+        
+        # 3. Inject
+        for row in results_list:
+            d1 = row.get('P1_Date_ISO')
+            d2 = row.get('Signal_Date_ISO')
+            row['Vol1'] = lookup.get(d1, np.nan)
+            row['Vol2'] = lookup.get(d2, np.nan)
+        
+        return results_list
+
+    def process_export_columns(df_in):
+        """Renames Ret_XX columns to D_Ret_XX or W_Ret_XX based on timeframe."""
+        if df_in.empty: return df_in
+        out = df_in.copy()
+        
+        # Explicit Divergence Type Column (User Request)
+        if 'Type' in out.columns:
+            out['Divergence Type'] = out['Type']
+
+        # Rename Returns
+        cols = out.columns
+        ret_cols = [c for c in cols if c.startswith('Ret_')]
+        
+        for rc in ret_cols:
+            # Create D_Ret_5 and W_Ret_5
+            d_col_name = f"D_{rc}"
+            w_col_name = f"W_{rc}"
+            
+            # Logic: If row is Daily, put value in D_, else None
+            out[d_col_name] = out.apply(lambda x: x[rc] if x.get('Timeframe') == 'Daily' else None, axis=1)
+            out[w_col_name] = out.apply(lambda x: x[rc] if x.get('Timeframe') == 'Weekly' else None, axis=1)
+        
+        # Drop original ambiguous columns
+        out = out.drop(columns=ret_cols)
+        
+        # Reorder for neatness: Put ID stuff first, then Techs, then Vols, then Returns
+        first_cols = ['Ticker', 'Divergence Type', 'Timeframe', 'Signal_Date_ISO', 'P1_Date_ISO', 'Price1', 'Price2', 'RSI1', 'RSI2', 'Vol1', 'Vol2']
+        existing_first = [c for c in first_cols if c in out.columns]
+        other_cols = [c for c in out.columns if c not in existing_first]
+        out = out[existing_first + other_cols]
+        
+        return out
 
     # --- TABS ---
     tab_div, tab_hist = st.tabs(["📉 Active/Recent Divergences", "📜 Divergences History"])
@@ -762,8 +835,6 @@ def run_price_divergences_app(df_global):
                 master = load_parquet_and_clean(key)
                 
                 if master is not None and not master.empty:
-                    # --- MOVED & UPDATED: View Scanned Tickers ---
-                    # Now pulls directly from the loaded dataset
                     t_col = next((c for c in master.columns if c.strip().upper() in ['TICKER', 'SYMBOL']), None)
                     with st.expander(f"View Scanned Tickers ({data_option_div})"):
                         if t_col:
@@ -771,7 +842,6 @@ def run_price_divergences_app(df_global):
                             st.write(", ".join(unique_tickers))
                         else:
                             st.caption("No ticker column found in dataset.")
-                    # ---------------------------------------------
 
                     target_highlight_daily = None
                     highlight_list_weekly = []
@@ -815,7 +885,6 @@ def run_price_divergences_app(df_global):
                         if d_d is not None:
                             daily_divs = find_divergences(d_d, ticker, 'Daily', min_n=0, periods_input=CSV_PERIODS_DAYS, optimize_for='PF', lookback_period=div_lookback, price_source=div_source, strict_validation=strict_div, recent_days_filter=days_since, rsi_diff_threshold=div_diff)
                             
-                            # Inject RSI Percentiles
                             if daily_divs and 'RSI' in d_d.columns:
                                 all_rsi = d_d['RSI'].dropna().values
                                 if len(all_rsi) > 0:
@@ -832,7 +901,6 @@ def run_price_divergences_app(df_global):
                         if d_w is not None: 
                             weekly_divs = find_divergences(d_w, ticker, 'Weekly', min_n=0, periods_input=CSV_PERIODS_WEEKS, optimize_for='PF', lookback_period=div_lookback, price_source=div_source, strict_validation=strict_div, recent_days_filter=days_since, rsi_diff_threshold=div_diff)
                             
-                            # Inject RSI Percentiles
                             if weekly_divs and 'RSI' in d_w.columns:
                                 all_rsi_w = d_w['RSI'].dropna().values
                                 if len(all_rsi_w) > 0:
@@ -868,7 +936,6 @@ def run_price_divergences_app(df_global):
                                     st.subheader(f"{emoji} {tf} {s_type} Signals")
                                     tbl_df = consolidated[(consolidated['Type']==s_type) & (consolidated['Timeframe']==tf)].copy()
                                     price_header = "Close Price Δ" if div_source == 'Close' else ("Low Price Δ" if s_type == 'Bullish' else "High Price Δ")
-                                    
                                     pct_col_title = "RSI Low %ile" if s_type == 'Bullish' else "RSI High %ile"
 
                                     if not tbl_df.empty:
@@ -936,8 +1003,8 @@ def run_price_divergences_app(df_global):
         with c_h7: 
             h_per_weeks = st.text_input("Periods (Weeks)", value="4, 13, 26, 52", key="rsi_hist_p_weeks")
 
+        # --- ANALYSIS LOGIC (SINGLE TICKER) ---
         current_params = {"t": hist_ticker_in, "lb": h_lookback, "str": h_strict, "src": h_source, "pd": h_per_days, "pw": h_per_weeks, "diff": h_diff}
-        
         run_hist = False
         if current_params != st.session_state.rsi_hist_last_run_params: run_hist = True
         
@@ -950,19 +1017,22 @@ def run_price_divergences_app(df_global):
                     
                     if df_h is not None and not df_h.empty:
                         d_d_h, d_w_h = prepare_data(df_h.copy())
-                        if d_w_h is None and d_d_h is not None:
-                            temp_w = d_d_h.copy().resample('W').agg({'Price': 'last', 'High': 'max', 'Low': 'min', 'Volume': 'sum'}).dropna()
-                            temp_w = add_technicals(temp_w)
-                            temp_w['VolSMA'] = temp_w['Volume'].rolling(window=VOL_SMA_PERIOD).mean()
-                            temp_w['ChartDate'] = temp_w.index - pd.to_timedelta(temp_w.index.dayofweek, unit='D')
-                            d_w_h = temp_w.dropna(subset=['Price', 'RSI'])
                         
                         raw_results_hist = []
                         p_days_parsed = parse_periods(h_per_days)
                         p_weeks_parsed = parse_periods(h_per_weeks)
                         
-                        if d_d_h is not None: raw_results_hist.extend(find_divergences(d_d_h, hist_ticker_in, 'Daily', min_n=0, periods_input=p_days_parsed, lookback_period=h_lookback, price_source=h_source, strict_validation=h_strict, recent_days_filter=99999, rsi_diff_threshold=h_diff))
-                        if d_w_h is not None: raw_results_hist.extend(find_divergences(d_w_h, hist_ticker_in, 'Weekly', min_n=0, periods_input=p_weeks_parsed, lookback_period=h_lookback, price_source=h_source, strict_validation=h_strict, recent_days_filter=99999, rsi_diff_threshold=h_diff))
+                        if d_d_h is not None: 
+                            d_daily = find_divergences(d_d_h, hist_ticker_in, 'Daily', min_n=0, periods_input=p_days_parsed, lookback_period=h_lookback, price_source=h_source, strict_validation=h_strict, recent_days_filter=99999, rsi_diff_threshold=h_diff)
+                            # Inject Volume Immediately
+                            d_daily = inject_volume(d_daily, d_d_h)
+                            raw_results_hist.extend(d_daily)
+                            
+                        if d_w_h is not None: 
+                            d_weekly = find_divergences(d_w_h, hist_ticker_in, 'Weekly', min_n=0, periods_input=p_weeks_parsed, lookback_period=h_lookback, price_source=h_source, strict_validation=h_strict, recent_days_filter=99999, rsi_diff_threshold=h_diff)
+                            # Inject Volume Immediately
+                            d_weekly = inject_volume(d_weekly, d_w_h)
+                            raw_results_hist.extend(d_weekly)
                             
                         st.session_state.rsi_hist_results = pd.DataFrame(raw_results_hist)
                         st.session_state.rsi_hist_last_run_params = current_params
@@ -971,6 +1041,101 @@ def run_price_divergences_app(df_global):
                         st.session_state.rsi_hist_results = pd.DataFrame()
                 except Exception as e: st.error(f"Error: {e}")
         
+        # ==============================================================================
+        # DOWNLOAD SECTION (Added per request)
+        # ==============================================================================
+        st.divider()
+        st.subheader("💾 Data Downloads")
+        
+        col_dl_1, col_dl_2 = st.columns(2)
+        
+        # --- BOX 1: Single Ticker Download ---
+        with col_dl_1:
+            st.markdown(f"**Option 1: {hist_ticker_in} Complete History**")
+            st.caption("Download all Daily/Weekly, Bullish/Bearish divergences for this specific ticker.")
+            if st.session_state.rsi_hist_results is not None and not st.session_state.rsi_hist_results.empty:
+                # Prepare CSV with renamed columns and explicit Types
+                export_df = process_export_columns(st.session_state.rsi_hist_results)
+                
+                csv_single = export_df.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label=f"⬇️ Download {hist_ticker_in} History (CSV)",
+                    data=csv_single,
+                    file_name=f"{hist_ticker_in}_Divergence_History.csv",
+                    mime="text/csv",
+                    key="dl_single_ticker_hist"
+                )
+            else:
+                st.info("Input a ticker above to generate data.")
+
+        # --- BOX 2: Bulk Dataset Download ---
+        with col_dl_2:
+            st.markdown(f"**Option 2: Bulk Dataset History**")
+            st.caption("Scan complete history for EVERY ticker in the selected dataset.")
+            
+            # Selector specifically for this bulk download action
+            bulk_dataset_opt = st.selectbox("Select Dataset", options=options, index=0, key="rsi_hist_bulk_sel", label_visibility="collapsed")
+            
+            if st.button("🚀 Process Bulk History", key="btn_bulk_hist"):
+                try:
+                    key = dataset_map[bulk_dataset_opt]
+                    master_bulk = load_parquet_and_clean(key)
+                    if master_bulk is not None and not master_bulk.empty:
+                        t_col_b = next((c for c in master_bulk.columns if c.strip().upper() in ['TICKER', 'SYMBOL']), None)
+                        
+                        if t_col_b:
+                            bulk_results = []
+                            grouped_bulk = master_bulk.groupby(t_col_b)
+                            total_b = len(grouped_bulk)
+                            prog_b = st.progress(0, text="Processing Bulk History...")
+                            
+                            p_days_parsed = parse_periods(h_per_days)
+                            p_weeks_parsed = parse_periods(h_per_weeks)
+                            
+                            for idx, (tkr, grp) in enumerate(grouped_bulk):
+                                d_d_b, d_w_b = prepare_data(grp.copy())
+                                
+                                if d_d_b is not None: 
+                                    res_d = find_divergences(d_d_b, tkr, 'Daily', min_n=0, periods_input=p_days_parsed, lookback_period=h_lookback, price_source=h_source, strict_validation=h_strict, recent_days_filter=99999, rsi_diff_threshold=h_diff)
+                                    res_d = inject_volume(res_d, d_d_b) # Inject Vol
+                                    bulk_results.extend(res_d)
+                                    
+                                if d_w_b is not None:
+                                    res_w = find_divergences(d_w_b, tkr, 'Weekly', min_n=0, periods_input=p_weeks_parsed, lookback_period=h_lookback, price_source=h_source, strict_validation=h_strict, recent_days_filter=99999, rsi_diff_threshold=h_diff)
+                                    res_w = inject_volume(res_w, d_w_b) # Inject Vol
+                                    bulk_results.extend(res_w)
+                                
+                                if idx % 5 == 0: prog_b.progress((idx+1)/total_b)
+                            
+                            prog_b.empty()
+                            
+                            if bulk_results:
+                                st.session_state.rsi_hist_bulk_df = pd.DataFrame(bulk_results)
+                            else:
+                                st.warning("No divergences found in dataset.")
+                        else: st.error("Ticker column missing in dataset.")
+                except Exception as e: st.error(f"Bulk Process Error: {e}")
+
+            # Show Download Button if data exists in session state
+            if st.session_state.rsi_hist_bulk_df is not None and not st.session_state.rsi_hist_bulk_df.empty:
+                # Prepare CSV with renamed columns and explicit Types
+                bulk_export = process_export_columns(st.session_state.rsi_hist_bulk_df)
+                
+                csv_bulk = bulk_export.to_csv(index=False).encode('utf-8')
+                st.success(f"Ready: {len(bulk_export)} rows generated.")
+                st.download_button(
+                    label="⬇️ Download Full Dataset History (CSV)",
+                    data=csv_bulk,
+                    file_name=f"Bulk_Divergence_History_{date.today().strftime('%Y%m%d')}.csv",
+                    mime="text/csv",
+                    key="dl_bulk_ticker_hist"
+                )
+
+        st.divider()
+
+        # ==============================================================================
+        # EXISTING TABLES DISPLAY
+        # ==============================================================================
         if st.session_state.rsi_hist_results is not None and not st.session_state.rsi_hist_results.empty:
             res_df_h = st.session_state.rsi_hist_results.copy().sort_values(by='Signal_Date_ISO', ascending=False)
             
