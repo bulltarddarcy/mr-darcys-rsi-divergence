@@ -757,6 +757,16 @@ def run_price_divergences_app(df_global):
                     * **Highlighting**: The cell turns YELLOW if **EITHER** pivot (1 or 2) was historically extreme (<10% or >90%).
                 """)
         
+        # --- NEW SECTION ADDED HERE ---
+        with st.expander("View Scanned Tickers"):
+            t_map = load_ticker_map()
+            if t_map:
+                valid_tickers = sorted([t for t in t_map.keys() if not t.endswith('_PARQUET')])
+                st.write(", ".join(valid_tickers))
+            else:
+                st.caption("No tickers currently loaded in the map.")
+        # ------------------------------
+        
         if data_option_div:
             try:
                 key = dataset_map[data_option_div]
@@ -1085,6 +1095,16 @@ def run_rsi_scanner_app(df_global):
                 * *Interpretation:* If EV is $+2.5\\%$, it means historically, every time this RSI setup occurred, the stock gained an average of $2.5\\%$ over this timeframe.
             * **Count:** The sample size. *Warning: Be skeptical of stats derived from fewer than 10 trades.*
             """)
+
+        # --- NEW SECTION ADDED HERE ---
+        with st.expander("View Scanned Tickers"):
+            t_map = load_ticker_map()
+            if t_map:
+                valid_tickers = sorted([t for t in t_map.keys() if not t.endswith('_PARQUET')])
+                st.write(", ".join(valid_tickers))
+            else:
+                st.caption("No tickers currently loaded in the map.")
+        # ------------------------------
 
         c_left, c_right = st.columns([1, 6])
         with c_left:
