@@ -2631,7 +2631,6 @@ def run_pivot_tables_app(df):
         st.markdown("<br><br>", unsafe_allow_html=True)
     else: st.caption("No matched RR pairs found.")
 
-
 @st.cache_data(ttl=86400, show_spinner=False)
 def fetch_history_optimized(ticker_sym, t_map):
     """
@@ -2644,17 +2643,16 @@ def fetch_history_optimized(ticker_sym, t_map):
         try:
             file_id = t_map[pq_key]
             url = f"https://drive.google.com/uc?export=download&id={file_id}"
-            # Ensure get_gdrive_binary_data has a timeout=10 internally
             buffer = get_gdrive_binary_data(url) 
             if buffer:
-                return pd.read_parquet(buffer, engine='pyarrow')
+                df = pd.read_parquet(buffer, engine='pyarrow')
+                return df.reset_index() if 'DATE' in str(df.index.name).upper() else df
         except Exception:
             pass 
 
     # 2. Try CSV from Drive (Medium Priority)
     if ticker_sym in t_map:
         try:
-            # Ensure get_ticker_technicals uses a timeout internally
             df = get_ticker_technicals(ticker_sym, t_map)
             if df is not None and not df.empty:
                 return df
@@ -2663,7 +2661,6 @@ def fetch_history_optimized(ticker_sym, t_map):
 
     # 3. Fallback to Yahoo Finance (Lowest Priority)
     try:
-        # Uses the cached Yahoo fetcher
         return fetch_yahoo_data(ticker_sym)
     except Exception:
         return None
@@ -2671,37 +2668,41 @@ def fetch_history_optimized(ticker_sym, t_map):
 def run_seasonality_app(df_global):
     st.title("📅 Seasonality")
     
-    # --- 0. SESSION STATE INITIALIZATION (Fixes your "no attribute" error) ---
+    # --- 0. SESSION STATE INITIALIZATION ---
     if 'seas_single_df' not in st.session_state: st.session_state.seas_single_df = None
     if 'seas_single_last_ticker' not in st.session_state: st.session_state.seas_single_last_ticker = ""
     if 'seas_scan_results' not in st.session_state: st.session_state.seas_scan_results = None
     if 'seas_scan_csvs' not in st.session_state: st.session_state.seas_scan_csvs = None
     if 'seas_scan_active' not in st.session_state: st.session_state.seas_scan_active = False
-    
+
+    def fmt_finance(val):
+        if pd.isna(val): return ""
+        return f"({abs(val):.1f}%)" if val < 0 else f"{val:.1f}%"
+
     tab_single, tab_scan = st.tabs(["🔎 Single Ticker Analysis", "🚀 Opportunity Scanner"])
     
-    # --- TAB 1: SINGLE TICKER ---
+    # ==============================================================================
+    # TAB 1: SINGLE TICKER ANALYSIS
+    # ==============================================================================
     with tab_single:
         c1, c2, c3 = st.columns([1, 1, 1])
         with c1:
-            ticker_input = st.text_input("Ticker", value="SPY", key="seas_ticker").strip().upper()
+            ticker_input = st.text_input("Ticker", value="SPY", key="seas_ticker_input").strip().upper()
             
         if ticker_input:
             ticker_map = load_ticker_map()
             
-            # Fetch only if ticker changed or no data is cached in RAM
+            # Fetch if ticker changed or memory is empty
             if (ticker_input != st.session_state.seas_single_last_ticker) or (st.session_state.seas_single_df is None):
                 with st.status(f"Fetching history for {ticker_input}...", expanded=False) as status:
-                    # fetch_history_optimized is now cached to prevent repeat Drive hits
                     fetched_df = fetch_history_optimized(ticker_input, ticker_map)
                     st.session_state.seas_single_df = fetched_df
                     st.session_state.seas_single_last_ticker = ticker_input
                     status.update(label="Ready", state="complete")
             
             df = st.session_state.seas_single_df
-            
+
             if df is not None and not df.empty:
-                # Process the data (visualization logic)
                 df.columns = [c.strip().upper() for c in df.columns]
                 date_col = next((c for c in df.columns if 'DATE' in c), None)
                 close_col = next((c for c in df.columns if 'CLOSE' in c), None)
@@ -2709,19 +2710,70 @@ def run_seasonality_app(df_global):
                 if date_col and close_col:
                     df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
                     df = df.dropna(subset=[date_col]).set_index(date_col).sort_index()
-                    # ... rest of your monthly logic here ...
-            else:
-                st.error(f"Could not load data for {ticker_input}. Check the ticker or network.")
+                    
+                    # Monthly returns calculation
+                    df_monthly = df[close_col].resample('M').last()
+                    df_pct = df_monthly.pct_change() * 100
+                    season_df = pd.DataFrame({'Pct': df_pct, 'Year': df_pct.index.year, 'Month': df_pct.index.month}).dropna()
 
-    # --- TAB 2: SCANNER ---
+                    today = date.today()
+                    current_year, current_month = today.year, today.month
+                    hist_df = season_df[season_df['Year'] < current_year]
+                    
+                    if not hist_df.empty:
+                        min_y, max_y = int(hist_df['Year'].min()), int(hist_df['Year'].max())
+                        with c2: start_year = st.number_input("Start Year", min_y, max_y, max_y-10 if max_y-10 >= min_y else min_y)
+                        with c3: end_year = st.number_input("End Year", start_year, max_y, max_y)
+
+                        hist_filtered = hist_df[(hist_df['Year'] >= start_year) & (hist_df['Year'] <= end_year)]
+                        month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+                        
+                        avg_stats = hist_filtered.groupby('Month')['Pct'].mean().reindex(range(1, 13), fill_value=0)
+                        win_rates = hist_filtered.groupby('Month')['Pct'].apply(lambda x: (x > 0).mean() * 100).reindex(range(1, 13), fill_value=0)
+
+                        # --- CHARTS ---
+                        col_chart1, col_chart2 = st.columns(2)
+                        with col_chart1:
+                            st.subheader("📈 Performance Tracking")
+                            hist_cumsum = avg_stats.cumsum()
+                            line_data = pd.DataFrame({'MonthName': month_names, 'Value': hist_cumsum.values, 'Type': 'Historical Avg'})
+                            st.altair_chart(alt.Chart(line_data).mark_line(point=True).encode(x=alt.X('MonthName', sort=month_names), y='Value'), use_container_width=True)
+
+                        with col_chart2:
+                            st.subheader("📊 Monthly Returns")
+                            bar_data = pd.DataFrame({'MonthName': month_names, 'Value': avg_stats.values})
+                            st.altair_chart(alt.Chart(bar_data).mark_bar().encode(
+                                x=alt.X('MonthName', sort=month_names), 
+                                y='Value',
+                                color=alt.condition(alt.datum.Value > 0, alt.value("#71d28a"), alt.value("#f29ca0"))
+                            ), use_container_width=True)
+
+                        # --- HEATMAP ---
+                        st.divider()
+                        st.subheader("🗓️ Monthly Returns Heatmap")
+                        pivot_hist = hist_filtered.pivot(index='Year', columns='Month', values='Pct')
+                        pivot_hist.columns = [month_names[c-1] for c in pivot_hist.columns]
+                        st.dataframe(pivot_hist.style.format(fmt_finance).background_gradient(cmap='RdYlGn', axis=None), use_container_width=True)
+            else:
+                st.error(f"Could not load data for {ticker_input}.")
+
+    # ==============================================================================
+    # TAB 2: OPPORTUNITY SCANNER
+    # ==============================================================================
     with tab_scan:
-        # This will now load without the "no attribute" error because of the init at the top
-        if st.session_state.seas_scan_active:
-            st.success("Scanner results loaded from memory.")
-        else:
-            st.info("Set parameters below and click 'Run Scanner'.")
-        
-        # ... your existing scanner UI logic ...
+        st.subheader("🚀 High-EV Seasonality Scanner")
+        sc1, sc2, sc3 = st.columns(3)
+        with sc1: scan_date = st.date_input("Scan Date", value=date.today(), key="seas_scan_date")
+        with sc2: min_mc = st.selectbox("Min Market Cap", ["0B", "2B", "10B", "50B", "100B"], index=2)
+        with sc3: scan_lb = st.number_input("Lookback Years", 5, 20, 10)
+
+        if st.button("Run Scanner"):
+            # Add your scanner logic here (similar to mr-darcys-rsi-sandbox (11).py)
+            st.session_state.seas_scan_active = True
+            st.info("Scanner logic processing... (Restore the ThreadPoolExecutor logic from file 11 here)")
+
+        if st.session_state.seas_scan_active and st.session_state.seas_scan_results is not None:
+            st.dataframe(st.session_state.seas_scan_results, use_container_width=True)
 
 def run_ema_distance_app(df_global):
     # Helper function defined inside scope to prevent "not defined" errors
