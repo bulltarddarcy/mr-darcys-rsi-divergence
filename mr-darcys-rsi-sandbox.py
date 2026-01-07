@@ -339,51 +339,45 @@ def load_parquet_and_clean(key):
 @st.cache_data(ttl=3600)
 def get_parquet_config():
     """
-    Loads dataset configuration. 
-    Priority 1: Text file in Google Drive (URL defined in secrets as URL_PARQUET_LIST)
-    Priority 2: String in secrets (PARQUET_CONFIG)
+    Bulletproof loader for dataset configuration.
+    Uses PARQUET_CONFIG in Streamlit Secrets as the single source of truth.
     """
     config = {}
     
-    # 1. Try loading from Google Drive Text File
-    url_list = st.secrets.get("URL_PARQUET_LIST", "")
-    if url_list:
-        try:
-            buffer = get_confirmed_gdrive_data(url_list)
-            if buffer and buffer != "HTML_ERROR":
-                content = buffer.getvalue()
-                lines = content.strip().split('\n')
-                for line in lines:
-                    if not line.strip(): continue
-                    parts = line.split(',')
-                    if len(parts) >= 2:
-                        name = parts[0].strip()
-                        name = re.sub(r'\\s*', '', name)
-                        key = parts[1].strip()
-                        config[name] = key
-        except Exception as e:
-            print(f"Error loading external config: {e}")
+    try:
+        # 1. Fetch the raw configuration string from Secrets
+        raw_config = st.secrets.get("PARQUET_CONFIG", "")
+        
+        if not raw_config:
+            st.error("⛔ CRITICAL ERROR: 'PARQUET_CONFIG' not found in your Streamlit Secrets.")
+            st.stop()
+            
+        # 2. Parse lines and clean whitespaces/empty lines
+        lines = [line.strip() for line in raw_config.strip().split('\n') if line.strip()]
+        
+        for line in lines:
+            # Split by comma and ensure we have at least 2 parts
+            parts = [p.strip() for p in line.split(',')]
+            if len(parts) >= 2:
+                display_name = parts[0]
+                secret_key = parts[1]
+                
+                # Verify that the secret_key actually exists in st.secrets
+                if secret_key in st.secrets:
+                    config[display_name] = secret_key
+                else:
+                    # Helpful warning in logs if a specific key is missing
+                    print(f"Warning: Secret key '{secret_key}' for dataset '{display_name}' is missing.")
 
-    # 2. Fallback to secrets string
-    if not config:
-        try:
-            raw_config = st.secrets.get("PARQUET_CONFIG", "")
-            if raw_config:
-                lines = raw_config.strip().split('\n')
-                for line in lines:
-                    parts = line.split(',')
-                    if len(parts) >= 2:
-                        name = parts[0].strip()
-                        key = parts[1].strip()
-                        config[name] = key
-        except Exception:
-            pass
+    except Exception as e:
+        st.error(f"Failed to parse PARQUET_CONFIG: {e}")
     
     if not config:
-        st.error("⛔ CRITICAL ERROR: No dataset configuration found. Please check 'URL_PARQUET_LIST' in your secrets.toml.")
+        st.error("⛔ CRITICAL ERROR: No valid datasets could be mapped. Check your Secrets formatting.")
         st.stop()
         
     return config
+
 
 DATA_KEYS_PARQUET = get_parquet_config()
 
