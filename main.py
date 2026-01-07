@@ -1934,7 +1934,7 @@ def run_ema_distance_app(df_global):
             * 50-day, 100-day, and 200-day SMA: Medium to long-term trend baselines.
 
             **2. The "Rubber Band" Logic (Percentiles).**
-            Rather than just showing the current gap,Rather than just showing the current ga the app looks at 10 years of history for that specific ticker to see how rare the current gap is. It calculates:
+            Rather than just showing the current gap, the app looks at 10 years of history for that specific ticker to see how rare the current gap is. It calculates:
             * **p50 (Median):** The typical distance from the average.
             * **p70/p80 (Uptrend):** These levels generally occur in strong uptrends.
             * **p90/p95 (Extremes):** The levels reached only 10% or 5% of the time historically.
@@ -2034,7 +2034,6 @@ def run_ema_distance_app(df_global):
 
     # Style: Bold row only if raw_status is True
     def style_combo(row):
-        # Added 'color: #c5221f;' to the styling string
         return ['font-weight: bold; color: #c5221f;' if row['raw_status'] else ''] * len(row)
 
     st.dataframe(
@@ -2054,13 +2053,16 @@ def run_ema_distance_app(df_global):
         'Date': pd.to_datetime(df_clean[date_col]), 
         'Distance (%)': df_clean['Dist_50']
     })
-    chart_data = chart_data[chart_data['Date'] >= (chart_data['Date'].max() - timedelta(days=730))]
+    
+    # --- MODIFIED: Show last 10 years (3650 days) instead of 2 years (730 days) ---
+    chart_data = chart_data[chart_data['Date'] >= (chart_data['Date'].max() - timedelta(days=3650))]
 
     # Base bar chart
     bars = alt.Chart(chart_data).mark_bar().encode(
         x=alt.X('Date:T', title=None), 
         y=alt.Y('Distance (%)', title='% Dist from 50 SMA'),
-        color=alt.condition(alt.datum['Distance (%)'] > 0, alt.value("#71d28a"), alt.value("#f29ca0"))
+        color=alt.condition(alt.datum['Distance (%)'] > 0, alt.value("#71d28a"), alt.value("#f29ca0")),
+        tooltip=['Date', 'Distance (%)']
     )
 
     # Horizontal Rule representing Current % Distance
@@ -2071,8 +2073,9 @@ def run_ema_distance_app(df_global):
     ).encode(y='y:Q')
 
     # Combined Chart
-    final_chart = (bars + rule).properties(height=300)
+    final_chart = (bars + rule).properties(height=300).interactive()
     st.altair_chart(final_chart, use_container_width=True)
+
 
 # --- CSS STYLING ---
 st.markdown("""<style>
