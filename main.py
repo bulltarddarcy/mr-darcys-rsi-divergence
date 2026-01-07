@@ -3,6 +3,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import altair as alt
+import yfinance as yf
 from datetime import date, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
