@@ -245,8 +245,6 @@ def get_max_trade_date(df):
     return date.today() - timedelta(days=1)
 
 
-import re
-
 def get_gdrive_binary_data(url):
     """
     Robust Google Drive downloader.
@@ -3523,9 +3521,9 @@ try:
     ])
 
     # 4. Sidebar Captions
-    st.sidebar.caption("🖥️ Everything is best viewed with a wide desktop monitor in light mode.")
-    st.sidebar.caption(f"💾 **Database:** {db_date}")
-    st.sidebar.caption(f"📈 **Price History:** {price_date}")
+    st.sidebar.caption("🖥️ Use a wide monitor on light mode.")
+    st.sidebar.caption(f"💾 **JB Database:** {db_date}")
+    st.sidebar.caption(f"📈 **Price/RSIs:** {price_date}")
     
     # 5. 🏥 NEW DATA HEALTH WIDGET (UPDATED)
     with st.sidebar.expander("🏥 Data Health Check", expanded=False):
