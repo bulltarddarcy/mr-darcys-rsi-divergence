@@ -752,10 +752,14 @@ def run_price_divergences_app(df_global):
                     df.columns = [c.strip().upper() for c in df.columns]
                     d_col = next((c for c in df.columns if 'DATE' in c), None)
                     c_col = next((c for c in df.columns if 'CLOSE' in c), None)
-                    if d_col and c_col:
+                    # We also need OPEN for the T+1 execution logic
+                    o_col = next((c for c in df.columns if 'OPEN' in c), None)
+                    
+                    if d_col and c_col and o_col:
                         df[d_col] = pd.to_datetime(df[d_col])
                         df = df.set_index(d_col).sort_index()
-                        benchmarks[sym] = df[[c_col]]
+                        # Keep both Open and Close
+                        benchmarks[sym] = df[[o_col, c_col]].rename(columns={o_col: 'OPEN', c_col: 'CLOSE'})
             except Exception: pass
         return benchmarks
 
@@ -780,11 +784,11 @@ def run_price_divergences_app(df_global):
             with c_guide2:
                 st.markdown("#### 📊 Table Metrics & Benchmarks")
                 st.markdown("""
-                * **Return Δ:** % Change from the **CLOSE** of the Signal Date to the Last Close.
-                * **Win Rate:** Percentage of current active signals that are in profit.
-                * **Relative Performance (vs SPY/QQQ):**
-                    * **Main Number (e.g. +7.1%):** The **Alpha**. This is how much the strategy outperformed the index (Strategy Avg - Index Avg).
-                    * **Bracket Number (e.g. +1.0%):** The **Index Return**. This is what SPY/QQQ actually did during the same holding periods.
+                * **Return Δ**: % Change from **Next Day OPEN** (T+1) to the Last Close.
+                * **Win Rate**: Percentage of signals where the T+1 Entry is in profit.
+                * **Relative Performance (vs SPY/QQQ)**:
+                    * **Main Number (e.g. +7.1%)**: The **Alpha** (Strategy Return - Index Return).
+                    * **Bracket Number (e.g. +1.0%)**: The **Index Return** (buying SPY/QQQ at the Open of the same execution day).
                 """)
         
         if data_option_div:
@@ -835,41 +839,41 @@ def run_price_divergences_app(df_global):
                     for i, (ticker, group) in enumerate(grouped_list):
                         d_d, d_w = prepare_data(group.copy())
                         
+                        # Helper to map Signal Date -> Next Trading Day Open/Date
+                        # We create a lookup dict: {Signal_Date_Str: {'open': next_open, 'date': next_date_obj}}
+                        def create_next_day_map(df_in):
+                            d_lookup = df_in.copy()
+                            # Ensure Date column is found and is datetime
+                            date_c = next((c for c in d_lookup.columns if 'DATE' in c.upper()), None)
+                            if not date_c:
+                                if isinstance(d_lookup.index, pd.DatetimeIndex):
+                                    d_lookup = d_lookup.reset_index()
+                                    date_c = d_lookup.columns[0] # Assume index became first col
+                                else: return {}
+
+                            d_lookup[date_c] = pd.to_datetime(d_lookup[date_c])
+                            # Create Next Day columns
+                            d_lookup['Next_Open'] = d_lookup['Open'].shift(-1)
+                            d_lookup['Next_Date'] = d_lookup[date_c].shift(-1)
+                            
+                            d_lookup['Date_Str'] = d_lookup[date_c].apply(lambda x: x.strftime('%Y-%m-%d') if pd.notnull(x) else '')
+                            
+                            # Build dict
+                            lookup_map = {}
+                            for _, r in d_lookup.iterrows():
+                                if r['Date_Str']:
+                                    lookup_map[r['Date_Str']] = {
+                                        'open': r['Next_Open'],
+                                        'date': r['Next_Date']
+                                    }
+                            return lookup_map
+
                         # --- Process Daily ---
                         if d_d is not None and not d_d.empty:
                             daily_divs = find_divergences(d_d, ticker, 'Daily', min_n=0, periods_input=CSV_PERIODS_DAYS, optimize_for='PF', lookback_period=div_lookback, price_source=div_source, strict_validation=strict_div, recent_days_filter=days_since, rsi_diff_threshold=div_diff)
                             
                             curr_close_d = float(d_d['Price'].iloc[-1]) if 'Price' in d_d.columns else 0.0
-                            
-                            # --- ROBUST DATE LOOKUP (Fix for KeyError: 'Date') ---
-                            # Create a copy to find dates safely without breaking main DF
-                            d_lookup = d_d.copy()
-                            date_col_found = None
-                            
-                            # 1. Try column search
-                            found = [c for c in d_lookup.columns if 'DATE' in c.upper()]
-                            if found:
-                                date_col_found = found[0]
-                                d_lookup[date_col_found] = pd.to_datetime(d_lookup[date_col_found])
-                                d_lookup['Date_Str'] = d_lookup[date_col_found].apply(lambda x: x.strftime('%Y-%m-%d') if pd.notnull(x) else '')
-                            
-                            # 2. Try Index if column not found
-                            elif isinstance(d_lookup.index, pd.DatetimeIndex):
-                                d_lookup['Date_Str'] = d_lookup.index.strftime('%Y-%m-%d')
-                            
-                            # 3. Fallback: Reset index and search again
-                            else:
-                                d_lookup = d_lookup.reset_index()
-                                found_idx = [c for c in d_lookup.columns if 'DATE' in c.upper()]
-                                if found_idx:
-                                    date_col_found = found_idx[0]
-                                    d_lookup[date_col_found] = pd.to_datetime(d_lookup[date_col_found])
-                                    d_lookup['Date_Str'] = d_lookup[date_col_found].apply(lambda x: x.strftime('%Y-%m-%d') if pd.notnull(x) else '')
-                                else:
-                                    d_lookup['Date_Str'] = ''
-
-                            price_map_d = pd.Series(d_lookup['Price'].values, index=d_lookup['Date_Str']).to_dict()
-                            # ------------------------------------------------------
+                            next_map_d = create_next_day_map(d_d)
 
                             if daily_divs:
                                 all_rsi = d_d['RSI'].dropna().values if 'RSI' in d_d.columns else []
@@ -877,23 +881,37 @@ def run_price_divergences_app(df_global):
                                 
                                 for div in daily_divs:
                                     div['Last_Close'] = curr_close_d
-                                    
-                                    # Use lookup map for entry price
-                                    sig_iso = div['Signal_Date_ISO']
-                                    div['Entry_Price'] = price_map_d.get(sig_iso, div['Price2'])
-                                    
                                     div['SPY_Ret'] = 0.0
                                     div['QQQ_Ret'] = 0.0
-                                    try:
-                                        sig_dt = pd.to_datetime(sig_iso)
-                                        for b_sym, b_df in benchmarks.items():
-                                            if not b_df.empty:
-                                                idx_loc = b_df.index.searchsorted(sig_dt)
-                                                if idx_loc < len(b_df):
-                                                    entry_p = b_df.iloc[idx_loc].iloc[0]
-                                                    exit_p = b_df.iloc[-1].iloc[0]
-                                                    div[f'{b_sym}_Ret'] = ((exit_p - entry_p) / entry_p) * 100
-                                    except Exception: pass
+                                    div['Entry_Price'] = np.nan # Default
+                                    
+                                    sig_iso = div['Signal_Date_ISO']
+                                    next_info = next_map_d.get(sig_iso)
+                                    
+                                    if next_info and pd.notnull(next_info['open']):
+                                        # REALISTIC ENTRY: Next Day Open
+                                        entry_price = next_info['open']
+                                        exec_date = next_info['date']
+                                        div['Entry_Price'] = entry_price
+                                        
+                                        # Benchmark Returns from Exec Date Open -> Last Close
+                                        try:
+                                            for b_sym, b_df in benchmarks.items():
+                                                if not b_df.empty:
+                                                    # Find row for Exec Date
+                                                    # Use 'asof' or exact match? Searchsorted is good.
+                                                    idx_loc = b_df.index.searchsorted(exec_date)
+                                                    if idx_loc < len(b_df):
+                                                        # If exact match or future match found
+                                                        # Verify it's not too far off? (e.g. holidays)
+                                                        # For now take the found index row
+                                                        b_entry = b_df.iloc[idx_loc]['OPEN']
+                                                        b_exit = b_df.iloc[-1]['CLOSE']
+                                                        div[f'{b_sym}_Ret'] = ((b_exit - b_entry) / b_entry) * 100
+                                        except Exception: pass
+                                    else:
+                                        # If no next day exists (Signal was today), we can't calculate return yet
+                                        div['Entry_Price'] = np.nan
 
                                     if has_rsi_vals:
                                         p1 = (all_rsi < div['RSI1']).mean() * 100
@@ -913,55 +931,37 @@ def run_price_divergences_app(df_global):
                             weekly_divs = find_divergences(d_w, ticker, 'Weekly', min_n=0, periods_input=CSV_PERIODS_WEEKS, optimize_for='PF', lookback_period=div_lookback, price_source=div_source, strict_validation=strict_div, recent_days_filter=days_since, rsi_diff_threshold=div_diff)
                             
                             curr_close_w = float(d_w['Price'].iloc[-1]) if 'Price' in d_w.columns else 0.0
-                            
-                            # --- ROBUST DATE LOOKUP WEEKLY ---
-                            d_lookup_w = d_w.copy()
-                            date_col_w_found = None
-                            
-                            found_w = [c for c in d_lookup_w.columns if 'DATE' in c.upper()]
-                            if found_w:
-                                date_col_w_found = found_w[0]
-                                d_lookup_w[date_col_w_found] = pd.to_datetime(d_lookup_w[date_col_w_found])
-                                d_lookup_w['Date_Str'] = d_lookup_w[date_col_w_found].apply(lambda x: x.strftime('%Y-%m-%d') if pd.notnull(x) else '')
-                            elif isinstance(d_lookup_w.index, pd.DatetimeIndex):
-                                d_lookup_w['Date_Str'] = d_lookup_w.index.strftime('%Y-%m-%d')
-                            else:
-                                d_lookup_w = d_lookup_w.reset_index()
-                                found_idx_w = [c for c in d_lookup_w.columns if 'DATE' in c.upper()]
-                                if found_idx_w:
-                                    date_col_w_found = found_idx_w[0]
-                                    d_lookup_w[date_col_w_found] = pd.to_datetime(d_lookup_w[date_col_w_found])
-                                    d_lookup_w['Date_Str'] = d_lookup_w[date_col_w_found].apply(lambda x: x.strftime('%Y-%m-%d') if pd.notnull(x) else '')
-                                else:
-                                    d_lookup_w['Date_Str'] = ''
-                            
-                            price_map_w = pd.Series(d_lookup_w['Price'].values, index=d_lookup_w['Date_Str']).to_dict()
-                            # --------------------------------
+                            next_map_w = create_next_day_map(d_w)
 
                             if weekly_divs:
                                 all_rsi_w = d_w['RSI'].dropna().values if 'RSI' in d_w.columns else []
                                 has_rsi_vals_w = len(all_rsi_w) > 0
                                 for div in weekly_divs:
                                     div['Last_Close'] = curr_close_w
-                                    
-                                    sig_iso = div['Signal_Date_ISO']
-                                    div['Entry_Price'] = price_map_w.get(sig_iso, div['Price2'])
-                                    
                                     div['SPY_Ret'] = 0.0
                                     div['QQQ_Ret'] = 0.0
-                                    try:
-                                        sig_dt = pd.to_datetime(sig_iso)
-                                        approx_friday = sig_dt + timedelta(days=4)
-                                        
-                                        for b_sym, b_df in benchmarks.items():
-                                            if not b_df.empty:
-                                                idx_loc = b_df.index.searchsorted(approx_friday)
-                                                if idx_loc >= len(b_df): idx_loc = len(b_df) - 1
-                                                entry_p = b_df.iloc[idx_loc].iloc[0]
-                                                exit_p = b_df.iloc[-1].iloc[0]
-                                                div[f'{b_sym}_Ret'] = ((exit_p - entry_p) / entry_p) * 100
-                                    except Exception: pass
+                                    div['Entry_Price'] = np.nan
 
+                                    sig_iso = div['Signal_Date_ISO']
+                                    next_info = next_map_w.get(sig_iso)
+                                    
+                                    if next_info and pd.notnull(next_info['open']):
+                                        # REALISTIC ENTRY: Next Week Open (Monday)
+                                        entry_price = next_info['open']
+                                        exec_date = next_info['date']
+                                        div['Entry_Price'] = entry_price
+                                        
+                                        try:
+                                            for b_sym, b_df in benchmarks.items():
+                                                if not b_df.empty:
+                                                    # Find benchmark price on that Monday Open
+                                                    idx_loc = b_df.index.searchsorted(exec_date)
+                                                    if idx_loc < len(b_df):
+                                                        b_entry = b_df.iloc[idx_loc]['OPEN']
+                                                        b_exit = b_df.iloc[-1]['CLOSE']
+                                                        div[f'{b_sym}_Ret'] = ((b_exit - b_entry) / b_entry) * 100
+                                        except Exception: pass
+                                    
                                     if has_rsi_vals_w:
                                         p1 = (all_rsi_w < div['RSI1']).mean() * 100
                                         p2 = (all_rsi_w < div['RSI2']).mean() * 100
@@ -987,10 +987,13 @@ def run_price_divergences_app(df_global):
                             st.warning(f"No signals found in the last {days_since} days.")
                         else:
                             # --- CALCULATE RETURN SINCE SIGNAL ---
+                            # Return is now (Last Close - Next Open) / Next Open
                             res_div_df['Entry_Price'] = pd.to_numeric(res_div_df['Entry_Price'], errors='coerce')
                             res_div_df['Last_Close'] = pd.to_numeric(res_div_df['Last_Close'], errors='coerce')
                             
+                            # If Entry Price is NaN (tomorrow hasn't happened), Return is 0 or NaN
                             res_div_df['Return_Since_Signal'] = ((res_div_df['Last_Close'] - res_div_df['Entry_Price']) / res_div_df['Entry_Price']) * 100
+                            res_div_df['Return_Since_Signal'] = res_div_df['Return_Since_Signal'].fillna(0.0)
                             
                             res_div_df = res_div_df.sort_values(by='Signal_Date_ISO', ascending=False)
                             consolidated = res_div_df.groupby(['Ticker', 'Type', 'Timeframe']).head(1)
