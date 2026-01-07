@@ -1886,7 +1886,8 @@ def run_ema_distance_app(df_global):
 
     # Style: Bold row only if raw_status is True
     def style_combo(row):
-        return ['font-weight: bold;' if row['raw_status'] else ''] * len(row)
+        # Added 'color: #c5221f;' to the styling string
+        return ['font-weight: bold; color: #c5221f;' if row['raw_status'] else ''] * len(row)
 
     st.dataframe(
         df_combo.style.apply(style_combo, axis=1).format({"Hit Rate (>=8% Draw Down)": "{:.1f}%"}),
