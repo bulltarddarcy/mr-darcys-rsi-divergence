@@ -3395,6 +3395,7 @@ The table uses a traffic-light system to categorize the current price action:
     final_chart = (bars + rule).properties(height=300)
     st.altair_chart(final_chart, use_container_width=True)
 
+# --- CSS STYLING ---
 st.markdown("""<style>
 .block-container{padding-top:3.5rem;padding-bottom:1rem;}
 .zones-panel{padding:14px 0; border-radius:10px;}
@@ -3440,9 +3441,9 @@ st.markdown("""<style>
 .badge{background: rgba(128, 128, 128, 0.08); border: 1px solid rgba(128, 128, 128, 0.2); border-radius:18px; padding:6px 10px; font-weight:700}
 .price-badge-header{background: rgba(102, 183, 255, 0.1); border: 1px solid #66b7ff; border-radius:18px; padding:6px 10px; font-weight:800}
 .light-note { opacity: 0.7; font-size: 14px; margin-bottom: 10px; }
-
 </style>""", unsafe_allow_html=True)
 
+# --- APP INITIALIZATION & NAVIGATION ---
 try:
     sheet_url = st.secrets["GSHEET_URL"]
     df_global = load_and_clean_data(sheet_url)
@@ -3453,13 +3454,10 @@ try:
     # 2. Price History Date (fetch AAPL as proxy for latest market data)
     price_date = "Syncing..."
     try:
-        # We use AAPL as the standard "heartbeat" for the market data feed
         df_aapl = fetch_yahoo_data("AAPL")
         if df_aapl is not None and not df_aapl.empty:
-            # FIX: Use 'DATE' (uppercase) because fetch_yahoo_data capitalizes columns
             price_date = pd.to_datetime(df_aapl['DATE']).max().strftime("%d %b %y")
         else:
-            # FIX: If fetch fails (returns None), explicitly set to Offline
             price_date = "Offline"
     except Exception:
         price_date = "Offline"
@@ -3475,8 +3473,6 @@ try:
     ])
 
     st.sidebar.caption("🖥️ Everything is best viewed with a wide desktop monitor in light mode.")
-    
-    # Updated Sidebar Dates
     st.sidebar.caption(f"💾 **Database:** {db_date}")
     st.sidebar.caption(f"📈 **Price History:** {price_date}")
     
