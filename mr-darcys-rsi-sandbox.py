@@ -1536,7 +1536,7 @@ def run_rsi_scanner_app(df_global):
                 st.error(f"Error: {e}")
 
     # --------------------------------------------------------------------------
-    # TAB 4: BACKTESTER (Optimized)
+    # TAB 4: BACKTESTER (Restored Logic)
     # --------------------------------------------------------------------------
     with tab_bot:
         
@@ -1570,10 +1570,6 @@ def run_rsi_scanner_app(df_global):
             ticker = st.text_input("Ticker", value="NFLX", help="Enter a symbol (e.g., TSLA, NVDA)", key="rsi_bt_ticker_input").strip().upper()
             lookback_years = st.number_input("Lookback Years", min_value=1, max_value=10, value=10)
             rsi_tol = st.number_input("RSI Tolerance", min_value=0.5, max_value=5.0, value=2.0, step=0.5)
-            
-            # --- OPTIMIZATION: Checkbox to enable heavy SQN math ---
-            calc_sqn = st.checkbox("Calc SQN", value=False, help="Enable to calculate System Quality Number (slower).")
-            
             rsi_metric_container = st.empty()
         
         if ticker:
@@ -1654,14 +1650,14 @@ def run_rsi_scanner_app(df_global):
                             
                             win_rate = np.mean(returns > 0) * 100
                             avg_ret = np.mean(returns) * 100
+                            
+                            # --- SQN CALCULATION ---
+                            std_dev = np.std(returns) * 100
                             count = len(valid_indices)
-
-                            # --- SQN CALCULATION (OPTIMIZED) ---
-                            sqn = 0.0
-                            if calc_sqn:
-                                std_dev = np.std(returns) * 100
-                                if std_dev > 0 and count > 0:
-                                    sqn = (avg_ret / std_dev) * np.sqrt(count)
+                            if std_dev > 0 and count > 0:
+                                sqn = (avg_ret / std_dev) * np.sqrt(count)
+                            else:
+                                sqn = 0.0
                             
                             results.append({
                                 "Days": p, 
