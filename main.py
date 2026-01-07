@@ -1907,7 +1907,7 @@ def run_ema_distance_app(df_global):
 
     # Base bar chart
     bars = alt.Chart(chart_data).mark_bar().encode(
-        x='Date:T', 
+        x=alt.X('Date:T', title=None), 
         y=alt.Y('Distance (%)', title='% Dist from 50 SMA'),
         color=alt.condition(alt.datum['Distance (%)'] > 0, alt.value("#71d28a"), alt.value("#f29ca0"))
     )
