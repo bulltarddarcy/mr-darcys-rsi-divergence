@@ -290,54 +290,88 @@ def get_confirmed_gdrive_data(url):
         print(f"Drive Error: {e}")
         return None
 
+
 @st.cache_data(ttl=3600)
 def get_parquet_config():
     """
-    Loads dataset configuration. 
-    Priority 1: Text file in Google Drive (URL defined in secrets as URL_PARQUET_LIST)
-    Priority 2: String in secrets (PARQUET_CONFIG)
+    Loads dataset configuration and cleans keys to prevent whitespace errors.
     """
     config = {}
-    
-    # 1. Try loading from Google Drive Text File
-    url_list = st.secrets.get("URL_PARQUET_LIST", "")
-    if url_list:
-        try:
-            buffer = get_confirmed_gdrive_data(url_list)
-            if buffer and buffer != "HTML_ERROR":
-                content = buffer.getvalue()
-                lines = content.strip().split('\n')
-                for line in lines:
-                    if not line.strip(): continue
+    try:
+        raw_config = st.secrets.get("PARQUET_CONFIG", "")
+        if raw_config:
+            lines = raw_config.strip().split('\n')
+            for line in lines:
+                if ',' in line:
                     parts = line.split(',')
-                    if len(parts) >= 2:
-                        name = parts[0].strip()
-                        name = re.sub(r'\\s*', '', name)
-                        key = parts[1].strip()
-                        config[name] = key
-        except Exception as e:
-            print(f"Error loading external config: {e}")
-
-    # 2. Fallback to secrets string
-    if not config:
-        try:
-            raw_config = st.secrets.get("PARQUET_CONFIG", "")
-            if raw_config:
-                lines = raw_config.strip().split('\n')
-                for line in lines:
-                    parts = line.split(',')
-                    if len(parts) >= 2:
-                        name = parts[0].strip()
-                        key = parts[1].strip()
-                        config[name] = key
-        except Exception:
-            pass
-    
-    if not config:
-        st.error("⛔ CRITICAL ERROR: No dataset configuration found. Please check 'URL_PARQUET_LIST' in your secrets.toml.")
-        st.stop()
+                    # Use regex to strip everything except alphanumeric and underscores
+                    name = parts[0].strip()
+                    key = re.sub(r'[^a-zA-Z0-9_]', '', parts[1].strip())
+                    config[name] = key
+    except Exception as e:
+        st.error(f"Error parsing PARQUET_CONFIG: {e}")
         
     return config
+
+@st.cache_data(ttl=3600, show_spinner="Loading Dataset...")
+def load_parquet_and_clean(key):
+    # Sanitize the key one more time
+    clean_key = re.sub(r'[^a-zA-Z0-9_]', '', key)
+    
+    if clean_key not in st.secrets:
+        st.error(f"Key '{clean_key}' not found in Streamlit Secrets. (Check for typos in PARQUET_CONFIG)")
+        return None
+        
+    url = st.secrets[clean_key]
+    
+    try:
+        # Use the binary helper
+        buffer = get_gdrive_binary_data(url)
+        
+        if buffer is None:
+            st.error(f"Failed to download {clean_key}. Check if link is 'Anyone with link' and not 'Restricted'.")
+            return None
+
+        content = buffer.getvalue()
+        
+        # Verify content isn't empty or HTML
+        if content.startswith(b"<!DOCTYPE html>"):
+            st.error(f"Google Drive returned a preview page for {clean_key} instead of data. Ensure the link is a direct share link.")
+            return None
+
+        # Parquet files start with 'PAR1'
+        try:
+            df = pd.read_parquet(BytesIO(content))
+        except Exception:
+            try:
+                # Fallback to CSV
+                df = pd.read_csv(BytesIO(content))
+            except Exception as e:
+                st.error(f"Parsing error for {clean_key}: {e}")
+                return None
+
+        # Standard Cleaning Logic
+        df.columns = [c.strip() for c in df.columns]
+        date_col = next((c for c in df.columns if 'DATE' in c.upper()), None)
+        if date_col:
+            df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
+            df = df.rename(columns={date_col: 'ChartDate'}).sort_values('ChartDate')
+            
+        if 'Close' not in df.columns and 'Price' in df.columns:
+            df = df.rename(columns={'Price': 'Close'})
+        if 'Close' in df.columns and 'Price' not in df.columns:
+            df['Price'] = df['Close']
+            
+        cols_to_numeric = ['Price', 'High', 'Low', 'Open', 'Volume', 'RSI', 'EMA8', 'EMA21', 'VolSMA']
+        for c in cols_to_numeric:
+            if c in df.columns:
+                df[c] = pd.to_numeric(df[c], errors='coerce')
+
+        return df
+    except Exception as e:
+        st.error(f"Critical error loading {clean_key}: {e}")
+        return None
+
 
 DATA_KEYS_PARQUET = get_parquet_config()
 
@@ -386,63 +420,6 @@ def get_gdrive_binary_data(url):
         return None
 
 
-@st.cache_data(ttl=3600, show_spinner="Loading Dataset...")
-def load_parquet_and_clean(key):
-    # 1. Fetch the URL from secrets based on the key (e.g., PARQUET_SP100)
-    if key not in st.secrets:
-        st.error(f"Key '{key}' not found in Streamlit Secrets.")
-        return None
-        
-    url = st.secrets[key]
-    
-    try:
-        # 2. Use your existing robust binary helper to handle Google Drive
-        # This function handles confirmation tokens for large files (SP500/SP100)
-        buffer = get_gdrive_binary_data(url)
-        
-        if not buffer:
-            st.error(f"Could not retrieve data for {key}. Check if the Drive link is public.")
-            return None
-            
-        content = buffer.getvalue()
-
-        # 3. Try Parquet First, then Fallback to CSV
-        try:
-            df = pd.read_parquet(BytesIO(content))
-        except Exception:
-            try:
-                # Sometimes these files are actually CSVs despite the name
-                df = pd.read_csv(BytesIO(content))
-            except Exception as e:
-                st.error(f"Error reading {key}: {e}")
-                return None
-
-        # 4. Standardize Columns
-        df.columns = [c.strip() for c in df.columns]
-        
-        # Look for a Date column
-        date_col = next((c for c in df.columns if 'DATE' in c.upper()), None)
-        if date_col:
-            df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
-            df = df.rename(columns={date_col: 'ChartDate'}).sort_values('ChartDate')
-            
-        # Ensure Price/Close consistency
-        if 'Close' not in df.columns and 'Price' in df.columns:
-            df = df.rename(columns={'Price': 'Close'})
-        if 'Close' in df.columns and 'Price' not in df.columns:
-            df['Price'] = df['Close']
-            
-        # Ensure Numeric for calculations
-        cols_to_numeric = ['Price', 'High', 'Low', 'Open', 'Volume', 'RSI', 'EMA8', 'EMA21', 'VolSMA']
-        for c in cols_to_numeric:
-            if c in df.columns:
-                df[c] = pd.to_numeric(df[c], errors='coerce')
-
-        return df
-        
-    except Exception as e:
-        st.error(f"Critical error loading {key}: {e}")
-        return None
 
 
 @st.cache_data(ttl=3600)
