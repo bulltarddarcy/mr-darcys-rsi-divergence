@@ -3163,7 +3163,7 @@ def run_seasonality_app(df_global):
                 )
 
 def run_ema_distance_app(df_global):
-    # Fixed: Defining helper function inside scope
+    # Helper function defined inside scope to prevent "not defined" errors
     def run_backtest(signal_series, price_data, low_data, lookforward=30, drawdown_thresh=-0.08):
         idxs = signal_series[signal_series].index
         if len(idxs) == 0: return 0, 0, 0
@@ -3193,6 +3193,7 @@ def run_ema_distance_app(df_global):
     st.title("📏 EMA Distance Analysis")
     st.markdown("ℹ️ Historical Close Prices sourced from Yahoo Finance")
 
+    # 1. Input Section
     col_in1, col_in2, _ = st.columns([1, 1, 2])
     with col_in1:
         ticker = st.text_input("Ticker", value="QQQ").upper().strip()
@@ -3203,11 +3204,13 @@ def run_ema_distance_app(df_global):
         st.warning("Please enter a ticker.")
         return
 
+    # Percentage formatting to 1 decimal place
     def fmt_pct(val):
         if pd.isna(val): return ""
         if val < 0: return f"({abs(val):.1f}%)"
         return f"{val:.1f}%"
 
+    # 2. Data Fetching
     with st.spinner(f"Crunching data for {ticker}..."):
         try:
             t_obj = yf.Ticker(ticker)
@@ -3217,7 +3220,8 @@ def run_ema_distance_app(df_global):
                 return
             df = df.reset_index()
             df.columns = [c.upper() for c in df.columns]
-            # Fix Update 2: Explicitly define date_col within the try block
+            
+            # Defining date_col to prevent "not defined" error
             date_col = next((c for c in df.columns if 'DATE' in c), "DATE")
             close_col = 'CLOSE' if 'CLOSE' in df.columns else 'Close'
             low_col = 'LOW' if 'LOW' in df.columns else 'Low'
@@ -3226,12 +3230,14 @@ def run_ema_distance_app(df_global):
             st.error(f"Error fetching data: {e}")
             return
 
-    # Calculations strictly using Close prices
+    # EMA/SMA Calculations
     df['EMA_8'] = df[close_col].ewm(span=8, adjust=False).mean()
     df['EMA_21'] = df[close_col].ewm(span=21, adjust=False).mean()
     df['SMA_50'] = df[close_col].rolling(window=50).mean()
     df['SMA_100'] = df[close_col].rolling(window=100).mean()
     df['SMA_200'] = df[close_col].rolling(window=200).mean()
+    
+    # Distance Gaps
     df['Dist_8'] = ((df[close_col] - df['EMA_8']) / df['EMA_8']) * 100
     df['Dist_21'] = ((df[close_col] - df['EMA_21']) / df['EMA_21']) * 100
     df['Dist_50'] = ((df[close_col] - df['SMA_50']) / df['SMA_50']) * 100
@@ -3239,12 +3245,12 @@ def run_ema_distance_app(df_global):
     df['Dist_200'] = ((df[close_col] - df['SMA_200']) / df['SMA_200']) * 100
     df_clean = df.dropna(subset=['EMA_8', 'EMA_21', 'SMA_50', 'SMA_100', 'SMA_200']).copy()
     
-    # --- TABLE 1 ---
+    # --- TABLE 1: Main Stats ---
     st.subheader(f"{ticker} vs Moving Avgs & Percentiles")
 
     with st.expander("ℹ️ Table User Guide"):
-        # Reduced line spacing using single markdown block
         st.markdown(f"""
+
 **1. Key Metrics Tracked**
 The app calculates the percentage distance (the "Gap") between the current price and five different moving averages:
 * 8-day and 21-day EMA: Short-term momentum and "swing" levels.
@@ -3302,7 +3308,7 @@ The table uses a traffic-light system to categorize the current price action:
         column_config={"Price": st.column_config.NumberColumn("Price", format="$%.2f"), "MA Level": st.column_config.NumberColumn("MA Level", format="$%.2f")}
     )
     
-    # --- TABLE 2 ---
+    # --- TABLE 2: Combo Over-Extension Signals ---
     st.subheader("🔥 Combo Over-Extension Signals")
 
     t8_90 = thresholds['Dist_8']['p90']
@@ -3322,23 +3328,24 @@ The table uses a traffic-light system to categorize the current price action:
     fs_active = "✅" if bool(m_fs.iloc[-1]) else "❌"
     t_active = "✅" if bool(m_t.iloc[-1]) else "❌"
 
+    # Updated column headers for Draw Down
     combo_rows = [
         {
             "Combo Rule": "Double EMA", 
             "Triggers": "(8-EMA Gap ≥ p90), (21-EMA Gap ≥ p80)",
-            "Occurrences": res_d[0], "Hit Rate (>=8% DD)": res_d[1], "Median Days to DD": f"{int(res_d[2])} days", 
+            "Occurrences": res_d[0], "Hit Rate (>=8% Draw Down)": res_d[1], "Median Days to Draw Down": f"{int(res_d[2])} days", 
             "Active Today?": d_active, "raw_status": bool(m_d.iloc[-1])
         },
         {
             "Combo Rule": "Fast vs Swing", 
             "Triggers": "(8-EMA gap ≥ p90), (50-SMA gap ≥ p80)",
-            "Occurrences": res_fs[0], "Hit Rate (>=8% DD)": res_fs[1], "Median Days to DD": f"{int(res_fs[2])} days", 
+            "Occurrences": res_fs[0], "Hit Rate (>=8% Draw Down)": res_fs[1], "Median Days to Draw Down": f"{int(res_fs[2])} days", 
             "Active Today?": fs_active, "raw_status": bool(m_fs.iloc[-1])
         },
         {
             "Combo Rule": "Triple Stack", 
             "Triggers": "(8-EMA gap ≥ p90), (50-SMA gap ≥ p80), (21-EMA gap ≥ p80)",
-            "Occurrences": res_t[0], "Hit Rate (>=8% DD)": res_t[1], "Median Days to DD": f"{int(res_t[2])} days", 
+            "Occurrences": res_t[0], "Hit Rate (>=8% Draw Down)": res_t[1], "Median Days to Draw Down": f"{int(res_t[2])} days", 
             "Active Today?": t_active, "raw_status": bool(m_t.iloc[-1])
         }
     ]
@@ -3350,18 +3357,18 @@ The table uses a traffic-light system to categorize the current price action:
         return ['font-weight: bold;' if row['raw_status'] else ''] * len(row)
 
     st.dataframe(
-        df_combo.drop(columns=['raw_status']).style.apply(style_combo, axis=1).format({"Hit Rate (>=8% DD)": "{:.1f}%"}),
+        df_combo.style.apply(style_combo, axis=1).format({"Hit Rate (>=8% Draw Down)": "{:.1f}%"}),
         use_container_width=True, hide_index=True,
         column_config={
             "Triggers": st.column_config.TextColumn("Trigger Conditions", width="large"),
             "Active Today?": st.column_config.TextColumn("Active Today?", width="small")
-        }
+        },
+        column_order=["Combo Rule", "Triggers", "Occurrences", "Hit Rate (>=8% Draw Down)", "Median Days to Draw Down", "Active Today?"]
     )
 
-    # --- CHART ---
+    # --- CHART: Visualization ---
     st.subheader("Visualizing the % Distance from 50 SMA")
     
-    # Fix Update 2: Variable Scope
     chart_data = pd.DataFrame({
         'Date': pd.to_datetime(df_clean[date_col]), 
         'Distance (%)': df_clean['Dist_50']
