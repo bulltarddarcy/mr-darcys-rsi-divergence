@@ -144,6 +144,12 @@ def load_parquet_and_clean(key):
         # Try Parquet, Fallback to CSV
         try:
             df = pd.read_parquet(BytesIO(content))
+            
+            # --- FIX: Check if Date is hidden in the Index ---
+            # This matches the logic you already use in fetch_history_optimized
+            if df.index.name and 'DATE' in str(df.index.name).upper():
+                df = df.reset_index()
+                
         except Exception:
             try:
                 df = pd.read_csv(BytesIO(content))
@@ -153,6 +159,8 @@ def load_parquet_and_clean(key):
 
         # --- Standard Cleaning Logic ---
         df.columns = [c.strip() for c in df.columns]
+        
+        # Now this will successfully find the date column
         date_col = next((c for c in df.columns if 'DATE' in c.upper()), None)
         if date_col:
             df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
