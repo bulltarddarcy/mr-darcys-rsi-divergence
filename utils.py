@@ -402,7 +402,7 @@ def get_stock_indicators(sym: str):
     except: 
         return None, None, None, None, None
 
-def find_divergences(df, ticker, timeframe, min_n=5, periods_input=None, lookback_period=60, 
+def find_divergences(df, ticker, timeframe, min_n=1, periods_input=None, lookback_period=60, 
                      price_source='High/Low', strict_validation=True, recent_days_filter=30, 
                      rsi_diff_threshold=1.0, optimize_for='PF', mode="Standard (Reversal)"):
     """
@@ -413,66 +413,52 @@ def find_divergences(df, ticker, timeframe, min_n=5, periods_input=None, lookbac
         return []
 
     # 1. Setup Data
-    # Use Close for everything if selected, otherwise High/Low
     if price_source == 'Close':
         price_high = df['Close'].values
         price_low = df['Close'].values
     else:
-        # Fallback to Close if High/Low missing
         price_high = df['High'].values if 'High' in df.columns else df['Close'].values
         price_low = df['Low'].values if 'Low' in df.columns else df['Close'].values
 
     rsi = df['RSI'].values
     dates = df['Date'].values if 'Date' in df.columns else df.index.values
     
-    # 2. Find Peaks (Highs) and Valleys (Lows) using order=min_n
-    # argrelextrema returns tuple, take [0]
-    peaks = argrelextrema(rsi, np.greater, order=min_n)[0]
-    valleys = argrelextrema(rsi, np.less, order=min_n)[0]
+    # 2. Find Peaks/Valleys
+    # FIX: argrelextrema requires order >= 1. We force at least 1 even if user inputs 0.
+    safe_order = max(1, int(min_n))
+    
+    peaks = argrelextrema(rsi, np.greater, order=safe_order)[0]
+    valleys = argrelextrema(rsi, np.less, order=safe_order)[0]
     
     results = []
     
-    # Helper to check strict validation (50 cross)
+    # Helper: Strict 50-Cross Check (Only for Standard Divs)
     def check_strict(idx_start, idx_end, is_bullish):
-        # Slice between the two pivots (exclusive)
         if idx_end - idx_start <= 1: return True
         mid_rsi = rsi[idx_start+1 : idx_end]
         if len(mid_rsi) == 0: return True
         
-        # Bullish: RSI should ideally stay below 50 (oversold territory) for Standard
-        # Bearish: RSI should ideally stay above 50 (overbought territory) for Standard
-        # Note: Strict validation is often disabled for Hidden divs as they span larger trends,
-        # but we apply it if requested to ensure signal quality.
-        if is_bullish:
-            return not (mid_rsi > 50).any() # Invalid if it crossed above 50
-        else:
-            return not (mid_rsi < 50).any() # Invalid if it crossed below 50
+        # Bullish Standard: RSI should ideally NOT cross above 50
+        if is_bullish: return not (mid_rsi > 50).any()
+        # Bearish Standard: RSI should ideally NOT cross below 50
+        else: return not (mid_rsi < 50).any()
 
     # --- 3. Scan Bullish Divergences (Valleys) ---
-    # We look at pairs of valleys: current (i) and previous (j)
     if len(valleys) >= 2:
-        # We iterate backwards from the most recent
         for i in range(len(valleys)-1, 0, -1):
             idx_curr = valleys[i]
             
-            # Optimization: Don't scan too far back for the *current* pivot if we only want recent
-            # But we need to scan history to build the history tab, so we filter 'recent' at the end.
+            # Optimization: Skip old signals early if we only want recent ones
+            # (Note: We still scan history for the 'History' tab, so we filter Is_Recent at end)
             
-            # Look at previous valleys within 'lookback_period'
             for j in range(i-1, -1, -1):
                 idx_prev = valleys[j]
-                if (idx_curr - idx_prev) > lookback_period:
-                    break # Too far apart
+                if (idx_curr - idx_prev) > lookback_period: break 
                 
-                # Data Points
-                rsi_curr = rsi[idx_curr]
-                rsi_prev = rsi[idx_prev]
-                p_curr = price_low[idx_curr]
-                p_prev = price_low[idx_prev]
+                rsi_curr = rsi[idx_curr]; rsi_prev = rsi[idx_prev]
+                p_curr = price_low[idx_curr]; p_prev = price_low[idx_prev]
                 
-                # Check 1: RSI Difference Threshold
-                if abs(rsi_curr - rsi_prev) < rsi_diff_threshold:
-                    continue
+                if abs(rsi_curr - rsi_prev) < rsi_diff_threshold: continue
                     
                 div_type_found = None
                 
@@ -487,13 +473,10 @@ def find_divergences(df, ticker, timeframe, min_n=5, periods_input=None, lookbac
                         div_type_found = "Bullish (Hidden)"
                 
                 if div_type_found:
-                    # Strict Check
-                    if strict_validation and not check_strict(idx_prev, idx_curr, is_bullish=True):
-                        continue
-                        
-                    # Calculate Forward Returns (for history table)
-                    # (Simplified return logic, you can keep your existing detailed logic here)
-                    # ... [Insert your existing return calc code if applicable] ...
+                    # FIX: Only apply strict validation to STANDARD divergences
+                    if strict_validation and "Standard" in div_type_found:
+                        if not check_strict(idx_prev, idx_curr, is_bullish=True):
+                            continue
                     
                     results.append({
                         "Ticker": ticker,
@@ -508,11 +491,8 @@ def find_divergences(df, ticker, timeframe, min_n=5, periods_input=None, lookbac
                         "Price_Display": f"${p_prev:.2f} → ${p_curr:.2f}",
                         "Last_Close": f"${df['Close'].iloc[-1]:.2f}",
                         "Is_Recent": (len(df) - idx_curr) <= recent_days_filter,
-                        # Add raw index for sorting/filtering later
                         "Idx_Signal": idx_curr 
                     })
-                    # Found a match for this valley, stop looking at older valleys to avoid duplicates
-                    # (Unless you want multiple divergences from one point, but usually nearest valid is best)
                     break 
 
     # --- 4. Scan Bearish Divergences (Peaks) ---
@@ -522,16 +502,12 @@ def find_divergences(df, ticker, timeframe, min_n=5, periods_input=None, lookbac
             
             for j in range(i-1, -1, -1):
                 idx_prev = peaks[j]
-                if (idx_curr - idx_prev) > lookback_period:
-                    break
+                if (idx_curr - idx_prev) > lookback_period: break
                 
-                rsi_curr = rsi[idx_curr]
-                rsi_prev = rsi[idx_prev]
-                p_curr = price_high[idx_curr]
-                p_prev = price_high[idx_prev]
+                rsi_curr = rsi[idx_curr]; rsi_prev = rsi[idx_prev]
+                p_curr = price_high[idx_curr]; p_prev = price_high[idx_prev]
                 
-                if abs(rsi_curr - rsi_prev) < rsi_diff_threshold:
-                    continue
+                if abs(rsi_curr - rsi_prev) < rsi_diff_threshold: continue
 
                 div_type_found = None
 
@@ -546,8 +522,10 @@ def find_divergences(df, ticker, timeframe, min_n=5, periods_input=None, lookbac
                         div_type_found = "Bearish (Hidden)"
                 
                 if div_type_found:
-                    if strict_validation and not check_strict(idx_prev, idx_curr, is_bullish=False):
-                        continue
+                    # FIX: Only apply strict validation to STANDARD divergences
+                    if strict_validation and "Standard" in div_type_found:
+                        if not check_strict(idx_prev, idx_curr, is_bullish=False):
+                            continue
 
                     results.append({
                         "Ticker": ticker,
@@ -566,30 +544,24 @@ def find_divergences(df, ticker, timeframe, min_n=5, periods_input=None, lookbac
                     })
                     break
 
-    # Calculate Returns (Forward Looking) if requested
-    # If your original code computed 5d, 21d returns here, make sure to include that logic block
-    # iterating over 'results' and looking up `df['Close']` at `Idx_Signal + period`.
-
-    if not results:
-        return []
-
-    # Inject Returns into the results list (Minimal Example)
-    if periods_input:
+    # Calculate Forward Returns (If periods provided)
+    if periods_input and results:
         closes = df['Close'].values
         max_idx = len(closes) - 1
         for res in results:
             idx = res['Idx_Signal']
             for p in periods_input:
-                # p can be integer (days) or you might need to convert weeks->days
-                days = int(p) 
-                if idx + days <= max_idx:
-                    ret = (closes[idx + days] - closes[idx]) / closes[idx] * 100
-                    res[f"Ret_{p}"] = ret
-                else:
+                try:
+                    days = int(p) 
+                    if idx + days <= max_idx:
+                        ret = (closes[idx + days] - closes[idx]) / closes[idx] * 100
+                        res[f"Ret_{p}"] = ret
+                    else:
+                        res[f"Ret_{p}"] = None
+                except:
                     res[f"Ret_{p}"] = None
 
     return results
-
 
 def prepare_data(df):
     # Standardize column names (removes spaces, dashes, converts to UPPER)

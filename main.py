@@ -711,7 +711,6 @@ def run_price_divergences_app(df_global):
     if 'saved_rsi_div_strict' not in st.session_state: st.session_state.saved_rsi_div_strict = "Yes"
     if 'saved_rsi_div_days_since' not in st.session_state: st.session_state.saved_rsi_div_days_since = 25
     if 'saved_rsi_div_diff' not in st.session_state: st.session_state.saved_rsi_div_diff = 2.0
-    # NEW: Filter Mode State
     if 'saved_rsi_div_mode' not in st.session_state: st.session_state.saved_rsi_div_mode = "Standard (Reversal)"
     
     # History Tab State
@@ -734,7 +733,6 @@ def run_price_divergences_app(df_global):
 
     # --- HELPER FUNCTIONS FOR EXPORT ---
     def inject_volume(results_list, data_df):
-        """Looks up Volume for P1 and Signal dates and adds to results."""
         if not results_list or data_df is None or data_df.empty: return results_list
         
         vol_col = next((c for c in data_df.columns if c.strip().upper() == 'VOLUME'), None)
@@ -793,15 +791,13 @@ def run_price_divergences_app(df_global):
                 st.markdown("#### ⚙️ Settings")
                 st.markdown("""
                 * **Mode**: Choose **Standard** (Reversals), **Hidden** (Trend Continuation), or **Both**.
-                * **Days Since Signal**: Only show signals confirmed within X days.
-                * **Min RSI Delta**: Minimum difference between the two RSI pivot points.
+                * **Strict 50-Cross**: If enabled, invalidates Standard Divergences if RSI crossed 50 between pivots. (Ignored for Hidden).
                 """)
             with c_guide2:
                 st.markdown("#### 🎨 Color Legend")
                 st.markdown("""
                 * **Standard (Reversal)**: <span style='color:#1e7e34; font-weight:bold;'>Dark Green</span> / <span style='color:#c5221f; font-weight:bold;'>Dark Red</span>.
                 * **Hidden (Continuation)**: <span style='color:#71d28a; font-weight:bold;'>Light Green</span> / <span style='color:#f29ca0; font-weight:bold;'>Light Red</span>.
-                * **Highlighted Cell**: Yellow background = RSI Extremes (<10 or >90).
                 """, unsafe_allow_html=True)
         
         if data_option_div:
@@ -825,30 +821,30 @@ def run_price_divergences_app(df_global):
                         prev_week_monday = current_week_monday - timedelta(days=7)
                         highlight_list_weekly = [current_week_monday.strftime('%Y-%m-%d'), prev_week_monday.strftime('%Y-%m-%d')]
                     
-                    # --- INPUTS ---
-                    c_d1, c_d2, c_d3, c_d4 = st.columns([1, 1, 1, 1.5])
-                    with c_d1: days_since = st.number_input("Days Since Signal", min_value=1, value=st.session_state.saved_rsi_div_days_since, step=1, key="rsi_div_days_since", on_change=save_rsi_state, args=("rsi_div_days_since", "saved_rsi_div_days_since"))
-                    with c_d2: div_diff = st.number_input("Min RSI Delta", min_value=0.5, value=st.session_state.saved_rsi_div_diff, step=0.5, key="rsi_div_diff", on_change=save_rsi_state, args=("rsi_div_diff", "saved_rsi_div_diff"))
-                    with c_d3: div_lookback = st.number_input("Max Candle Lookback", min_value=30, value=st.session_state.saved_rsi_div_lookback, step=5, key="rsi_div_lookback", on_change=save_rsi_state, args=("rsi_div_lookback", "saved_rsi_div_lookback"))
+                    # --- INPUTS (Refined Layout: 2 Rows of 3) ---
+                    r1c1, r1c2, r1c3 = st.columns(3)
+                    with r1c1: days_since = st.number_input("Days Since Signal", min_value=1, value=st.session_state.saved_rsi_div_days_since, step=1, key="rsi_div_days_since", on_change=save_rsi_state, args=("rsi_div_days_since", "saved_rsi_div_days_since"))
+                    with r1c2: div_diff = st.number_input("Min RSI Delta", min_value=0.5, value=st.session_state.saved_rsi_div_diff, step=0.5, key="rsi_div_diff", on_change=save_rsi_state, args=("rsi_div_diff", "saved_rsi_div_diff"))
+                    with r1c3: div_lookback = st.number_input("Max Candle Lookback", min_value=30, value=st.session_state.saved_rsi_div_lookback, step=5, key="rsi_div_lookback", on_change=save_rsi_state, args=("rsi_div_lookback", "saved_rsi_div_lookback"))
                     
-                    # NEW: Signal Mode Selector
-                    with c_d4:
+                    r2c1, r2c2, r2c3 = st.columns(3)
+                    with r2c1:
                         curr_mode = st.session_state.saved_rsi_div_mode
                         mode_opts = ["Standard (Reversal)", "Hidden (Continuation)", "Both"]
                         idx_mode = mode_opts.index(curr_mode) if curr_mode in mode_opts else 0
                         div_mode = st.selectbox("Signal Mode", mode_opts, index=idx_mode, key="rsi_div_mode", on_change=save_rsi_state, args=("rsi_div_mode", "saved_rsi_div_mode"))
-
-                    c_d5, c_d6 = st.columns(2)
-                    with c_d5:
-                         curr_strict = st.session_state.saved_rsi_div_strict
-                         idx_strict = ["Yes", "No"].index(curr_strict) if curr_strict in ["Yes", "No"] else 0
-                         strict_div_str = st.radio("Strict 50-Cross Invalidation", ["Yes", "No"], index=idx_strict, horizontal=True, key="rsi_div_strict", on_change=save_rsi_state, args=("rsi_div_strict", "saved_rsi_div_strict"))
-                         strict_div = (strict_div_str == "Yes")
-                    with c_d6:
+                    
+                    with r2c2:
                          curr_source = st.session_state.saved_rsi_div_source
                          idx_source = ["High/Low", "Close"].index(curr_source) if curr_source in ["High/Low", "Close"] else 0
-                         div_source = st.radio("Price Method", ["High/Low", "Close"], index=idx_source, horizontal=True, key="rsi_div_source", on_change=save_rsi_state, args=("rsi_div_source", "saved_rsi_div_source"))
-                    
+                         div_source = st.selectbox("Price Method", ["High/Low", "Close"], index=idx_source, key="rsi_div_source", on_change=save_rsi_state, args=("rsi_div_source", "saved_rsi_div_source"))
+
+                    with r2c3:
+                         curr_strict = st.session_state.saved_rsi_div_strict
+                         idx_strict = ["Yes", "No"].index(curr_strict) if curr_strict in ["Yes", "No"] else 0
+                         strict_div_str = st.selectbox("Strict 50-Cross Inval", ["Yes", "No"], index=idx_strict, key="rsi_div_strict", on_change=save_rsi_state, args=("rsi_div_strict", "saved_rsi_div_strict"), help="If Yes, Standard Divergences are ignored if RSI crossed 50 between pivots. Does NOT apply to Hidden Divergences.")
+                         strict_div = (strict_div_str == "Yes")
+
                     raw_results_div = []
                     progress_bar = st.progress(0, text="Scanning Divergences...")
                     grouped = master.groupby(t_col)
@@ -858,10 +854,10 @@ def run_price_divergences_app(df_global):
                     for i, (ticker, group) in enumerate(grouped_list):
                         d_d, d_w = prepare_data(group.copy())
                         
-                        # Note: 'mode' is passed here. Ensure utils.py handles it!
-                        # --- Process Daily ---
+                        # Note: 'mode' is passed here. 
+                        # min_n=1 fixes the "Order must be int >= 1" error
                         if d_d is not None:
-                            daily_divs = find_divergences(d_d, ticker, 'Daily', min_n=0, periods_input=CSV_PERIODS_DAYS, optimize_for='PF', lookback_period=div_lookback, price_source=div_source, strict_validation=strict_div, recent_days_filter=days_since, rsi_diff_threshold=div_diff, mode=div_mode)
+                            daily_divs = find_divergences(d_d, ticker, 'Daily', min_n=1, periods_input=CSV_PERIODS_DAYS, optimize_for='PF', lookback_period=div_lookback, price_source=div_source, strict_validation=strict_div, recent_days_filter=days_since, rsi_diff_threshold=div_diff, mode=div_mode)
                             
                             if daily_divs and 'RSI' in d_d.columns:
                                 all_rsi = d_d['RSI'].dropna().values
@@ -870,14 +866,12 @@ def run_price_divergences_app(df_global):
                                         p1 = (all_rsi < div['RSI1']).mean() * 100
                                         p2 = (all_rsi < div['RSI2']).mean() * 100
                                         div['RSI1_Pct'] = p1; div['RSI2_Pct'] = p2
-                                        # Extreme flag logic handles both Bullish and Bearish types
                                         div['Extreme_Flag'] = (p1 < 10 or p2 < 10) if 'Bullish' in div['Type'] else (p1 > 90 or p2 > 90)
                             
                             raw_results_div.extend(daily_divs)
                         
-                        # --- Process Weekly ---
                         if d_w is not None: 
-                            weekly_divs = find_divergences(d_w, ticker, 'Weekly', min_n=0, periods_input=CSV_PERIODS_WEEKS, optimize_for='PF', lookback_period=div_lookback, price_source=div_source, strict_validation=strict_div, recent_days_filter=days_since, rsi_diff_threshold=div_diff, mode=div_mode)
+                            weekly_divs = find_divergences(d_w, ticker, 'Weekly', min_n=1, periods_input=CSV_PERIODS_WEEKS, optimize_for='PF', lookback_period=div_lookback, price_source=div_source, strict_validation=strict_div, recent_days_filter=days_since, rsi_diff_threshold=div_diff, mode=div_mode)
                             
                             if weekly_divs and 'RSI' in d_w.columns:
                                 all_rsi_w = d_w['RSI'].dropna().values
@@ -902,16 +896,13 @@ def run_price_divergences_app(df_global):
                             st.warning(f"No signals found in the last {days_since} days.")
                         else:
                             res_div_df = res_div_df.sort_values(by='Signal_Date_ISO', ascending=False)
-                            # De-dupe slightly looser to allow distinct types (e.g. show a Hidden AND a Standard for same ticker)
                             consolidated = res_div_df.groupby(['Ticker', 'Type', 'Timeframe']).head(1)
                             
                             for tf in ['Daily', 'Weekly']:
                                 targets = highlight_list_weekly if tf == 'Weekly' else ([target_highlight_daily] if target_highlight_daily else [])
                                 date_header = "Week Δ" if tf == 'Weekly' else "Day Δ"
                                 
-                                # Iterate over Main categories, then sub-filter for Hidden/Standard
                                 for s_cat, emoji in [('Bullish', '🟢'), ('Bearish', '🔴')]:
-                                    # Filter for rows that CONTAIN "Bullish" or "Bearish" (handles "Bullish (Hidden)")
                                     tbl_df = consolidated[(consolidated['Type'].str.contains(s_cat)) & (consolidated['Timeframe']==tf)].copy()
                                     
                                     if not tbl_df.empty:
@@ -928,27 +919,24 @@ def run_price_divergences_app(df_global):
                                                 styles = [''] * len(row)
                                                 type_val = row.get('Type', '')
                                                 
-                                                # 1. Date Highlight
                                                 if row['Signal_Date_ISO'] in targets:
                                                     if 'Date_Display' in df_in.columns:
                                                         idx = df_in.columns.get_loc('Date_Display')
                                                         styles[idx] = 'background-color: rgba(255, 244, 229, 0.7); color: #e67e22; font-weight: bold;'
                                                 
-                                                # 2. Type Highlight (Standard vs Hidden)
                                                 if 'Type' in df_in.columns:
                                                     idx_t = df_in.columns.get_loc('Type')
                                                     if 'Bullish' in type_val:
-                                                        if 'Hidden' in type_val: # Hidden Bull
+                                                        if 'Hidden' in type_val:
                                                             styles[idx_t] = 'background-color: rgba(113, 210, 138, 0.15); color: #71d28a; font-weight: bold;'
-                                                        else: # Standard Bull
+                                                        else:
                                                             styles[idx_t] = 'background-color: rgba(113, 210, 138, 0.4); color: #1e7e34; font-weight: bold;'
                                                     elif 'Bearish' in type_val:
-                                                        if 'Hidden' in type_val: # Hidden Bear
+                                                        if 'Hidden' in type_val:
                                                             styles[idx_t] = 'background-color: rgba(242, 156, 160, 0.15); color: #f29ca0; font-weight: bold;'
-                                                        else: # Standard Bear
+                                                        else:
                                                             styles[idx_t] = 'background-color: rgba(242, 156, 160, 0.4); color: #c5221f; font-weight: bold;'
 
-                                                # 3. Extreme RSI Highlight
                                                 if row.get('Extreme_Flag', False):
                                                     if 'RSI2_Pct' in df_in.columns:
                                                         idx_p = df_in.columns.get_loc('RSI2_Pct')
@@ -991,21 +979,19 @@ def run_price_divergences_app(df_global):
         with c_h3: 
             h_diff = st.number_input("Min RSI Delta", min_value=0.5, value=2.0, step=0.5, key="rsi_hist_diff")
         with c_h4:
-            # Add Mode here too
             h_mode_hist = st.selectbox("Mode", ["Standard (Reversal)", "Hidden (Continuation)", "Both"], index=0, key="rsi_hist_mode")
 
         c_h5, c_h6, c_h7, c_h8 = st.columns(4)
         with c_h5: 
             h_source = st.selectbox("Candle Price Method", ["High/Low", "Close"], index=0, key="rsi_hist_source")
         with c_h6:
-            h_strict_str = st.selectbox("50-Cross Inval", ["Yes", "No"], index=0, key="rsi_hist_strict")
+            h_strict_str = st.selectbox("50-Cross Inval", ["Yes", "No"], index=0, key="rsi_hist_strict", help="If Yes, Standard Divergences are ignored if RSI crossed 50.")
             h_strict = (h_strict_str == "Yes")
         with c_h7: 
             h_per_days = st.text_input("Periods (Days)", value="5, 21, 63, 126, 252", key="rsi_hist_p_days")
         with c_h8: 
             h_per_weeks = st.text_input("Periods (Weeks)", value="4, 13, 26, 52", key="rsi_hist_p_weeks")
 
-        # --- ANALYSIS LOGIC (SINGLE TICKER) ---
         current_params = {"t": hist_ticker_in, "lb": h_lookback, "str": h_strict, "src": h_source, "pd": h_per_days, "pw": h_per_weeks, "diff": h_diff, "mode": h_mode_hist}
         run_hist = False
         if current_params != st.session_state.rsi_hist_last_run_params: run_hist = True
@@ -1024,13 +1010,14 @@ def run_price_divergences_app(df_global):
                         p_days_parsed = parse_periods(h_per_days)
                         p_weeks_parsed = parse_periods(h_per_weeks)
                         
+                        # min_n=1 fix
                         if d_d_h is not None: 
-                            d_daily = find_divergences(d_d_h, hist_ticker_in, 'Daily', min_n=0, periods_input=p_days_parsed, lookback_period=h_lookback, price_source=h_source, strict_validation=h_strict, recent_days_filter=99999, rsi_diff_threshold=h_diff, mode=h_mode_hist)
+                            d_daily = find_divergences(d_d_h, hist_ticker_in, 'Daily', min_n=1, periods_input=p_days_parsed, lookback_period=h_lookback, price_source=h_source, strict_validation=h_strict, recent_days_filter=99999, rsi_diff_threshold=h_diff, mode=h_mode_hist)
                             d_daily = inject_volume(d_daily, d_d_h)
                             raw_results_hist.extend(d_daily)
                             
                         if d_w_h is not None: 
-                            d_weekly = find_divergences(d_w_h, hist_ticker_in, 'Weekly', min_n=0, periods_input=p_weeks_parsed, lookback_period=h_lookback, price_source=h_source, strict_validation=h_strict, recent_days_filter=99999, rsi_diff_threshold=h_diff, mode=h_mode_hist)
+                            d_weekly = find_divergences(d_w_h, hist_ticker_in, 'Weekly', min_n=1, periods_input=p_weeks_parsed, lookback_period=h_lookback, price_source=h_source, strict_validation=h_strict, recent_days_filter=99999, rsi_diff_threshold=h_diff, mode=h_mode_hist)
                             d_weekly = inject_volume(d_weekly, d_w_h)
                             raw_results_hist.extend(d_weekly)
                             
@@ -1041,9 +1028,6 @@ def run_price_divergences_app(df_global):
                         st.session_state.rsi_hist_results = pd.DataFrame()
                 except Exception as e: st.error(f"Error: {e}")
         
-        # ==============================================================================
-        # HISTORY DISPLAY
-        # ==============================================================================
         if st.session_state.rsi_hist_results is not None and not st.session_state.rsi_hist_results.empty:
             res_df_h = st.session_state.rsi_hist_results.copy().sort_values(by='Signal_Date_ISO', ascending=False)
             
@@ -1054,9 +1038,7 @@ def run_price_divergences_app(df_global):
                     col_key = f"Ret_{p}"
                     if col_key in res_df_h.columns: p_cols_to_show.append(col_key)
 
-                # Loop categories (Bullish/Bearish)
                 for s_cat, emoji in [('Bullish', '🟢'), ('Bearish', '🔴')]:
-                    # Filter containing "Bullish" matches "Bullish (Standard)" and "Bullish (Hidden)"
                     tbl_df = res_df_h[(res_df_h['Type'].str.contains(s_cat)) & (res_df_h['Timeframe']==tf)].copy()
                     
                     if not tbl_df.empty:
@@ -1095,15 +1077,11 @@ def run_price_divergences_app(df_global):
                             height=(min(len(tbl_df), 50) + 1) * 35 
                         )
         
-        # ==============================================================================
-        # DOWNLOAD SECTION
-        # ==============================================================================
         st.divider()
         st.subheader("💾 Data Downloads")
         
         col_dl_1, col_dl_2 = st.columns(2)
         
-        # --- BOX 1: Single Ticker Download ---
         with col_dl_1:
             st.markdown(f"**Option 1: {hist_ticker_in} Complete History**")
             if st.session_state.rsi_hist_results is not None and not st.session_state.rsi_hist_results.empty:
@@ -1112,7 +1090,6 @@ def run_price_divergences_app(df_global):
                 st.download_button(label=f"⬇️ Download {hist_ticker_in} CSV", data=csv_single, file_name=f"{hist_ticker_in}_Divergence_History.csv", mime="text/csv")
             else: st.info("Input a ticker above.")
 
-        # --- BOX 2: Bulk Dataset Download ---
         with col_dl_2:
             st.markdown(f"**Option 2: Bulk Dataset History**")
             bulk_dataset_opt = st.selectbox("Select Dataset", options=options, index=0, key="rsi_hist_bulk_sel", label_visibility="collapsed")
@@ -1136,14 +1113,13 @@ def run_price_divergences_app(df_global):
                             for idx, (tkr, grp) in enumerate(grouped_bulk):
                                 d_d_b, d_w_b = prepare_data(grp.copy())
                                 
-                                # PASS MODE HERE TOO!
                                 if d_d_b is not None: 
-                                    res_d = find_divergences(d_d_b, tkr, 'Daily', min_n=0, periods_input=p_days_parsed, lookback_period=h_lookback, price_source=h_source, strict_validation=h_strict, recent_days_filter=99999, rsi_diff_threshold=h_diff, mode=h_mode_hist)
+                                    res_d = find_divergences(d_d_b, tkr, 'Daily', min_n=1, periods_input=p_days_parsed, lookback_period=h_lookback, price_source=h_source, strict_validation=h_strict, recent_days_filter=99999, rsi_diff_threshold=h_diff, mode=h_mode_hist)
                                     res_d = inject_volume(res_d, d_d_b)
                                     bulk_results.extend(res_d)
                                     
                                 if d_w_b is not None:
-                                    res_w = find_divergences(d_w_b, tkr, 'Weekly', min_n=0, periods_input=p_weeks_parsed, lookback_period=h_lookback, price_source=h_source, strict_validation=h_strict, recent_days_filter=99999, rsi_diff_threshold=h_diff, mode=h_mode_hist)
+                                    res_w = find_divergences(d_w_b, tkr, 'Weekly', min_n=1, periods_input=p_weeks_parsed, lookback_period=h_lookback, price_source=h_source, strict_validation=h_strict, recent_days_filter=99999, rsi_diff_threshold=h_diff, mode=h_mode_hist)
                                     res_w = inject_volume(res_w, d_w_b)
                                     bulk_results.extend(res_w)
                                 
