@@ -1239,8 +1239,20 @@ def run_rsi_scanner_app(df_global):
             
         with c_right:
             st.markdown("#### 2. Contextual Filters")
-            # SMA 200 Filter
-            filter_sma200 = st.selectbox("Price vs 200 SMA", ["Any", "Above", "Below"], index=0, help="Filter signals based on where the price is relative to the 200-day Simple Moving Average.")
+            
+            def filter_ui_row(label, key_prefix, default_mode="Above"):
+                st.caption(f"**{label}**")
+                c1, c2 = st.columns([1.2, 1])
+                with c1:
+                    mode = st.selectbox("Mode", ["Above", "Below"], index=0 if default_mode=="Above" else 1, key=f"{key_prefix}_mode", label_visibility="collapsed")
+                with c2:
+                    val = st.number_input("Pct", min_value=0.0, value=0.0, step=0.5, format="%.1f", key=f"{key_prefix}_val", label_visibility="collapsed")
+                return mode, val
+
+            # Filter Rows
+            r1_c1, r1_c2 = st.columns(2)
+            with r1_c1: m_sma200, v_sma200 = filter_ui_row("Price vs 200 SMA", "f_sma200")
+            with r1_c2: m_sma50, v_sma50 = filter_ui_row("Price vs 50 SMA", "f_sma50")
 
         st.divider()
         
@@ -1274,7 +1286,8 @@ def run_rsi_scanner_app(df_global):
                         rs = gain / loss
                         df['RSI'] = 100 - (100 / (1 + rs))
 
-                    # Calc SMA 200 for Filter
+                    # Calc MAs for Filters
+                    df['SMA50'] = df[close_col].rolling(50).mean()
                     df['SMA200'] = df[close_col].rolling(200).mean()
 
                     # Trim to Lookback
@@ -1286,14 +1299,24 @@ def run_rsi_scanner_app(df_global):
                     current_rsi = current_row['RSI']
                     rsi_min, rsi_max = current_rsi - rsi_tol, current_rsi + rsi_tol
                     
+                    # Helper for Split UI logic
+                    def apply_split_filter(series_price, series_ma, mode, pct_val):
+                        if series_price is None or series_ma is None: return True
+                        # Handle potential NaNs (e.g. first 200 days)
+                        mask = pd.Series(False, index=series_price.index)
+                        
+                        if mode == "Above":
+                            mask = series_price > (series_ma * (1 + pct_val/100.0))
+                        else: # Below
+                            mask = series_price < (series_ma * (1 - pct_val/100.0))
+                        return mask.fillna(False)
+
                     # Base Filter: RSI Range
                     mask = (df['RSI'] >= rsi_min) & (df['RSI'] <= rsi_max)
                     
-                    # Context Filter: SMA 200
-                    if filter_sma200 == "Above":
-                        mask &= (df[close_col] > df['SMA200'])
-                    elif filter_sma200 == "Below":
-                        mask &= (df[close_col] < df['SMA200'])
+                    # Context Filters
+                    mask &= apply_split_filter(df[close_col], df['SMA200'], m_sma200, v_sma200)
+                    mask &= apply_split_filter(df[close_col], df['SMA50'], m_sma50, v_sma50)
                     
                     # Apply Mask (Exclude the very last row which is "today")
                     matches = df.iloc[:-1][mask[:-1]].copy()
@@ -1453,21 +1476,29 @@ def run_rsi_scanner_app(df_global):
                         c_i1, c_i2 = st.columns(2)
                         
                         if not res_df.empty:
+                            # 1. Best Hold Recommendation
+                            best_row = res_df.loc[res_df['Optimal EV'].idxmax()]
+                            
+                            with c_i1:
+                                st.success(f"""
+                                **🏆 Best Historical Hold**
+                                If you bought today, the best historical strategy was holding for **{best_row['Days']} Days**.
+                                * **Avg Return:** +{best_row['Optimal EV']:.2f}%
+                                * **Win Rate:** {best_row['Optimal WR']:.1f}%
+                                * **Strategy:** {best_row['Optimal Entry']}
+                                """)
+
+                            # 2. Risk Profile (21d)
                             row_21 = res_df[res_df['Days']==21]
                             if not row_21.empty:
-                                avg_dd = row_21['Avg DD'].iloc[0]
                                 max_dd = row_21['Max DD'].iloc[0]
                                 med_dd = row_21['Median DD'].iloc[0]
-                                with c_i1:
-                                    st.info(f"**📉 Risk Profile (21 Days)**\n* **Typical Pain:** {med_dd:.1f}%\n* **Avg Drop:** {avg_dd:.1f}%\n* **Worst Case:** {max_dd:.1f}%")
-                            
-                            res_df['Improvement'] = res_df['Optimal EV'] - res_df['Lump EV']
-                            best_imp_row = res_df.loc[res_df['Improvement'].idxmax()]
-                            with c_i2:
-                                if best_imp_row['Improvement'] > 0.5:
-                                    st.success(f"**💰 Optimization Winner ({best_imp_row['Days']} Days)**\n**{best_imp_row['Optimal Entry']}** outperformed Lump Sum by **+{best_imp_row['Improvement']:.2f}%**.")
-                                else:
-                                    st.warning(f"**💰 Optimization Result**\nLump Sum generally performed as well as (or better than) DCA.")
+                                with c_i2:
+                                    st.info(f"""
+                                    **📉 Risk Profile (21 Days)**
+                                    * **Typical Pain:** {med_dd:.1f}%
+                                    * **Worst Case:** {max_dd:.1f}%
+                                    """)
 
                     else:
                         st.warning("No historical matches found. Try widening the RSI tolerance or adjusting the filters.")
