@@ -1183,7 +1183,7 @@ def run_price_divergences_app(df_global):
         st.divider()
 
 def run_rsi_scanner_app(df_global):
-    st.title("🤖 RSI Scanner & Contextual Backtester")
+    st.title("🤖 RSI Scanner")
 
     # Session State
     if 'saved_rsi_pct_low' not in st.session_state: st.session_state.saved_rsi_pct_low = 10
@@ -1197,6 +1197,28 @@ def run_rsi_scanner_app(df_global):
     dataset_map = DATA_KEYS_PARQUET
     options = list(dataset_map.keys())
 
+    # --- HELPER: ROBUST DATA LOADING ---
+    def load_tech_data(symbol, ticker_map_ref):
+        # 1. Try DB
+        d = get_ticker_technicals(symbol, ticker_map_ref)
+        # 2. Try Yahoo
+        if d is None or d.empty: 
+            d = fetch_yahoo_data(symbol)
+        
+        if d is not None and not d.empty:
+            # Normalize Columns immediately to avoid 'Close' vs 'CLOSE' errors
+            d.columns = [c.strip().upper() for c in d.columns]
+            
+            # Map variations to standard names
+            if 'ADJ CLOSE' in d.columns: d = d.rename(columns={'ADJ CLOSE': 'CLOSE'})
+            
+            # Ensure required columns exist
+            if 'CLOSE' not in d.columns:
+                # Last ditch effort to find a close column
+                possible = [c for c in d.columns if 'CLOSE' in c]
+                if possible: d = d.rename(columns={possible[0]: 'CLOSE'})
+        return d
+
     # --- TABS ---
     tab_bot, tab_pct = st.tabs(["🤖 Contextual Backtester", "🔢 RSI Percentiles"])
 
@@ -1205,7 +1227,7 @@ def run_rsi_scanner_app(df_global):
     # --------------------------------------------------------------------------
     with tab_bot:
         # --- LAYOUT: INPUTS ---
-        c_left, c_right = st.columns([1, 2.5])
+        c_left, c_mid, c_right = st.columns([1, 0.2, 3])
         
         with c_left:
             st.markdown("#### 1. Asset & Scope")
@@ -1216,33 +1238,33 @@ def run_rsi_scanner_app(df_global):
         with c_right:
             st.markdown("#### 2. Contextual Filters")
             
-            # Helper to create the split UI (Mode | Value)
-            def filter_ui(label, key_prefix, default_mode="Above"):
-                c1, c2 = st.columns([1, 1.5])
-                with c1:
-                    mode = st.selectbox(f"{label} Mode", ["Above", "Below"], index=0 if default_mode=="Above" else 1, key=f"{key_prefix}_mode", label_visibility="collapsed")
-                with c2:
-                    val = st.number_input(f"{label} %", min_value=0.0, value=0.0, step=0.5, format="%.1f", key=f"{key_prefix}_val", label_visibility="collapsed")
+            # Helper for Split UI logic (Mode | Value)
+            def filter_ui_row(col_obj, label, key_prefix, default_mode="Above"):
+                with col_obj:
+                    st.caption(f"**{label}**")
+                    c1, c2 = st.columns([1.2, 1])
+                    with c1:
+                        mode = st.selectbox("Mode", ["Above", "Below"], index=0 if default_mode=="Above" else 1, key=f"{key_prefix}_mode", label_visibility="collapsed")
+                    with c2:
+                        val = st.number_input("Pct", min_value=0.0, value=0.0, step=0.5, format="%.1f", key=f"{key_prefix}_val", label_visibility="collapsed")
                 return mode, val
 
-            f_c1, f_c2 = st.columns(2, gap="medium")
-            
-            with f_c1:
-                st.caption("**Price vs 200 SMA**")
-                m_sma200, v_sma200 = filter_ui("SMA200", "f_sma200")
-                
-                st.caption("**Price vs 50 SMA**")
-                m_sma50, v_sma50 = filter_ui("SMA50", "f_sma50")
+            # Grid Layout for Filters
+            r1_c1, r1_c2, r1_c3 = st.columns(3)
+            with r1_c1: m_sma200, v_sma200 = filter_ui_row(st, "Price vs 200 SMA", "f_sma200")
+            with r1_c2: m_sma50, v_sma50 = filter_ui_row(st, "Price vs 50 SMA", "f_sma50")
+            with r1_c3: m_spy, v_spy = filter_ui_row(st, "SPY vs 200 SMA", "f_spy")
 
-                st.caption("**Volume Filter**")
-                vol_days_filter = st.number_input("Min Vol Days (0=Off)", min_value=0, value=0, step=1, label_visibility="collapsed", help="Requires Signal Volume > X-Day Average.")
-            
-            with f_c2:
-                st.caption("**SPY vs 200 SMA (Regime)**")
-                m_spy, v_spy = filter_ui("SPY", "f_spy")
-                
+            st.markdown("") # Spacer
+            r2_c1, r2_c2, r2_c3 = st.columns(3)
+            with r2_c1:
+                st.caption("**Volume Filter (Days)**")
+                vol_days_filter = st.number_input("Vol Days", min_value=0, value=0, step=1, label_visibility="collapsed", help="0 = Disabled. If > 0, requires Signal Vol > X-Day Avg.")
+            with r2_c2:
                 st.caption("**VIX Filter**")
-                filter_vix = st.selectbox("VIX Level", ["Any", "VIX > 20 (Fear)", "VIX < 20 (Calm)"], index=0, label_visibility="collapsed")
+                filter_vix = st.selectbox("VIX", ["Any", "VIX > 20 (Fear)", "VIX < 20 (Calm)"], index=0, label_visibility="collapsed")
+            with r2_c3:
+                pass # Empty column for alignment
 
         st.divider()
         
@@ -1251,279 +1273,290 @@ def run_rsi_scanner_app(df_global):
             ticker_map = load_ticker_map()
             
             # 1. Fetch MAIN Ticker
-            df = get_ticker_technicals(ticker, ticker_map)
-            if df is None or df.empty: df = fetch_yahoo_data(ticker)
+            df = load_tech_data(ticker, ticker_map)
             
             # 2. Fetch CONTEXT Tickers (SPY, VIX)
             df_spy = None
             df_vix = None
             
-            # Fetch SPY (Always fetch to check filters, unless logic allows skipping)
-            # Simplest is to fetch if we are using it
-            df_spy = fetch_yahoo_data("SPY")
-            if df_spy is not None:
-                df_spy['SPY_SMA200'] = df_spy['Close'].rolling(200).mean()
-                    
+            # Fetch SPY if used (checking filters to avoid unnecessary calls)
+            # Default to fetching SPY just in case to be safe, or just check if user enabled it
+            # To be safe against "Close" errors, we use the helper function
+            if m_spy and v_spy is not None: # Simplistic check, really we always fetch context if needed
+                 df_spy = load_tech_data("SPY", ticker_map)
+                 if df_spy is not None and not df_spy.empty:
+                     if 'CLOSE' in df_spy.columns:
+                        df_spy['SPY_SMA200'] = df_spy['CLOSE'].rolling(200).mean()
+                     else:
+                        df_spy = None # Failed to find close col
+
             if filter_vix != "Any":
-                df_vix = fetch_yahoo_data("^VIX")
+                df_vix = load_tech_data("^VIX", ticker_map)
 
             if df is None or df.empty:
                 st.error(f"Could not retrieve data for {ticker}.")
             else:
                 # --- PRE-PROCESS MAIN DATA ---
-                df.columns = [c.strip().upper() for c in df.columns]
+                # Columns are already upper-cased by load_tech_data
                 date_col = next((c for c in df.columns if 'DATE' in c), None)
-                close_col = next((c for c in df.columns if 'CLOSE' in c), None)
+                close_col = 'CLOSE' # We normalized this earlier
                 low_col = next((c for c in df.columns if 'LOW' in c), None)
                 vol_col = next((c for c in df.columns if 'VOL' in c), None)
                 
-                # Ensure Date is datetime
-                df[date_col] = pd.to_datetime(df[date_col])
-                df = df.sort_values(by=date_col).reset_index(drop=True)
-                
-                # Calc RSI if missing
-                if 'RSI' not in df.columns:
-                    delta = df[close_col].diff()
-                    gain = (delta.where(delta > 0, 0)).ewm(alpha=1/14, adjust=False).mean()
-                    loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/14, adjust=False).mean()
-                    rs = gain / loss
-                    df['RSI'] = 100 - (100 / (1 + rs))
-
-                # Calc MAs for Filters
-                df['SMA50'] = df[close_col].rolling(50).mean()
-                df['SMA200'] = df[close_col].rolling(200).mean()
-                
-                # Dynamic Volume Filter Calculation
-                if vol_days_filter > 0:
-                    df['Vol_Avg_User'] = df[vol_col].rolling(vol_days_filter).mean()
-                
-                # Trim to Lookback
-                cutoff_date = df[date_col].max() - timedelta(days=365*lookback_years)
-                df = df[df[date_col] >= cutoff_date].copy().reset_index(drop=True)
-
-                # --- MERGE CONTEXT (SPY/VIX) ---
-                if df_spy is not None:
-                    spy_renamed = df_spy[['Date', 'Close', 'SPY_SMA200']].rename(columns={'Close': 'SPY_Close'})
-                    df = df.merge(spy_renamed, left_on=date_col, right_on='Date', how='left')
-                
-                if df_vix is not None:
-                    vix_renamed = df_vix[['Date', 'Close']].rename(columns={'Close': 'VIX_Close'})
-                    df = df.merge(vix_renamed, left_on=date_col, right_on='Date', how='left')
-
-                # --- APPLY FILTERS ---
-                current_row = df.iloc[-1]
-                current_rsi = current_row['RSI']
-                rsi_min, rsi_max = current_rsi - rsi_tol, current_rsi + rsi_tol
-                
-                # Helper for Split UI logic
-                def apply_split_filter(series_price, series_ma, mode, pct_val):
-                    # Value 0 + Above -> Price > SMA
-                    # Value 5 + Above -> Price > SMA * 1.05
-                    # Value 5 + Below -> Price < SMA * 0.95
-                    if mode == "Above":
-                        return series_price > (series_ma * (1 + pct_val/100.0))
-                    else: # Below
-                        return series_price < (series_ma * (1 - pct_val/100.0))
-
-                # Base Filter: RSI Range
-                mask = (df['RSI'] >= rsi_min) & (df['RSI'] <= rsi_max)
-
-                # Tech Filters
-                mask &= apply_split_filter(df[close_col], df['SMA200'], m_sma200, v_sma200)
-                mask &= apply_split_filter(df[close_col], df['SMA50'], m_sma50, v_sma50)
-                
-                # Volume Filter
-                if vol_days_filter > 0:
-                     mask &= (df[vol_col] > df['Vol_Avg_User'])
-                
-                # Regime Filters
-                if df_spy is not None:
-                    mask &= apply_split_filter(df['SPY_Close'], df['SPY_SMA200'], m_spy, v_spy)
-                    
-                if df_vix is not None:
-                    if filter_vix == "VIX > 20 (Fear)": mask &= (df['VIX_Close'] > 20)
-                    elif filter_vix == "VIX < 20 (Calm)": mask &= (df['VIX_Close'] < 20)
-                
-                # Apply Mask (Exclude the very last row which is "today")
-                matches = df.iloc[:-1][mask[:-1]].copy()
-                
-                # --- CALC PERCENTILE RANK ---
-                rsi_rank = (df['RSI'] < current_rsi).mean() * 100
-
-                # --- DISPLAY CURRENT STATS ---
-                st.subheader(f"📊 Analysis: {ticker} (RSI {current_rsi:.1f})")
-                sc1, sc2, sc3, sc4 = st.columns(4)
-                sc1.metric("Current Price", f"${current_row[close_col]:.2f}")
-                sc2.metric("Current RSI", f"{current_rsi:.1f}")
-                sc3.metric("RSI Hist. Rank", f"{rsi_rank:.1f}%", help=f"Percentile Rank: Bottom {rsi_rank:.1f}%. This means current RSI is lower than {100-rsi_rank:.1f}% of history.")
-                sc4.metric("Matches Found", f"{len(matches)}", f"in last {lookback_years}y")
-                
-                if not matches.empty:
-                    match_indices = matches.index.values
-                    full_closes = df[close_col].values
-                    full_lows = df[low_col].values
-                    total_len = len(full_closes)
-                    
-                    results = []
-                    periods = [5, 10, 21, 42, 63, 126, 252]
-                    
-                    with st.spinner("Optimizing entry strategies..."):
-                        for p in periods:
-                            lump_returns = []
-                            drawdowns = []
-                            valid_counts = 0
-                            
-                            for idx in match_indices:
-                                if idx + p >= total_len: continue
-                                entry_p = full_closes[idx]
-                                exit_p = full_closes[idx + p]
-                                
-                                # Drawdown (Asset Price)
-                                period_lows = full_lows[idx+1 : idx+p+1]
-                                if len(period_lows) > 0:
-                                    min_low = np.min(period_lows)
-                                    dd = (min_low - entry_p) / entry_p
-                                    drawdowns.append(dd)
-                                else:
-                                    drawdowns.append(0.0)
-                                    
-                                lump_returns.append((exit_p - entry_p) / entry_p)
-                                valid_counts += 1
-
-                            if valid_counts == 0: continue
-
-                            # OPTIMIZE DCA (Loop 2 to 10 days)
-                            best_dca_ev = -999.0
-                            best_dca_days = 1
-                            best_dca_wr = 0.0
-                            
-                            # Base Lump Sum Stats
-                            lump_mean = np.mean(lump_returns) * 100
-                            lump_wr = np.mean(np.array(lump_returns) > 0) * 100
-                            
-                            # Init Best to Lump Sum
-                            best_dca_ev = lump_mean
-                            best_dca_wr = lump_wr
-                            
-                            # Test DCA Windows
-                            for d_win in range(2, 11): 
-                                temp_dca_rets = []
-                                for idx in match_indices:
-                                    if idx + d_win >= total_len or idx + p >= total_len: continue
-                                    entries = full_closes[idx : idx + d_win]
-                                    if len(entries) < d_win: continue
-                                    avg_entry = np.mean(entries)
-                                    exit_p = full_closes[idx + p]
-                                    temp_dca_rets.append((exit_p - avg_entry) / avg_entry)
-                                
-                                if temp_dca_rets:
-                                    dca_mean = np.mean(temp_dca_rets) * 100
-                                    if dca_mean > best_dca_ev:
-                                        best_dca_ev = dca_mean
-                                        best_dca_days = d_win
-                                        best_dca_wr = np.mean(np.array(temp_dca_rets) > 0) * 100
-
-                            dd_arr = np.array(drawdowns) * 100
-                            
-                            if best_dca_days == 1:
-                                strat_text = "Lump Sum"
-                            else:
-                                strat_text = f"DCA ({best_dca_days}d)"
-                            
-                            res = {
-                                "Days": p,
-                                "Count": valid_counts,
-                                "Lump EV": lump_mean,
-                                "Lump WR": lump_wr,
-                                "Optimal Entry": strat_text,
-                                "Optimal EV": best_dca_ev,
-                                "Optimal WR": best_dca_wr,
-                                "Avg DD": np.mean(dd_arr),
-                                "Median DD": np.median(dd_arr),
-                                "Min DD": np.max(dd_arr), # Closest to 0
-                                "Max DD": np.min(dd_arr)  # Furthest from 0
-                            }
-                            results.append(res)
-                            
-                    res_df = pd.DataFrame(results)
-                    
-                    # --- RESULTS TABLE ---
-                    def color_ev(val):
-                        color = "#71d28a" if val > 0 else "#f29ca0"
-                        return f'color: {color}; font-weight: bold;'
-                        
-                    def color_dd(val):
-                        if val < -15: return 'color: #c5221f; font-weight: bold;' 
-                        return 'color: #e67e22;'
-                    
-                    col_order = ["Days", "Count", "Min DD", "Avg DD", "Median DD", "Max DD", "Lump EV", "Lump WR", "Optimal Entry", "Optimal EV", "Optimal WR"]
-                    
-                    st.dataframe(
-                        res_df[col_order].style
-                        .format({
-                            "Lump EV": "{:+.2f}%", "Lump WR": "{:.1f}%",
-                            "Optimal EV": "{:+.2f}%", "Optimal WR": "{:.1f}%",
-                            "Avg DD": "{:.1f}%", "Median DD": "{:.1f}%", 
-                            "Min DD": "{:.1f}%", "Max DD": "{:.1f}%"
-                        })
-                        .map(color_ev, subset=["Lump EV", "Optimal EV"])
-                        .map(color_dd, subset=["Max DD", "Avg DD"]),
-                        column_config={
-                            "Days": st.column_config.NumberColumn("Hold", help="Trading Days held"),
-                            "Lump EV": st.column_config.NumberColumn("Lump EV", help="Avg Return (Lump Sum entry)."),
-                            "Lump WR": st.column_config.NumberColumn("Lump WR", help="Win Rate (Lump Sum entry)."),
-                            "Optimal Entry": st.column_config.TextColumn("Best Entry", help="Strategy (Lump Sum vs DCA) with highest historical EV."),
-                            "Optimal EV": st.column_config.NumberColumn("Best EV", help="Avg Return of the Best Entry strategy."),
-                            "Optimal WR": st.column_config.NumberColumn("Best WR", help="Win Rate of the Best Entry strategy."),
-                            "Min DD": st.column_config.NumberColumn("Lump Min DD", help="Smallest (Best Case) Asset Drawdown."),
-                            "Max DD": st.column_config.NumberColumn("Lump Max DD", help="Largest (Worst Case) Asset Drawdown."),
-                            "Avg DD": st.column_config.NumberColumn("Lump Avg DD", help="Average Asset Drawdown."),
-                            "Median DD": st.column_config.NumberColumn("Lump Med DD", help="Median Asset Drawdown."),
-                        },
-                        use_container_width=True,
-                        hide_index=True,
-                        height=get_table_height(res_df, max_rows=10)
-                    )
-                    
-                    # --- INSIGHTS ---
-                    st.markdown("##### 🧠 Strategic Insights")
-                    c_i1, c_i2 = st.columns(2)
-                    
-                    if not res_df.empty:
-                        # Drawdown Insight
-                        row_21 = res_df[res_df['Days']==21]
-                        if not row_21.empty:
-                            avg_dd = row_21['Avg DD'].iloc[0]
-                            max_dd = row_21['Max DD'].iloc[0]
-                            med_dd = row_21['Median DD'].iloc[0]
-                            
-                            with c_i1:
-                                st.info(f"""
-                                **📉 Risk Profile (21 Days)**
-                                * **Typical Pain:** You usually see a **{med_dd:.1f}%** paper loss before profit.
-                                * **Avg Drop:** The average drawdown is **{avg_dd:.1f}%**.
-                                * **Worst Case:** One historical trade dropped **{max_dd:.1f}%**.
-                                """)
-                        
-                        # Optimization Insight
-                        res_df['Improvement'] = res_df['Optimal EV'] - res_df['Lump EV']
-                        best_imp_row = res_df.loc[res_df['Improvement'].idxmax()]
-                        
-                        with c_i2:
-                            if best_imp_row['Improvement'] > 0.5:
-                                st.success(f"""
-                                **💰 Optimization Winner ({best_imp_row['Days']} Days)**
-                                For a {best_imp_row['Days']}-day hold, **{best_imp_row['Optimal Entry']}** significantly outperformed Lump Sum by **+{best_imp_row['Improvement']:.2f}%**.
-                                """)
-                            else:
-                                st.warning(f"""
-                                **💰 Optimization Result**
-                                Lump Sum generally performed as well as (or better than) DCA. 
-                                *(Suggests that when this signal triggers, price usually rips higher immediately).*
-                                """)
-
+                if not date_col or not close_col:
+                    st.error(f"Data format error: Missing DATE or CLOSE columns for {ticker}")
                 else:
-                    st.warning("No historical matches found with these strict filters. Try widening the RSI tolerance or removing the SPY/Volume filters.")
+                    # Ensure Date is datetime
+                    df[date_col] = pd.to_datetime(df[date_col])
+                    df = df.sort_values(by=date_col).reset_index(drop=True)
+                    
+                    # Calc RSI if missing
+                    if 'RSI' not in df.columns:
+                        delta = df[close_col].diff()
+                        gain = (delta.where(delta > 0, 0)).ewm(alpha=1/14, adjust=False).mean()
+                        loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/14, adjust=False).mean()
+                        rs = gain / loss
+                        df['RSI'] = 100 - (100 / (1 + rs))
+
+                    # Calc MAs for Filters
+                    df['SMA50'] = df[close_col].rolling(50).mean()
+                    df['SMA200'] = df[close_col].rolling(200).mean()
+                    
+                    # Dynamic Volume Filter Calculation
+                    if vol_days_filter > 0 and vol_col:
+                        df['Vol_Avg_User'] = df[vol_col].rolling(vol_days_filter).mean()
+                    
+                    # Trim to Lookback
+                    cutoff_date = df[date_col].max() - timedelta(days=365*lookback_years)
+                    df = df[df[date_col] >= cutoff_date].copy().reset_index(drop=True)
+
+                    # --- MERGE CONTEXT (SPY/VIX) ---
+                    if df_spy is not None:
+                        # Ensure SPY date column is found
+                        spy_date = next((c for c in df_spy.columns if 'DATE' in c), None)
+                        if spy_date:
+                            spy_renamed = df_spy[[spy_date, 'CLOSE', 'SPY_SMA200']].rename(columns={spy_date: 'Date', 'CLOSE': 'SPY_Close'})
+                            # Ensure main df date is named 'Date' for merge or merge on left/right on
+                            df = df.merge(spy_renamed, left_on=date_col, right_on='Date', how='left')
+                    
+                    if df_vix is not None:
+                        vix_date = next((c for c in df_vix.columns if 'DATE' in c), None)
+                        if vix_date:
+                            vix_renamed = df_vix[[vix_date, 'CLOSE']].rename(columns={vix_date: 'Date', 'CLOSE': 'VIX_Close'})
+                            df = df.merge(vix_renamed, left_on=date_col, right_on='Date', how='left')
+
+                    # --- APPLY FILTERS ---
+                    current_row = df.iloc[-1]
+                    current_rsi = current_row['RSI']
+                    rsi_min, rsi_max = current_rsi - rsi_tol, current_rsi + rsi_tol
+                    
+                    # Helper for Split UI logic
+                    def apply_split_filter(series_price, series_ma, mode, pct_val):
+                        if series_price is None or series_ma is None: return True # Skip if data missing
+                        if mode == "Above":
+                            return series_price > (series_ma * (1 + pct_val/100.0))
+                        else: # Below
+                            return series_price < (series_ma * (1 - pct_val/100.0))
+
+                    # Base Filter: RSI Range
+                    mask = (df['RSI'] >= rsi_min) & (df['RSI'] <= rsi_max)
+
+                    # Tech Filters
+                    mask &= apply_split_filter(df[close_col], df['SMA200'], m_sma200, v_sma200)
+                    mask &= apply_split_filter(df[close_col], df['SMA50'], m_sma50, v_sma50)
+                    
+                    # Volume Filter
+                    if vol_days_filter > 0 and 'Vol_Avg_User' in df.columns:
+                         mask &= (df[vol_col] > df['Vol_Avg_User'])
+                    
+                    # Regime Filters
+                    if df_spy is not None and 'SPY_Close' in df.columns:
+                        mask &= apply_split_filter(df['SPY_Close'], df['SPY_SMA200'], m_spy, v_spy)
+                        
+                    if df_vix is not None and 'VIX_Close' in df.columns:
+                        if filter_vix == "VIX > 20 (Fear)": mask &= (df['VIX_Close'] > 20)
+                        elif filter_vix == "VIX < 20 (Calm)": mask &= (df['VIX_Close'] < 20)
+                    
+                    # Apply Mask (Exclude the very last row which is "today")
+                    matches = df.iloc[:-1][mask[:-1]].copy()
+                    
+                    # --- CALC PERCENTILE RANK ---
+                    rsi_rank = (df['RSI'] < current_rsi).mean() * 100
+
+                    # --- DISPLAY CURRENT STATS ---
+                    st.subheader(f"📊 Analysis: {ticker} (RSI {current_rsi:.1f})")
+                    sc1, sc2, sc3, sc4 = st.columns(4)
+                    sc1.metric("Current Price", f"${current_row[close_col]:.2f}")
+                    sc2.metric("Current RSI", f"{current_rsi:.1f}")
+                    sc3.metric("RSI Hist. Rank", f"{rsi_rank:.1f}%", help=f"Percentile Rank: Bottom {rsi_rank:.1f}%. This means current RSI is lower than {100-rsi_rank:.1f}% of history.")
+                    sc4.metric("Matches Found", f"{len(matches)}", f"in last {lookback_years}y")
+                    
+                    if not matches.empty:
+                        match_indices = matches.index.values
+                        full_closes = df[close_col].values
+                        full_lows = df[low_col].values
+                        total_len = len(full_closes)
+                        
+                        results = []
+                        periods = [5, 10, 21, 42, 63, 126, 252]
+                        
+                        with st.spinner("Optimizing entry strategies..."):
+                            for p in periods:
+                                lump_returns = []
+                                drawdowns = []
+                                valid_counts = 0
+                                
+                                for idx in match_indices:
+                                    if idx + p >= total_len: continue
+                                    entry_p = full_closes[idx]
+                                    exit_p = full_closes[idx + p]
+                                    
+                                    # Drawdown (Asset Price)
+                                    period_lows = full_lows[idx+1 : idx+p+1]
+                                    if len(period_lows) > 0:
+                                        min_low = np.min(period_lows)
+                                        dd = (min_low - entry_p) / entry_p
+                                        drawdowns.append(dd)
+                                    else:
+                                        drawdowns.append(0.0)
+                                        
+                                    lump_returns.append((exit_p - entry_p) / entry_p)
+                                    valid_counts += 1
+
+                                if valid_counts == 0: continue
+
+                                # OPTIMIZE DCA (Loop 2 to 10 days)
+                                best_dca_ev = -999.0
+                                best_dca_days = 1
+                                best_dca_wr = 0.0
+                                
+                                # Base Lump Sum Stats
+                                lump_mean = np.mean(lump_returns) * 100
+                                lump_wr = np.mean(np.array(lump_returns) > 0) * 100
+                                
+                                # Init Best to Lump Sum
+                                best_dca_ev = lump_mean
+                                best_dca_wr = lump_wr
+                                
+                                # Test DCA Windows
+                                for d_win in range(2, 11): 
+                                    temp_dca_rets = []
+                                    for idx in match_indices:
+                                        if idx + d_win >= total_len or idx + p >= total_len: continue
+                                        entries = full_closes[idx : idx + d_win]
+                                        if len(entries) < d_win: continue
+                                        avg_entry = np.mean(entries)
+                                        exit_p = full_closes[idx + p]
+                                        temp_dca_rets.append((exit_p - avg_entry) / avg_entry)
+                                    
+                                    if temp_dca_rets:
+                                        dca_mean = np.mean(temp_dca_rets) * 100
+                                        if dca_mean > best_dca_ev:
+                                            best_dca_ev = dca_mean
+                                            best_dca_days = d_win
+                                            best_dca_wr = np.mean(np.array(temp_dca_rets) > 0) * 100
+
+                                dd_arr = np.array(drawdowns) * 100
+                                
+                                if best_dca_days == 1:
+                                    strat_text = "Lump Sum"
+                                else:
+                                    strat_text = f"DCA ({best_dca_days}d)"
+                                
+                                res = {
+                                    "Days": p,
+                                    "Count": valid_counts,
+                                    "Lump EV": lump_mean,
+                                    "Lump WR": lump_wr,
+                                    "Optimal Entry": strat_text,
+                                    "Optimal EV": best_dca_ev,
+                                    "Optimal WR": best_dca_wr,
+                                    "Avg DD": np.mean(dd_arr),
+                                    "Median DD": np.median(dd_arr),
+                                    "Min DD": np.max(dd_arr), # Closest to 0
+                                    "Max DD": np.min(dd_arr)  # Furthest from 0
+                                }
+                                results.append(res)
+                                
+                        res_df = pd.DataFrame(results)
+                        
+                        # --- RESULTS TABLE ---
+                        def color_ev(val):
+                            color = "#71d28a" if val > 0 else "#f29ca0"
+                            return f'color: {color}; font-weight: bold;'
+                            
+                        def color_dd(val):
+                            if val < -15: return 'color: #c5221f; font-weight: bold;' 
+                            return 'color: #e67e22;'
+                        
+                        col_order = ["Days", "Count", "Min DD", "Avg DD", "Median DD", "Max DD", "Lump EV", "Lump WR", "Optimal Entry", "Optimal EV", "Optimal WR"]
+                        
+                        st.dataframe(
+                            res_df[col_order].style
+                            .format({
+                                "Lump EV": "{:+.2f}%", "Lump WR": "{:.1f}%",
+                                "Optimal EV": "{:+.2f}%", "Optimal WR": "{:.1f}%",
+                                "Avg DD": "{:.1f}%", "Median DD": "{:.1f}%", 
+                                "Min DD": "{:.1f}%", "Max DD": "{:.1f}%"
+                            })
+                            .map(color_ev, subset=["Lump EV", "Optimal EV"])
+                            .map(color_dd, subset=["Max DD", "Avg DD"]),
+                            column_config={
+                                "Days": st.column_config.NumberColumn("Hold", help="Trading Days held"),
+                                "Lump EV": st.column_config.NumberColumn("Lump EV", help="Avg Return (Lump Sum entry)."),
+                                "Lump WR": st.column_config.NumberColumn("Lump WR", help="Win Rate (Lump Sum entry)."),
+                                "Optimal Entry": st.column_config.TextColumn("Best Entry", help="Strategy (Lump Sum vs DCA) with highest historical EV."),
+                                "Optimal EV": st.column_config.NumberColumn("Best EV", help="Avg Return of the Best Entry strategy."),
+                                "Optimal WR": st.column_config.NumberColumn("Best WR", help="Win Rate of the Best Entry strategy."),
+                                "Min DD": st.column_config.NumberColumn("Lump Min DD", help="Smallest (Best Case) Asset Drawdown."),
+                                "Max DD": st.column_config.NumberColumn("Lump Max DD", help="Largest (Worst Case) Asset Drawdown."),
+                                "Avg DD": st.column_config.NumberColumn("Lump Avg DD", help="Average Asset Drawdown."),
+                                "Median DD": st.column_config.NumberColumn("Lump Med DD", help="Median Asset Drawdown."),
+                            },
+                            use_container_width=True,
+                            hide_index=True,
+                            height=get_table_height(res_df, max_rows=10)
+                        )
+                        
+                        # --- INSIGHTS ---
+                        st.markdown("##### 🧠 Strategic Insights")
+                        c_i1, c_i2 = st.columns(2)
+                        
+                        if not res_df.empty:
+                            # Drawdown Insight
+                            row_21 = res_df[res_df['Days']==21]
+                            if not row_21.empty:
+                                avg_dd = row_21['Avg DD'].iloc[0]
+                                max_dd = row_21['Max DD'].iloc[0]
+                                med_dd = row_21['Median DD'].iloc[0]
+                                
+                                with c_i1:
+                                    st.info(f"""
+                                    **📉 Risk Profile (21 Days)**
+                                    * **Typical Pain:** You usually see a **{med_dd:.1f}%** paper loss before profit.
+                                    * **Avg Drop:** The average drawdown is **{avg_dd:.1f}%**.
+                                    * **Worst Case:** One historical trade dropped **{max_dd:.1f}%**.
+                                    """)
+                            
+                            # Optimization Insight
+                            res_df['Improvement'] = res_df['Optimal EV'] - res_df['Lump EV']
+                            best_imp_row = res_df.loc[res_df['Improvement'].idxmax()]
+                            
+                            with c_i2:
+                                if best_imp_row['Improvement'] > 0.5:
+                                    st.success(f"""
+                                    **💰 Optimization Winner ({best_imp_row['Days']} Days)**
+                                    For a {best_imp_row['Days']}-day hold, **{best_imp_row['Optimal Entry']}** significantly outperformed Lump Sum by **+{best_imp_row['Improvement']:.2f}%**.
+                                    """)
+                                else:
+                                    st.warning(f"""
+                                    **💰 Optimization Result**
+                                    Lump Sum generally performed as well as (or better than) DCA. 
+                                    *(Suggests that when this signal triggers, price usually rips higher immediately).*
+                                    """)
+
+                    else:
+                        st.warning("No historical matches found with these strict filters. Try widening the RSI tolerance or removing the SPY/Volume filters.")
 
     # --------------------------------------------------------------------------
     # TAB 2: RSI PERCENTILES (Unchanged)
