@@ -1240,19 +1240,9 @@ def run_rsi_scanner_app(df_global):
         with c_right:
             st.markdown("#### 2. Contextual Filters")
             
-            def filter_ui_row(label, key_prefix, default_mode="Above"):
-                st.caption(f"**{label}**")
-                c1, c2 = st.columns([1.2, 1])
-                with c1:
-                    mode = st.selectbox("Mode", ["Above", "Below"], index=0 if default_mode=="Above" else 1, key=f"{key_prefix}_mode", label_visibility="collapsed")
-                with c2:
-                    val = st.number_input("Pct", min_value=0.0, value=0.0, step=0.5, format="%.1f", key=f"{key_prefix}_val", label_visibility="collapsed")
-                return mode, val
-
-            # Filter Rows
-            r1_c1, r1_c2 = st.columns(2)
-            with r1_c1: m_sma200, v_sma200 = filter_ui_row("Price vs 200 SMA", "f_sma200")
-            with r1_c2: m_sma50, v_sma50 = filter_ui_row("Price vs 50 SMA", "f_sma50")
+            # Stacked Filters (Vertical)
+            f_sma200 = st.selectbox("Price vs 200 SMA", ["Any", "Above", "Below"], index=0, key="f_sma200")
+            f_sma50 = st.selectbox("Price vs 50 SMA", ["Any", "Above", "Below"], index=0, key="f_sma50")
 
         st.divider()
         
@@ -1299,24 +1289,17 @@ def run_rsi_scanner_app(df_global):
                     current_rsi = current_row['RSI']
                     rsi_min, rsi_max = current_rsi - rsi_tol, current_rsi + rsi_tol
                     
-                    # Helper for Split UI logic
-                    def apply_split_filter(series_price, series_ma, mode, pct_val):
-                        if series_price is None or series_ma is None: return True
-                        # Handle potential NaNs (e.g. first 200 days)
-                        mask = pd.Series(False, index=series_price.index)
-                        
-                        if mode == "Above":
-                            mask = series_price > (series_ma * (1 + pct_val/100.0))
-                        else: # Below
-                            mask = series_price < (series_ma * (1 - pct_val/100.0))
-                        return mask.fillna(False)
-
                     # Base Filter: RSI Range
                     mask = (df['RSI'] >= rsi_min) & (df['RSI'] <= rsi_max)
                     
                     # Context Filters
-                    mask &= apply_split_filter(df[close_col], df['SMA200'], m_sma200, v_sma200)
-                    mask &= apply_split_filter(df[close_col], df['SMA50'], m_sma50, v_sma50)
+                    # SMA 200
+                    if f_sma200 == "Above": mask &= (df[close_col] > df['SMA200'])
+                    elif f_sma200 == "Below": mask &= (df[close_col] < df['SMA200'])
+                    
+                    # SMA 50
+                    if f_sma50 == "Above": mask &= (df[close_col] > df['SMA50'])
+                    elif f_sma50 == "Below": mask &= (df[close_col] < df['SMA50'])
                     
                     # Apply Mask (Exclude the very last row which is "today")
                     matches = df.iloc[:-1][mask[:-1]].copy()
@@ -1326,10 +1309,11 @@ def run_rsi_scanner_app(df_global):
 
                     # --- DISPLAY ---
                     st.subheader(f"📊 Analysis: {ticker}")
-                    sc1, sc2, sc3 = st.columns(3)
+                    sc1, sc2, sc3, sc4 = st.columns(4)
                     sc1.metric("Current Price", f"${current_row[close_col]:.2f}")
                     sc2.metric("Current RSI", f"{current_rsi:.1f}")
                     sc3.metric("RSI Hist. Rank", f"{rsi_rank:.1f}%", help=f"Percentile Rank: Bottom {rsi_rank:.1f}%")
+                    sc4.metric("Total Signals", f"{len(matches)}", help="Raw count of days matching criteria (RSI + Filters) BEFORE De-duping is applied.")
                     
                     if not matches.empty:
                         match_indices = matches.index.values
