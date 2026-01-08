@@ -1259,7 +1259,7 @@ def run_rsi_scanner_app(df_global):
                 # --- PRE-PROCESS MAIN DATA ---
                 date_col = next((c for c in df.columns if 'DATE' in c), None)
                 close_col = 'CLOSE'
-                low_col = next((c for c in df.columns if 'LOW' in c), None)
+                # We don't strictly need LOW anymore since user requested Close-only stats
                 
                 if not date_col or not close_col:
                     st.error(f"Data format error: Missing DATE or CLOSE columns for {ticker}")
@@ -1316,11 +1316,10 @@ def run_rsi_scanner_app(df_global):
                     if not matches.empty:
                         match_indices = matches.index.values
                         full_closes = df[close_col].values
-                        full_lows = df[low_col].values
                         total_len = len(full_closes)
                         
                         results = []
-                        # List to store every individual trade for CSV export
+                        # List to store every individual trade for CSV export & Drill Down
                         trade_log = [] 
                         
                         # 1. Capture Raw Signals first
@@ -1350,11 +1349,13 @@ def run_rsi_scanner_app(df_global):
                                     entry_p = full_closes[idx]
                                     exit_p = full_closes[idx + p]
                                     
-                                    # Drawdown
-                                    period_lows = full_lows[idx+1 : idx+p+1]
-                                    if len(period_lows) > 0:
-                                        min_low = np.min(period_lows)
-                                        dd = (min_low - entry_p) / entry_p
+                                    # Drawdown (USING CLOSE PRICES ONLY)
+                                    # We look at closes from idx+1 to idx+p+1
+                                    period_prices = full_closes[idx+1 : idx+p+1]
+                                    
+                                    if len(period_prices) > 0:
+                                        min_close_during_hold = np.min(period_prices)
+                                        dd = (min_close_during_hold - entry_p) / entry_p
                                         drawdowns.append(dd)
                                         dd_val = dd * 100
                                     else:
@@ -1367,7 +1368,7 @@ def run_rsi_scanner_app(df_global):
                                     
                                     # LOG TRADE DETAILS
                                     trade_log.append({
-                                        "Period": f"{p} Days",
+                                        "Period": p, # Store as int for sorting/filtering
                                         "Entry Date": df.iloc[idx][date_col].strftime('%Y-%m-%d'),
                                         "Entry Price": entry_p,
                                         "RSI": df.iloc[idx]['RSI'],
@@ -1498,7 +1499,7 @@ def run_rsi_scanner_app(df_global):
                                 * **Strategy:** {best_row['Optimal Entry']}
                                 """)
                             
-                            # 2. Download Button
+                            # 2. Download Button (Close Only Logic)
                             with c_i2:
                                 if trade_log:
                                     trade_log_df = pd.DataFrame(trade_log)
@@ -1508,8 +1509,41 @@ def run_rsi_scanner_app(df_global):
                                         data=csv,
                                         file_name=f"{ticker}_RSI_Backtest_Trades.csv",
                                         mime="text/csv",
-                                        help="Downloads a detailed log of every signal and trade used in this analysis, grouped by holding period."
+                                        help="Downloads log of all trades using Close Prices for Drawdown calculations."
                                     )
+                        
+                        # --- DRILL DOWN SECTION ---
+                        st.divider()
+                        st.subheader("🔍 Trade Drill-Down")
+                        
+                        if trade_log:
+                            df_log = pd.DataFrame(trade_log)
+                            # Get unique periods (excluding "Raw Signal") sorted numerically
+                            unique_periods = sorted([p for p in df_log['Period'].unique() if isinstance(p, int)])
+                            
+                            # Create label map for dropdown
+                            period_opts = [f"{p} Days" for p in unique_periods]
+                            
+                            sel_period_str = st.selectbox("Select Holding Period to Inspect", period_opts, index=len(period_opts)-1) # Default to longest
+                            
+                            if sel_period_str:
+                                # Extract int back from string
+                                sel_p_int = int(sel_period_str.split(" ")[0])
+                                subset = df_log[df_log['Period'] == sel_p_int].copy()
+                                
+                                st.dataframe(
+                                    subset[["Entry Date", "Entry Price", "Exit Date", "Exit Price", "Return %", "Max Drawdown %"]].style
+                                    .format({
+                                        "Entry Price": "${:,.2f}", 
+                                        "Exit Price": "${:,.2f}", 
+                                        "Return %": "{:+.2f}%", 
+                                        "Max Drawdown %": "{:+.2f}%"
+                                    })
+                                    .map(lambda x: 'color: #c5221f; font-weight: bold;' if x < -15 else '', subset=['Max Drawdown %'])
+                                    .map(lambda x: 'color: #71d28a; font-weight: bold;' if x > 0 else 'color: #f29ca0;', subset=['Return %']),
+                                    use_container_width=True,
+                                    hide_index=True
+                                )
 
                     else:
                         st.warning("No historical matches found. Try widening the RSI tolerance or adjusting the filters.")
