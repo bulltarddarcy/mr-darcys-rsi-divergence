@@ -1293,11 +1293,9 @@ def run_rsi_scanner_app(df_global):
                     mask = (df['RSI'] >= rsi_min) & (df['RSI'] <= rsi_max)
                     
                     # Context Filters
-                    # SMA 200
                     if f_sma200 == "Above": mask &= (df[close_col] > df['SMA200'])
                     elif f_sma200 == "Below": mask &= (df[close_col] < df['SMA200'])
                     
-                    # SMA 50
                     if f_sma50 == "Above": mask &= (df[close_col] > df['SMA50'])
                     elif f_sma50 == "Below": mask &= (df[close_col] < df['SMA50'])
                     
@@ -1322,6 +1320,19 @@ def run_rsi_scanner_app(df_global):
                         total_len = len(full_closes)
                         
                         results = []
+                        # List to store every individual trade for CSV export
+                        trade_log = [] 
+                        
+                        # 1. Capture Raw Signals first
+                        for i in match_indices:
+                            trade_log.append({
+                                "Period": "Raw Signal",
+                                "Entry Date": df.iloc[i][date_col].strftime('%Y-%m-%d'),
+                                "Entry Price": df.iloc[i][close_col],
+                                "RSI": df.iloc[i]['RSI'],
+                                "Exit Date": None, "Exit Price": None, "Return %": None, "Max Drawdown %": None
+                            })
+
                         periods = [5, 10, 21, 42, 63, 126, 252]
                         
                         with st.spinner("Optimizing entry strategies..."):
@@ -1345,11 +1356,26 @@ def run_rsi_scanner_app(df_global):
                                         min_low = np.min(period_lows)
                                         dd = (min_low - entry_p) / entry_p
                                         drawdowns.append(dd)
+                                        dd_val = dd * 100
                                     else:
                                         drawdowns.append(0.0)
+                                        dd_val = 0.0
                                         
-                                    lump_returns.append((exit_p - entry_p) / entry_p)
+                                    ret = (exit_p - entry_p) / entry_p
+                                    lump_returns.append(ret)
                                     valid_counts += 1
+                                    
+                                    # LOG TRADE DETAILS
+                                    trade_log.append({
+                                        "Period": f"{p} Days",
+                                        "Entry Date": df.iloc[idx][date_col].strftime('%Y-%m-%d'),
+                                        "Entry Price": entry_p,
+                                        "RSI": df.iloc[idx]['RSI'],
+                                        "Exit Date": df.iloc[idx + p][date_col].strftime('%Y-%m-%d'),
+                                        "Exit Price": exit_p,
+                                        "Return %": ret * 100,
+                                        "Max Drawdown %": dd_val
+                                    })
                                     
                                     if dedupe_signals: last_exit_index = idx + p
 
@@ -1457,18 +1483,33 @@ def run_rsi_scanner_app(df_global):
                         )
                         
                         st.markdown("##### 🧠 Strategic Insights")
+                        c_i1, c_i2 = st.columns(2)
                         
                         if not res_df.empty:
                             # 1. Best Hold Recommendation
                             best_row = res_df.loc[res_df['Optimal EV'].idxmax()]
                             
-                            st.success(f"""
-                            **🏆 Best Historical Hold**
-                            If you bought today, the best historical strategy was holding for **{best_row['Days']} Days**.
-                            * **Avg Return:** +{best_row['Optimal EV']:.2f}%
-                            * **Win Rate:** {best_row['Optimal WR']:.1f}%
-                            * **Strategy:** {best_row['Optimal Entry']}
-                            """)
+                            with c_i1:
+                                st.success(f"""
+                                **🏆 Best Historical Hold**
+                                If you bought today, the best historical strategy was holding for **{best_row['Days']} Days**.
+                                * **Avg Return:** +{best_row['Optimal EV']:.2f}%
+                                * **Win Rate:** {best_row['Optimal WR']:.1f}%
+                                * **Strategy:** {best_row['Optimal Entry']}
+                                """)
+                            
+                            # 2. Download Button
+                            with c_i2:
+                                if trade_log:
+                                    trade_log_df = pd.DataFrame(trade_log)
+                                    csv = trade_log_df.to_csv(index=False).encode('utf-8')
+                                    st.download_button(
+                                        label="⬇️ Download Trade History (CSV)",
+                                        data=csv,
+                                        file_name=f"{ticker}_RSI_Backtest_Trades.csv",
+                                        mime="text/csv",
+                                        help="Downloads a detailed log of every signal and trade used in this analysis, grouped by holding period."
+                                    )
 
                     else:
                         st.warning("No historical matches found. Try widening the RSI tolerance or adjusting the filters.")
