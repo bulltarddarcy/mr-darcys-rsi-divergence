@@ -1233,6 +1233,10 @@ def run_rsi_scanner_app(df_global):
             lookback_years = st.number_input("Lookback Years", min_value=1, max_value=20, value=10)
             rsi_tol = st.number_input("RSI Tolerance", min_value=0.5, max_value=10.0, value=2.0, step=0.5, help="Search for RSI +/- this value.")
             
+            st.markdown("#### ⚙️ Strategy Logic")
+            # De-duping logic to prevent counting the same crash 5 times
+            dedupe_signals = st.checkbox("De-dupe Signals", value=True, help="If Checked (Recommended): Simulates 'One Trade at a Time'. If you buy on Day 1 for a 21-day hold, ignores all other signals until Day 22.\n\nIf Unchecked: Counts EVERY signal day as a new trade (can inflate stats during crashes).")
+            
         with c_right:
             st.markdown("#### 2. Contextual Filters")
             
@@ -1250,16 +1254,6 @@ def run_rsi_scanner_app(df_global):
             with r1_c1: m_sma200, v_sma200 = filter_ui_row("Price vs 200 SMA", "f_sma200")
             with r1_c2: m_sma50, v_sma50 = filter_ui_row("Price vs 50 SMA", "f_sma50")
             with r1_c3: m_spy, v_spy = filter_ui_row("SPY vs 200 SMA", "f_spy")
-
-            st.markdown("") # Spacer
-            r2_c1, r2_c2, r2_c3 = st.columns(3)
-            with r2_c1:
-                st.caption("**Volume Filter (Days)**")
-                vol_days_filter = st.number_input("Vol Days", min_value=0, value=0, step=1, label_visibility="collapsed", help="0 = Disabled. If > 0, requires Signal Vol > X-Day Avg.")
-            with r2_c2:
-                pass # VIX Removed
-            with r2_c3:
-                pass 
 
         st.divider()
         
@@ -1306,10 +1300,6 @@ def run_rsi_scanner_app(df_global):
                     df['SMA50'] = df[close_col].rolling(50).mean()
                     df['SMA200'] = df[close_col].rolling(200).mean()
                     
-                    # Dynamic Volume Filter Calculation
-                    if vol_days_filter > 0 and vol_col:
-                        df['Vol_Avg_User'] = df[vol_col].rolling(vol_days_filter).mean()
-                    
                     # Trim to Lookback
                     cutoff_date = df[date_col].max() - timedelta(days=365*lookback_years)
                     df = df[df[date_col] >= cutoff_date].copy().reset_index(drop=True)
@@ -1344,10 +1334,6 @@ def run_rsi_scanner_app(df_global):
                     mask &= apply_split_filter(df[close_col], df['SMA200'], m_sma200, v_sma200)
                     mask &= apply_split_filter(df[close_col], df['SMA50'], m_sma50, v_sma50)
                     
-                    # Volume Filter
-                    if vol_days_filter > 0 and 'Vol_Avg_User' in df.columns:
-                         mask &= (df[vol_col] > df['Vol_Avg_User'])
-                    
                     # Regime Filters
                     if df_spy is not None and 'SPY_Close' in df.columns:
                         mask &= apply_split_filter(df['SPY_Close'], df['SPY_SMA200'], m_spy, v_spy)
@@ -1381,8 +1367,17 @@ def run_rsi_scanner_app(df_global):
                                 drawdowns = []
                                 valid_counts = 0
                                 
+                                # [DE-DUPING LOGIC START]
+                                # Tracks when the 'current' trade would exit to prevent overlapping trades
+                                last_exit_index = -1 
+                                
                                 for idx in match_indices:
+                                    # If user wants dedupe, we skip if current idx is before the last trade finished
+                                    if dedupe_signals and idx < last_exit_index:
+                                        continue
+                                        
                                     if idx + p >= total_len: continue
+                                    
                                     entry_p = full_closes[idx]
                                     exit_p = full_closes[idx + p]
                                     
@@ -1397,10 +1392,16 @@ def run_rsi_scanner_app(df_global):
                                         
                                     lump_returns.append((exit_p - entry_p) / entry_p)
                                     valid_counts += 1
+                                    
+                                    # Update the 'lockout' period
+                                    if dedupe_signals:
+                                        last_exit_index = idx + p
+                                # [DE-DUPING LOGIC END]
 
                                 if valid_counts == 0: continue
 
                                 # OPTIMIZE DCA (Loop 2 to 10 days)
+                                # Note: For DCA optimization in dedupe mode, we still only take one trade block at a time.
                                 best_dca_ev = -999.0
                                 best_dca_days = 1
                                 best_dca_wr = 0.0
@@ -1416,13 +1417,21 @@ def run_rsi_scanner_app(df_global):
                                 # Test DCA Windows
                                 for d_win in range(2, 11): 
                                     temp_dca_rets = []
+                                    
+                                    # Re-run loop for DCA with same dedupe logic to be fair
+                                    last_exit_index_dca = -1
+                                    
                                     for idx in match_indices:
+                                        if dedupe_signals and idx < last_exit_index_dca: continue
                                         if idx + d_win >= total_len or idx + p >= total_len: continue
+                                        
                                         entries = full_closes[idx : idx + d_win]
                                         if len(entries) < d_win: continue
                                         avg_entry = np.mean(entries)
                                         exit_p = full_closes[idx + p]
                                         temp_dca_rets.append((exit_p - avg_entry) / avg_entry)
+                                        
+                                        if dedupe_signals: last_exit_index_dca = idx + p
                                     
                                     if temp_dca_rets:
                                         dca_mean = np.mean(temp_dca_rets) * 100
