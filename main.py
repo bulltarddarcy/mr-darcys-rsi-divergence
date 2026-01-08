@@ -1457,32 +1457,18 @@ def run_rsi_scanner_app(df_global):
                         )
                         
                         st.markdown("##### 🧠 Strategic Insights")
-                        c_i1, c_i2 = st.columns(2)
                         
                         if not res_df.empty:
                             # 1. Best Hold Recommendation
                             best_row = res_df.loc[res_df['Optimal EV'].idxmax()]
                             
-                            with c_i1:
-                                st.success(f"""
-                                **🏆 Best Historical Hold**
-                                If you bought today, the best historical strategy was holding for **{best_row['Days']} Days**.
-                                * **Avg Return:** +{best_row['Optimal EV']:.2f}%
-                                * **Win Rate:** {best_row['Optimal WR']:.1f}%
-                                * **Strategy:** {best_row['Optimal Entry']}
-                                """)
-
-                            # 2. Risk Profile (21d)
-                            row_21 = res_df[res_df['Days']==21]
-                            if not row_21.empty:
-                                max_dd = row_21['Max DD'].iloc[0]
-                                med_dd = row_21['Median DD'].iloc[0]
-                                with c_i2:
-                                    st.info(f"""
-                                    **📉 Risk Profile (21 Days)**
-                                    * **Typical Pain:** {med_dd:.1f}%
-                                    * **Worst Case:** {max_dd:.1f}%
-                                    """)
+                            st.success(f"""
+                            **🏆 Best Historical Hold**
+                            If you bought today, the best historical strategy was holding for **{best_row['Days']} Days**.
+                            * **Avg Return:** +{best_row['Optimal EV']:.2f}%
+                            * **Win Rate:** {best_row['Optimal WR']:.1f}%
+                            * **Strategy:** {best_row['Optimal Entry']}
+                            """)
 
                     else:
                         st.warning("No historical matches found. Try widening the RSI tolerance or adjusting the filters.")
