@@ -1209,7 +1209,7 @@ def run_rsi_scanner_app(df_global):
         
         with c_left:
             st.markdown("#### 1. Asset & Scope")
-            ticker = st.text_input("Ticker", value="NFLX", key="rsi_bt_ticker_input").strip().upper()
+            ticker = st.text_input("Ticker", value="NVDA", key="rsi_bt_ticker_input").strip().upper()
             lookback_years = st.number_input("Lookback Years", min_value=1, max_value=20, value=10)
             rsi_tol = st.number_input("RSI Tolerance", min_value=0.5, max_value=10.0, value=2.0, step=0.5, help="Search for RSI +/- this value.")
             
@@ -1219,16 +1219,16 @@ def run_rsi_scanner_app(df_global):
             with f_c1:
                 # Technical Filters (Merged Input)
                 f_sma200 = st.number_input("Price vs 200 SMA (%)", value=0.0, step=1.0, format="%.1f", 
-                                           help="0 = Disabled.\nPositive (e.g. 1.0) = Price must be > 1% ABOVE SMA.\nNegative (e.g. -5.0) = Price must be > 5% BELOW SMA.")
+                                           help="Positive (e.g. 5.0) = Price > 5% ABOVE SMA.\nNegative (e.g. -5.0) = Price > 5% BELOW SMA.\nTip: Enter 0.1 for simple 'Above' or -0.1 for simple 'Below'.")
                 f_sma50 = st.number_input("Price vs 50 SMA (%)", value=0.0, step=1.0, format="%.1f",
-                                          help="0 = Disabled.\nPositive (e.g. 1.0) = Price must be > 1% ABOVE SMA.\nNegative (e.g. -5.0) = Price must be > 5% BELOW SMA.")
+                                          help="Positive (e.g. 5.0) = Price > 5% ABOVE SMA.\nNegative (e.g. -5.0) = Price > 5% BELOW SMA.\nTip: Enter 0.1 for simple 'Above' or -0.1 for simple 'Below'.")
                 vol_days_filter = st.number_input("Volume Filter (Days)", min_value=0, value=0, step=1, 
                                                   help="0 = Disabled.\nValue (e.g. 20) = Requires Signal Day Volume > 20-Day Average Volume.")
             
             with f_c2:
                 # Regime Filters
                 f_spy_sma200 = st.number_input("SPY vs 200 SMA (%)", value=0.0, step=1.0, format="%.1f",
-                                               help="0 = Disabled.\nPositive (e.g. 0.1) = SPY must be ABOVE 200 SMA (Bull Market).\nNegative (e.g. -0.1) = SPY must be BELOW 200 SMA (Bear Market).")
+                                               help="Positive (e.g. 0.1) = SPY > 200 SMA (Bull Market).\nNegative (e.g. -0.1) = SPY < 200 SMA (Bear Market).")
                 filter_vix = st.selectbox("VIX Filter", ["Any", "VIX > 20 (Fear)", "VIX < 20 (Calm)"], index=0,
                                           help="Filter signals based on the VIX (Volatility Index) level.")
 
@@ -1445,7 +1445,7 @@ def run_rsi_scanner_app(df_global):
                         if val < -15: return 'color: #c5221f; font-weight: bold;' 
                         return 'color: #e67e22;'
                     
-                    col_order = ["Days", "Count", "Lump EV", "Lump WR", "Optimal Entry", "Optimal EV", "Optimal WR", "Min DD", "Avg DD", "Median DD", "Max DD"]
+                    col_order = ["Days", "Count", "Min DD", "Avg DD", "Median DD", "Max DD", "Lump EV", "Lump WR", "Optimal Entry", "Optimal EV", "Optimal WR"]
                     
                     st.dataframe(
                         res_df[col_order].style
@@ -1464,9 +1464,10 @@ def run_rsi_scanner_app(df_global):
                             "Optimal Entry": st.column_config.TextColumn("Best Entry", help="Strategy (Lump Sum vs DCA) with highest historical EV."),
                             "Optimal EV": st.column_config.NumberColumn("Best EV", help="Avg Return of the Best Entry strategy."),
                             "Optimal WR": st.column_config.NumberColumn("Best WR", help="Win Rate of the Best Entry strategy."),
-                            "Min DD": st.column_config.NumberColumn("Min DD", help="Smallest (Best Case) Asset Drawdown."),
-                            "Max DD": st.column_config.NumberColumn("Max DD", help="Largest (Worst Case) Asset Drawdown."),
-                            "Avg DD": st.column_config.NumberColumn("Avg DD", help="Average Asset Drawdown."),
+                            "Min DD": st.column_config.NumberColumn("Lump Min DD", help="Smallest (Best Case) Asset Drawdown."),
+                            "Max DD": st.column_config.NumberColumn("Lump Max DD", help="Largest (Worst Case) Asset Drawdown."),
+                            "Avg DD": st.column_config.NumberColumn("Lump Avg DD", help="Average Asset Drawdown."),
+                            "Median DD": st.column_config.NumberColumn("Lump Med DD", help="Median Asset Drawdown."),
                         },
                         use_container_width=True,
                         hide_index=True,
