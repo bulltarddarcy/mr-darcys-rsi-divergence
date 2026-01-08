@@ -1257,10 +1257,9 @@ def run_rsi_scanner_app(df_global):
                 st.caption("**Volume Filter (Days)**")
                 vol_days_filter = st.number_input("Vol Days", min_value=0, value=0, step=1, label_visibility="collapsed", help="0 = Disabled. If > 0, requires Signal Vol > X-Day Avg.")
             with r2_c2:
-                st.caption("**VIX Filter**")
-                filter_vix = st.selectbox("VIX", ["Any", "VIX > 20 (Fear)", "VIX < 20 (Calm)"], index=0, label_visibility="collapsed")
+                pass # VIX Removed
             with r2_c3:
-                pass # Empty column for alignment
+                pass 
 
         st.divider()
         
@@ -1271,17 +1270,13 @@ def run_rsi_scanner_app(df_global):
             # 1. Fetch MAIN Ticker
             df = load_tech_data(ticker, ticker_map)
             
-            # 2. Fetch CONTEXT Tickers (SPY, VIX)
+            # 2. Fetch CONTEXT Ticker (SPY only now)
             df_spy = None
-            df_vix = None
             
             # Fetch SPY
             df_spy = load_tech_data("SPY", ticker_map)
             if df_spy is not None and not df_spy.empty and 'CLOSE' in df_spy.columns:
                 df_spy['SPY_SMA200'] = df_spy['CLOSE'].rolling(200).mean()
-
-            if filter_vix != "Any":
-                df_vix = load_tech_data("^VIX", ticker_map)
 
             if df is None or df.empty:
                 st.error(f"Could not retrieve data for {ticker}.")
@@ -1319,7 +1314,7 @@ def run_rsi_scanner_app(df_global):
                     cutoff_date = df[date_col].max() - timedelta(days=365*lookback_years)
                     df = df[df[date_col] >= cutoff_date].copy().reset_index(drop=True)
 
-                    # --- MERGE CONTEXT (SPY/VIX) ---
+                    # --- MERGE CONTEXT (SPY) ---
                     if df_spy is not None:
                         spy_date = next((c for c in df_spy.columns if 'DATE' in c), None)
                         if spy_date:
@@ -1328,15 +1323,6 @@ def run_rsi_scanner_app(df_global):
                             
                             spy_renamed = df_spy[[spy_date, 'CLOSE', 'SPY_SMA200']].rename(columns={spy_date: 'Date', 'CLOSE': 'SPY_Close'})
                             df = df.merge(spy_renamed, left_on=date_col, right_on='Date', how='left')
-                    
-                    if df_vix is not None:
-                        vix_date = next((c for c in df_vix.columns if 'DATE' in c), None)
-                        if vix_date:
-                            # FIX: Force datetime conversion before merge
-                            df_vix[vix_date] = pd.to_datetime(df_vix[vix_date])
-                            
-                            vix_renamed = df_vix[[vix_date, 'CLOSE']].rename(columns={vix_date: 'Date', 'CLOSE': 'VIX_Close'})
-                            df = df.merge(vix_renamed, left_on=date_col, right_on='Date', how='left')
 
                     # --- APPLY FILTERS ---
                     current_row = df.iloc[-1]
@@ -1365,10 +1351,6 @@ def run_rsi_scanner_app(df_global):
                     # Regime Filters
                     if df_spy is not None and 'SPY_Close' in df.columns:
                         mask &= apply_split_filter(df['SPY_Close'], df['SPY_SMA200'], m_spy, v_spy)
-                        
-                    if df_vix is not None and 'VIX_Close' in df.columns:
-                        if filter_vix == "VIX > 20 (Fear)": mask &= (df['VIX_Close'] > 20)
-                        elif filter_vix == "VIX < 20 (Calm)": mask &= (df['VIX_Close'] < 20)
                     
                     # Apply Mask (Exclude the very last row which is "today")
                     matches = df.iloc[:-1][mask[:-1]].copy()
