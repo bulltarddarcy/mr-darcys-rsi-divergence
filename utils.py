@@ -825,19 +825,21 @@ def analyze_trade_setup(ticker, t_df, global_df):
     
     return score, reasons, suggestions
 
-@st.cache_data(ttl=86400)
+@st.cache_data(ttl=86400) # Cache for 24 hours
 def get_market_cap(symbol: str) -> float:
     try:
         t = yf.Ticker(symbol)
-        # fast_info is efficient and doesn't require a full API scrape
-        mc = t.fast_info.get('marketCap')
+        # Try fast_info first
+        fi = t.fast_info
+        mc = fi.get('marketCap')
         if mc: return float(mc)
         
-        # Fallback: slightly slower but more comprehensive
-        info = t.info
-        mc = info.get('marketCap')
-        if mc: return float(mc)
-    except Exception:
+        # Fallback: Manual calculation (More stable)
+        shares = fi.get('shares')
+        price = fi.get('lastPrice')
+        if shares and price:
+            return float(shares * price)
+    except:
         pass
     return 0.0
 
