@@ -1198,7 +1198,6 @@ def run_rsi_scanner_app(df_global):
     options = list(dataset_map.keys())
 
     # --- HELPER: ROBUST DATA LOADING ---
-    # Fixes the 'Close' vs 'CLOSE' error by normalizing columns immediately
     def load_tech_data(symbol, ticker_map_ref):
         d = get_ticker_technicals(symbol, ticker_map_ref)
         if d is None or d.empty: 
@@ -1237,7 +1236,6 @@ def run_rsi_scanner_app(df_global):
         with c_right:
             st.markdown("#### 2. Contextual Filters")
             
-            # FIXED: Removed 'col_obj' argument to prevent context manager error
             def filter_ui_row(label, key_prefix, default_mode="Above"):
                 st.caption(f"**{label}**")
                 c1, c2 = st.columns([1.2, 1])
@@ -1270,14 +1268,14 @@ def run_rsi_scanner_app(df_global):
         if ticker:
             ticker_map = load_ticker_map()
             
-            # 1. Fetch MAIN Ticker (Using robust loader)
+            # 1. Fetch MAIN Ticker
             df = load_tech_data(ticker, ticker_map)
             
             # 2. Fetch CONTEXT Tickers (SPY, VIX)
             df_spy = None
             df_vix = None
             
-            # Fetch SPY if used (we check filters inside the logic, but fetching safely is cheap)
+            # Fetch SPY
             df_spy = load_tech_data("SPY", ticker_map)
             if df_spy is not None and not df_spy.empty and 'CLOSE' in df_spy.columns:
                 df_spy['SPY_SMA200'] = df_spy['CLOSE'].rolling(200).mean()
@@ -1289,9 +1287,8 @@ def run_rsi_scanner_app(df_global):
                 st.error(f"Could not retrieve data for {ticker}.")
             else:
                 # --- PRE-PROCESS MAIN DATA ---
-                # Columns are already upper-cased by load_tech_data
                 date_col = next((c for c in df.columns if 'DATE' in c), None)
-                close_col = 'CLOSE' # We normalized this earlier
+                close_col = 'CLOSE'
                 low_col = next((c for c in df.columns if 'LOW' in c), None)
                 vol_col = next((c for c in df.columns if 'VOL' in c), None)
                 
@@ -1324,16 +1321,20 @@ def run_rsi_scanner_app(df_global):
 
                     # --- MERGE CONTEXT (SPY/VIX) ---
                     if df_spy is not None:
-                        # Ensure SPY date column is found
                         spy_date = next((c for c in df_spy.columns if 'DATE' in c), None)
                         if spy_date:
+                            # FIX: Force datetime conversion before merge
+                            df_spy[spy_date] = pd.to_datetime(df_spy[spy_date])
+                            
                             spy_renamed = df_spy[[spy_date, 'CLOSE', 'SPY_SMA200']].rename(columns={spy_date: 'Date', 'CLOSE': 'SPY_Close'})
-                            # Ensure main df date is named 'Date' for merge or merge on left/right on
                             df = df.merge(spy_renamed, left_on=date_col, right_on='Date', how='left')
                     
                     if df_vix is not None:
                         vix_date = next((c for c in df_vix.columns if 'DATE' in c), None)
                         if vix_date:
+                            # FIX: Force datetime conversion before merge
+                            df_vix[vix_date] = pd.to_datetime(df_vix[vix_date])
+                            
                             vix_renamed = df_vix[[vix_date, 'CLOSE']].rename(columns={vix_date: 'Date', 'CLOSE': 'VIX_Close'})
                             df = df.merge(vix_renamed, left_on=date_col, right_on='Date', how='left')
 
@@ -1344,7 +1345,7 @@ def run_rsi_scanner_app(df_global):
                     
                     # Helper for Split UI logic
                     def apply_split_filter(series_price, series_ma, mode, pct_val):
-                        if series_price is None or series_ma is None: return True # Skip if data missing
+                        if series_price is None or series_ma is None: return True 
                         if mode == "Above":
                             return series_price > (series_ma * (1 + pct_val/100.0))
                         else: # Below
