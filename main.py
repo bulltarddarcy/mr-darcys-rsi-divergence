@@ -2475,27 +2475,24 @@ try:
     else:
         db_date = "No Data"
     
-    # 2. Price History Date (Fetch AAPL from Drive as proxy for dataset freshness)
-    # Checks the max date in your AAPL.csv file to see when you last ran your updater
+    # 2. Price History Date (Check max date in PARQUET_SP100)
+    # Checks the absolute latest date in your combined SP100 parquet file
     price_date = "Syncing..."
     try:
-        t_map_check = load_ticker_map()
+        # Load the combined SP100 parquet file
+        df_sp100_check = load_parquet_and_clean("PARQUET_SP100")
         
-        if t_map_check and "AAPL" in t_map_check:
-            df_aapl_check = get_ticker_technicals("AAPL", t_map_check)
+        if df_sp100_check is not None and not df_sp100_check.empty:
+            # Find date column regardless of case (Date, DATE, etc.)
+            date_col_check = next((c for c in df_sp100_check.columns if 'DATE' in c.upper()), None)
             
-            if df_aapl_check is not None and not df_aapl_check.empty:
-                # Find date column regardless of case (DATE, Date, ChartDate)
-                date_col_check = next((c for c in df_aapl_check.columns if 'DATE' in c.upper()), None)
-                
-                if date_col_check:
-                    price_date = pd.to_datetime(df_aapl_check[date_col_check]).max().strftime("%d %b %y")
-                else:
-                    price_date = "Date Error"
+            if date_col_check:
+                # Get the absolute latest date in the entire file
+                price_date = pd.to_datetime(df_sp100_check[date_col_check]).max().strftime("%d %b %y")
             else:
-                price_date = "Read Error"
+                price_date = "Date Error"
         else:
-            price_date = "AAPL Not Mapped"
+            price_date = "Read Error"
 
     except Exception:
         price_date = "Offline"
