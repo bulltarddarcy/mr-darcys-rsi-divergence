@@ -339,12 +339,15 @@ def get_stock_indicators(sym: str):
         return None, None, None, None, None
 
 def find_divergences(df_tf, ticker, timeframe, min_n=0, periods_input=None, optimize_for='PF', lookback_period=90, price_source='High/Low', strict_validation=True, recent_days_filter=25, rsi_diff_threshold=2.0, div_mode='Regular'):
+    """
+    Identifies Regular (Reversal) and Hidden (Continuation) divergences.
+    Strict Validation is ONLY applied to Regular Divergences.
+    """
     divergences = []
     n_rows = len(df_tf)
     
     if n_rows < lookback_period + 1: return divergences
     
-    # Pre-fetch numpy arrays for speed
     rsi_vals = df_tf['RSI'].values
     vol_vals = df_tf['Volume'].values
     vol_sma_vals = df_tf['VolSMA'].values
@@ -357,54 +360,47 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0, periods_input=None, opti
         low_vals = df_tf['Low'].values
         high_vals = df_tf['High'].values
         
-    dates_idx = df_tf.index
-    is_weekly = (timeframe.lower() == 'weekly')
-    weekly_chart_dates = df_tf['ChartDate'].values if is_weekly else None
-
-    # Helper for fast date lookup
-    def get_date_str_fast(idx): 
-        if is_weekly: 
-            return pd.Timestamp(weekly_chart_dates[idx]).strftime('%Y-%m-%d')
-        return dates_idx[idx].strftime('%Y-%m-%d')
-    
-    def get_date_disp_fast(idx):
-        if is_weekly:
-            return pd.Timestamp(weekly_chart_dates[idx]).strftime('%b %d')
-        return dates_idx[idx].strftime('%b %d')
+    def get_date_str(idx, fmt='%Y-%m-%d'): 
+        ts = df_tf.index[idx]
+        if timeframe.lower() == 'weekly': 
+             return df_tf.iloc[idx]['ChartDate'].strftime(fmt)
+        return ts.strftime(fmt)
 
     potential_signals = [] 
 
     # --- PASS 1: IDENTIFY 5-BAR FRACTAL PIVOTS ---
-    # Shift operations are fast in pandas, acceptable here
     l = pd.Series(low_vals)
     h = pd.Series(high_vals)
     
     is_swing_low = (l < l.shift(1)) & (l < l.shift(2)) & (l < l.shift(-1)) & (l < l.shift(-2))
     is_swing_high = (h > h.shift(1)) & (h > h.shift(2)) & (h > h.shift(-1)) & (h > h.shift(-2))
     
-    # Get indices and filter for lookback
     pivot_low_indices = np.where(is_swing_low)[0]
     pivot_high_indices = np.where(is_swing_high)[0]
+    
     pivot_low_indices = pivot_low_indices[pivot_low_indices > lookback_period]
     pivot_high_indices = pivot_high_indices[pivot_high_indices > lookback_period]
 
-    # --- PASS 2: SCAN CANDIDATES (BULLISH) ---
+    # --- PASS 2: SCAN CANDIDATES ---
+    
+    # 2A. Bullish Scans (Swing Lows)
     for i in pivot_low_indices:
         p2_rsi = rsi_vals[i]
         p2_price = low_vals[i]
+        p2_vol = vol_vals[i]
+        p2_volsma = vol_sma_vals[i]
         
-        # Slicing numpy arrays is very fast
         lb_start = i - lookback_period
         lb_rsi = rsi_vals[lb_start:i]
         lb_price = low_vals[lb_start:i]
         
-        # Find Absolute Lowest RSI in window
+        # 1. Find Absolute Lowest RSI in window (Base for Hidden)
         p1_idx_rel = np.argmin(lb_rsi)
         p1_idx_abs = lb_start + p1_idx_rel
         p1_rsi = rsi_vals[p1_idx_abs]
         p1_price = low_vals[p1_idx_abs]
         
-        # [REGULAR BULLISH]
+        # [REGULAR BULLISH] Price Lower Low, RSI Higher Low
         if div_mode in ['Regular', 'Both']:
             min_price_in_window = np.min(lb_price)
             if p2_price < min_price_in_window: 
@@ -413,48 +409,40 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0, periods_input=None, opti
                 p1_rsi_at_price_low = rsi_vals[p1_price_idx_abs]
                 
                 if p2_rsi > (p1_rsi_at_price_low + rsi_diff_threshold):
-                    # STRICT check
-                    valid = True
-                    if strict_validation:
-                        subset_rsi = rsi_vals[p1_price_idx_abs : i + 1]
-                        if np.any(subset_rsi > 50): valid = False
+                    # STRICT: RSI should not cross 50 between pivots for Regular Bull
+                    subset_rsi = rsi_vals[p1_price_idx_abs : i + 1]
+                    valid = not (strict_validation and np.any(subset_rsi > 50))
                     
                     if valid:
-                        p2_vol = vol_vals[i]
-                        p2_volsma = vol_sma_vals[i]
                         is_vol_high = int(p2_vol > (p2_volsma * 1.5)) if not np.isnan(p2_volsma) else 0
                         potential_signals.append({"index": i, "type": "Reg Bull", "p1_idx": p1_price_idx_abs, "vol_high": is_vol_high})
 
-        # [HIDDEN BULLISH]
+        # [HIDDEN BULLISH] Price Higher Low, RSI Lower Low
         if div_mode in ['Hidden', 'Both']:
-            # 1 Year Cap logic included
-            date_curr = dates_idx[i]
-            date_prev = dates_idx[p1_idx_abs]
-            days_diff = (date_curr - date_prev).days
-            
-            if days_diff <= 365:
-                if p2_rsi < (p1_rsi - rsi_diff_threshold):
-                    if p2_price > p1_price:
-                        p2_vol = vol_vals[i]
-                        p2_volsma = vol_sma_vals[i]
-                        is_vol_high = int(p2_vol > (p2_volsma * 1.5)) if not np.isnan(p2_volsma) else 0
-                        potential_signals.append({"index": i, "type": "Hid Bull", "p1_idx": p1_idx_abs, "vol_high": is_vol_high})
+            if p2_rsi < (p1_rsi - rsi_diff_threshold):
+                if p2_price > p1_price:
+                    # STRICT: Disabled for Hidden (Trend must cross 50)
+                    is_vol_high = int(p2_vol > (p2_volsma * 1.5)) if not np.isnan(p2_volsma) else 0
+                    potential_signals.append({"index": i, "type": "Hid Bull", "p1_idx": p1_idx_abs, "vol_high": is_vol_high})
 
-    # --- PASS 2B: SCAN CANDIDATES (BEARISH) ---
+    # 2B. Bearish Scans (Swing Highs)
     for i in pivot_high_indices:
         p2_rsi = rsi_vals[i]
         p2_price = high_vals[i]
+        p2_vol = vol_vals[i]
+        p2_volsma = vol_sma_vals[i]
         
         lb_start = i - lookback_period
         lb_rsi = rsi_vals[lb_start:i]
         lb_price = high_vals[lb_start:i]
         
+        # 1. Find Absolute Highest RSI in window (Base for Hidden)
         p1_idx_rel = np.argmax(lb_rsi)
         p1_idx_abs = lb_start + p1_idx_rel
         p1_rsi = rsi_vals[p1_idx_abs]
         p1_price = high_vals[p1_idx_abs]
         
-        # [REGULAR BEARISH]
+        # [REGULAR BEARISH] Price Higher High, RSI Lower High
         if div_mode in ['Regular', 'Both']:
             max_price_in_window = np.max(lb_price)
             if p2_price > max_price_in_window: 
@@ -463,100 +451,100 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0, periods_input=None, opti
                 p1_rsi_at_price_high = rsi_vals[p1_price_idx_abs]
                 
                 if p2_rsi < (p1_rsi_at_price_high - rsi_diff_threshold):
-                    valid = True
-                    if strict_validation:
-                        subset_rsi = rsi_vals[p1_price_idx_abs : i + 1]
-                        if np.any(subset_rsi < 50): valid = False
+                    # STRICT: RSI should not cross 50 between pivots for Regular Bear
+                    subset_rsi = rsi_vals[p1_price_idx_abs : i + 1]
+                    valid = not (strict_validation and np.any(subset_rsi < 50))
                     
                     if valid:
-                        p2_vol = vol_vals[i]
-                        p2_volsma = vol_sma_vals[i]
                         is_vol_high = int(p2_vol > (p2_volsma * 1.5)) if not np.isnan(p2_volsma) else 0
                         potential_signals.append({"index": i, "type": "Reg Bear", "p1_idx": p1_price_idx_abs, "vol_high": is_vol_high})
 
-        # [HIDDEN BEARISH]
+        # [HIDDEN BEARISH] Price Lower High, RSI Higher High
         if div_mode in ['Hidden', 'Both']:
-            date_curr = dates_idx[i]
-            date_prev = dates_idx[p1_idx_abs]
-            days_diff = (date_curr - date_prev).days
-
-            if days_diff <= 365:
-                if p2_rsi > (p1_rsi + rsi_diff_threshold): 
-                    if p2_price < p1_price: 
-                        p2_vol = vol_vals[i]
-                        p2_volsma = vol_sma_vals[i]
-                        is_vol_high = int(p2_vol > (p2_volsma * 1.5)) if not np.isnan(p2_volsma) else 0
-                        potential_signals.append({"index": i, "type": "Hid Bear", "p1_idx": p1_idx_abs, "vol_high": is_vol_high})
+            if p2_rsi > (p1_rsi + rsi_diff_threshold): 
+                if p2_price < p1_price: 
+                    # STRICT: Disabled for Hidden (Trend must cross 50)
+                    is_vol_high = int(p2_vol > (p2_volsma * 1.5)) if not np.isnan(p2_volsma) else 0
+                    potential_signals.append({"index": i, "type": "Hid Bear", "p1_idx": p1_idx_abs, "vol_high": is_vol_high})
 
     # --- PASS 3: REPORT & METRICS ---
     display_threshold_idx = n_rows - recent_days_filter
     
-    # Pre-filter lists for the statistics function
-    bullish_indices = [x['index'] for x in potential_signals if 'Bull' in x['type']]
-    bearish_indices = [x['index'] for x in potential_signals if 'Bear' in x['type']]
-
-    latest_row = df_tf.iloc[-1]
-    last_price = latest_row['Price']
-    last_ema8 = latest_row.get('EMA8') 
-    last_ema21 = latest_row.get('EMA21')
+    bull_types = ['Reg Bull', 'Hid Bull']
+    bear_types = ['Reg Bear', 'Hid Bear']
+    
+    bullish_indices = [x['index'] for x in potential_signals if x['type'] in bull_types]
+    bearish_indices = [x['index'] for x in potential_signals if x['type'] in bear_types]
 
     for sig in potential_signals:
         i = sig["index"]
         s_type = sig["type"] 
         idx_p1_abs = sig["p1_idx"]
         
-        direction = 'Bullish' if 'Bull' in s_type else 'Bearish'
+        direction = 'Bullish' if s_type in bull_types else 'Bearish'
         
         price_p1 = low_vals[idx_p1_abs] if direction=='Bullish' else high_vals[idx_p1_abs]
         price_p2 = low_vals[i] if direction=='Bullish' else high_vals[i]
+        vol_p1 = vol_vals[idx_p1_abs]
+        vol_p2 = vol_vals[i]
+        rsi_p1 = rsi_vals[idx_p1_abs]
+        rsi_p2 = rsi_vals[i]
+        date_p1 = get_date_str(idx_p1_abs, '%Y-%m-%d')
+        date_p2 = get_date_str(i, '%Y-%m-%d')
         
-        # Calculate stats
+        is_recent = (i >= display_threshold_idx)
+
+        div_obj = {
+            'Ticker': ticker, 
+            'Type': direction,
+            'Subtype': s_type,
+            'Timeframe': timeframe,
+            'Signal_Date_ISO': date_p2, 
+            'P1_Date_ISO': date_p1,
+            'RSI1': rsi_p1, 'RSI2': rsi_p2,
+            'Price1': price_p1, 'Price2': price_p2,
+            'Day1_Volume': vol_p1, 'Day2_Volume': vol_p2,
+            'Is_Recent': is_recent
+        }
+
+        tags = []
+        if "Hid" in s_type: tags.append("HIDDEN")
+        
+        latest_row = df_tf.iloc[-1]
+        last_price = latest_row['Price']
+        last_ema8 = latest_row.get('EMA8') 
+        last_ema21 = latest_row.get('EMA21')
+        def is_valid(val): return val is not None and not pd.isna(val)
+
+        if direction == 'Bullish':
+            if is_valid(last_ema8) and last_price >= last_ema8: tags.append(f"EMA{EMA8_PERIOD}")
+            if is_valid(last_ema21) and last_price >= last_ema21: tags.append(f"EMA{EMA21_PERIOD}")
+        else: 
+            if is_valid(last_ema8) and last_price <= last_ema8: tags.append(f"EMA{EMA8_PERIOD}")
+            if is_valid(last_ema21) and last_price <= last_ema21: tags.append(f"EMA{EMA21_PERIOD}")
+            
+        if sig["vol_high"]: tags.append("V_HI")
+        if vol_vals[i] > vol_vals[idx_p1_abs]: tags.append("V_GROW")
+        
+        date_display = f"{get_date_str(idx_p1_abs, '%b %d')} → {get_date_str(i, '%b %d')}"
+        rsi_display = f"{int(round(rsi_p1))} {'↗' if rsi_p2 > rsi_p1 else '↘'} {int(round(rsi_p2))}"
+        price_display = f"${price_p1:,.2f} ↗ ${price_p2:,.2f}" if price_p2 > price_p1 else f"${price_p1:,.2f} ↘ ${price_p2:,.2f}"
+
         hist_list = bullish_indices if direction == 'Bullish' else bearish_indices
         best_stats = calculate_optimal_signal_stats(hist_list, close_vals, i, signal_type=direction, timeframe=timeframe, periods_input=periods_input, optimize_for=optimize_for)
         
         if best_stats is None: best_stats = {"Best Period": "—", "Profit Factor": 0.0, "Win Rate": 0.0, "EV": 0.0, "N": 0}
         if best_stats["N"] < min_n: continue
 
-        # Construct Object
-        rsi_p1 = rsi_vals[idx_p1_abs]
-        rsi_p2 = rsi_vals[i]
-        
-        tags = []
-        if "Hid" in s_type: tags.append("HIDDEN")
-        
-        if direction == 'Bullish':
-            if last_ema8 and last_price >= last_ema8: tags.append(f"EMA{EMA8_PERIOD}")
-            if last_ema21 and last_price >= last_ema21: tags.append(f"EMA{EMA21_PERIOD}")
-        else: 
-            if last_ema8 and last_price <= last_ema8: tags.append(f"EMA{EMA8_PERIOD}")
-            if last_ema21 and last_price <= last_ema21: tags.append(f"EMA{EMA21_PERIOD}")
-            
-        if sig["vol_high"]: tags.append("V_HI")
-        if vol_vals[i] > vol_vals[idx_p1_abs]: tags.append("V_GROW")
-        
-        # Strings created here only for filtered results
-        date_p2_iso = get_date_str_fast(i)
-        
-        div_obj = {
-            'Ticker': ticker, 
-            'Type': direction,
-            'Subtype': s_type,
-            'Timeframe': timeframe,
-            'Signal_Date_ISO': date_p2_iso, 
-            'P1_Date_ISO': get_date_str_fast(idx_p1_abs),
-            'RSI1': rsi_p1, 'RSI2': rsi_p2,
-            'Price1': price_p1, 'Price2': price_p2,
-            'Day1_Volume': vol_vals[idx_p1_abs], 'Day2_Volume': vol_vals[i],
-            'Is_Recent': (i >= display_threshold_idx),
+        div_obj.update({
             'Tags': tags, 
-            'Date_Display': f"{get_date_disp_fast(idx_p1_abs)} → {get_date_disp_fast(i)}",
-            'RSI_Display': f"{int(round(rsi_p1))} {'↗' if rsi_p2 > rsi_p1 else '↘'} {int(round(rsi_p2))}",
-            'Price_Display': f"${price_p1:,.2f} ↗ ${price_p2:,.2f}" if price_p2 > price_p1 else f"${price_p1:,.2f} ↘ ${price_p2:,.2f}", 
-            'Last_Close': f"${last_price:,.2f}",
+            'Date_Display': date_display,
+            'RSI_Display': rsi_display,
+            'Price_Display': price_display, 
+            'Last_Close': f"${latest_row['Price']:,.2f}",
             'N': best_stats['N']
-        }
+        })
 
-        # Future Returns
         prefix = "Daily" if timeframe == "Daily" else "Weekly"
         if periods_input is not None:
             for p in periods_input:
@@ -580,6 +568,7 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0, periods_input=None, opti
         divergences.append(div_obj)
             
     return divergences
+
 
 def prepare_data(df):
     df.columns = [col.strip().replace(' ', '').replace('-', '').upper() for col in df.columns]
