@@ -1204,14 +1204,9 @@ def run_rsi_scanner_app(df_global):
             d = fetch_yahoo_data(symbol)
         
         if d is not None and not d.empty:
-            # 1. Normalize all cols to UPPERCASE
             d.columns = [c.strip().upper() for c in d.columns]
-            
-            # 2. Map 'ADJ CLOSE' or 'Adj Close' to 'CLOSE' if missing
             if 'CLOSE' not in d.columns and 'ADJ CLOSE' in d.columns:
                  d = d.rename(columns={'ADJ CLOSE': 'CLOSE'})
-            
-            # 3. Last ditch: find any column with 'CLOSE' in it
             if 'CLOSE' not in d.columns:
                 possible = [c for c in d.columns if 'CLOSE' in c]
                 if possible: d = d.rename(columns={possible[0]: 'CLOSE'})
@@ -1234,8 +1229,7 @@ def run_rsi_scanner_app(df_global):
             rsi_tol = st.number_input("RSI Tolerance", min_value=0.5, max_value=10.0, value=2.0, step=0.5, help="Search for RSI +/- this value.")
             
             st.markdown("#### ⚙️ Strategy Logic")
-            # De-duping logic to prevent counting the same crash 5 times
-            dedupe_signals = st.checkbox("De-dupe Signals", value=True, help="If Checked (Recommended): Simulates 'One Trade at a Time'. If you buy on Day 1 for a 21-day hold, ignores all other signals until Day 22.\n\nIf Unchecked: Counts EVERY signal day as a new trade (can inflate stats during crashes).")
+            dedupe_signals = st.checkbox("De-dupe Signals", value=True, help="If Checked (Recommended): Simulates 'One Trade at a Time'.\nIf Unchecked: Counts EVERY signal day as a new trade (can inflate stats during crashes).")
             
         with c_right:
             st.markdown("#### 2. Contextual Filters")
@@ -1249,7 +1243,6 @@ def run_rsi_scanner_app(df_global):
                     val = st.number_input("Pct", min_value=0.0, value=0.0, step=0.5, format="%.1f", key=f"{key_prefix}_val", label_visibility="collapsed")
                 return mode, val
 
-            # Grid Layout for Filters
             r1_c1, r1_c2, r1_c3 = st.columns(3)
             with r1_c1: m_sma200, v_sma200 = filter_ui_row("Price vs 200 SMA", "f_sma200")
             with r1_c2: m_sma50, v_sma50 = filter_ui_row("Price vs 50 SMA", "f_sma50")
@@ -1264,10 +1257,8 @@ def run_rsi_scanner_app(df_global):
             # 1. Fetch MAIN Ticker
             df = load_tech_data(ticker, ticker_map)
             
-            # 2. Fetch CONTEXT Ticker (SPY only now)
+            # 2. Fetch CONTEXT Ticker
             df_spy = None
-            
-            # Fetch SPY
             df_spy = load_tech_data("SPY", ticker_map)
             if df_spy is not None and not df_spy.empty and 'CLOSE' in df_spy.columns:
                 df_spy['SPY_SMA200'] = df_spy['CLOSE'].rolling(200).mean()
@@ -1279,12 +1270,11 @@ def run_rsi_scanner_app(df_global):
                 date_col = next((c for c in df.columns if 'DATE' in c), None)
                 close_col = 'CLOSE'
                 low_col = next((c for c in df.columns if 'LOW' in c), None)
-                vol_col = next((c for c in df.columns if 'VOL' in c), None)
                 
                 if not date_col or not close_col:
                     st.error(f"Data format error: Missing DATE or CLOSE columns for {ticker}")
                 else:
-                    # Ensure Date is datetime
+                    # Date Handling
                     df[date_col] = pd.to_datetime(df[date_col])
                     df = df.sort_values(by=date_col).reset_index(drop=True)
                     
@@ -1296,7 +1286,7 @@ def run_rsi_scanner_app(df_global):
                         rs = gain / loss
                         df['RSI'] = 100 - (100 / (1 + rs))
 
-                    # Calc MAs for Filters
+                    # Calc MAs
                     df['SMA50'] = df[close_col].rolling(50).mean()
                     df['SMA200'] = df[close_col].rolling(200).mean()
                     
@@ -1304,28 +1294,39 @@ def run_rsi_scanner_app(df_global):
                     cutoff_date = df[date_col].max() - timedelta(days=365*lookback_years)
                     df = df[df[date_col] >= cutoff_date].copy().reset_index(drop=True)
 
-                    # --- MERGE CONTEXT (SPY) ---
+                    # --- MERGE CONTEXT (SPY) WITH FIX ---
+                    # FIX: Create a 'merge_date' column normalized to midnight to ensure alignment
+                    df['merge_date'] = df[date_col].dt.normalize()
+
                     if df_spy is not None:
-                        spy_date = next((c for c in df_spy.columns if 'DATE' in c), None)
-                        if spy_date:
-                            # FIX: Force datetime conversion before merge
-                            df_spy[spy_date] = pd.to_datetime(df_spy[spy_date])
+                        spy_date_col = next((c for c in df_spy.columns if 'DATE' in c), None)
+                        if spy_date_col:
+                            df_spy[spy_date_col] = pd.to_datetime(df_spy[spy_date_col])
+                            df_spy['merge_date'] = df_spy[spy_date_col].dt.normalize()
                             
-                            spy_renamed = df_spy[[spy_date, 'CLOSE', 'SPY_SMA200']].rename(columns={spy_date: 'Date', 'CLOSE': 'SPY_Close'})
-                            df = df.merge(spy_renamed, left_on=date_col, right_on='Date', how='left')
+                            spy_renamed = df_spy[['merge_date', 'CLOSE', 'SPY_SMA200']].rename(columns={'CLOSE': 'SPY_Close'})
+                            
+                            # Merge on the normalized date
+                            df = df.merge(spy_renamed, on='merge_date', how='left')
 
                     # --- APPLY FILTERS ---
                     current_row = df.iloc[-1]
                     current_rsi = current_row['RSI']
                     rsi_min, rsi_max = current_rsi - rsi_tol, current_rsi + rsi_tol
                     
-                    # Helper for Split UI logic
                     def apply_split_filter(series_price, series_ma, mode, pct_val):
-                        if series_price is None or series_ma is None: return True 
+                        if series_price is None or series_ma is None: return True
+                        
+                        # Handle potential NaNs (e.g. first 200 days)
+                        # We fill NaNs with False logic (can't filter on missing data)
+                        mask = pd.Series(False, index=series_price.index)
+                        
                         if mode == "Above":
-                            return series_price > (series_ma * (1 + pct_val/100.0))
+                            mask = series_price > (series_ma * (1 + pct_val/100.0))
                         else: # Below
-                            return series_price < (series_ma * (1 - pct_val/100.0))
+                            mask = series_price < (series_ma * (1 - pct_val/100.0))
+                        
+                        return mask.fillna(False)
 
                     # Base Filter: RSI Range
                     mask = (df['RSI'] >= rsi_min) & (df['RSI'] <= rsi_max)
@@ -1338,18 +1339,18 @@ def run_rsi_scanner_app(df_global):
                     if df_spy is not None and 'SPY_Close' in df.columns:
                         mask &= apply_split_filter(df['SPY_Close'], df['SPY_SMA200'], m_spy, v_spy)
                     
-                    # Apply Mask (Exclude the very last row which is "today")
+                    # Exclude 'today'
                     matches = df.iloc[:-1][mask[:-1]].copy()
                     
-                    # --- CALC PERCENTILE RANK ---
+                    # --- PERCENTILE RANK ---
                     rsi_rank = (df['RSI'] < current_rsi).mean() * 100
 
-                    # --- DISPLAY CURRENT STATS ---
+                    # --- DISPLAY ---
                     st.subheader(f"📊 Analysis: {ticker} (RSI {current_rsi:.1f})")
                     sc1, sc2, sc3, sc4 = st.columns(4)
                     sc1.metric("Current Price", f"${current_row[close_col]:.2f}")
                     sc2.metric("Current RSI", f"{current_rsi:.1f}")
-                    sc3.metric("RSI Hist. Rank", f"{rsi_rank:.1f}%", help=f"Percentile Rank: Bottom {rsi_rank:.1f}%. This means current RSI is lower than {100-rsi_rank:.1f}% of history.")
+                    sc3.metric("RSI Hist. Rank", f"{rsi_rank:.1f}%", help=f"Percentile Rank: Bottom {rsi_rank:.1f}%")
                     sc4.metric("Matches Found", f"{len(matches)}", f"in last {lookback_years}y")
                     
                     if not matches.empty:
@@ -1367,21 +1368,16 @@ def run_rsi_scanner_app(df_global):
                                 drawdowns = []
                                 valid_counts = 0
                                 
-                                # [DE-DUPING LOGIC START]
-                                # Tracks when the 'current' trade would exit to prevent overlapping trades
                                 last_exit_index = -1 
                                 
                                 for idx in match_indices:
-                                    # If user wants dedupe, we skip if current idx is before the last trade finished
-                                    if dedupe_signals and idx < last_exit_index:
-                                        continue
-                                        
+                                    if dedupe_signals and idx < last_exit_index: continue
                                     if idx + p >= total_len: continue
                                     
                                     entry_p = full_closes[idx]
                                     exit_p = full_closes[idx + p]
                                     
-                                    # Drawdown (Asset Price)
+                                    # Drawdown
                                     period_lows = full_lows[idx+1 : idx+p+1]
                                     if len(period_lows) > 0:
                                         min_low = np.min(period_lows)
@@ -1393,32 +1389,23 @@ def run_rsi_scanner_app(df_global):
                                     lump_returns.append((exit_p - entry_p) / entry_p)
                                     valid_counts += 1
                                     
-                                    # Update the 'lockout' period
-                                    if dedupe_signals:
-                                        last_exit_index = idx + p
-                                # [DE-DUPING LOGIC END]
+                                    if dedupe_signals: last_exit_index = idx + p
 
                                 if valid_counts == 0: continue
 
-                                # OPTIMIZE DCA (Loop 2 to 10 days)
-                                # Note: For DCA optimization in dedupe mode, we still only take one trade block at a time.
+                                # OPTIMIZE DCA
                                 best_dca_ev = -999.0
                                 best_dca_days = 1
                                 best_dca_wr = 0.0
                                 
-                                # Base Lump Sum Stats
                                 lump_mean = np.mean(lump_returns) * 100
                                 lump_wr = np.mean(np.array(lump_returns) > 0) * 100
                                 
-                                # Init Best to Lump Sum
                                 best_dca_ev = lump_mean
                                 best_dca_wr = lump_wr
                                 
-                                # Test DCA Windows
                                 for d_win in range(2, 11): 
                                     temp_dca_rets = []
-                                    
-                                    # Re-run loop for DCA with same dedupe logic to be fair
                                     last_exit_index_dca = -1
                                     
                                     for idx in match_indices:
@@ -1457,14 +1444,13 @@ def run_rsi_scanner_app(df_global):
                                     "Optimal WR": best_dca_wr,
                                     "Avg DD": np.mean(dd_arr),
                                     "Median DD": np.median(dd_arr),
-                                    "Min DD": np.max(dd_arr), # Closest to 0
-                                    "Max DD": np.min(dd_arr)  # Furthest from 0
+                                    "Min DD": np.max(dd_arr),
+                                    "Max DD": np.min(dd_arr)
                                 }
                                 results.append(res)
                                 
                         res_df = pd.DataFrame(results)
                         
-                        # --- RESULTS TABLE ---
                         def color_ev(val):
                             color = "#71d28a" if val > 0 else "#f29ca0"
                             return f'color: {color}; font-weight: bold;'
@@ -1502,45 +1488,28 @@ def run_rsi_scanner_app(df_global):
                             height=get_table_height(res_df, max_rows=10)
                         )
                         
-                        # --- INSIGHTS ---
                         st.markdown("##### 🧠 Strategic Insights")
                         c_i1, c_i2 = st.columns(2)
                         
                         if not res_df.empty:
-                            # Drawdown Insight
                             row_21 = res_df[res_df['Days']==21]
                             if not row_21.empty:
                                 avg_dd = row_21['Avg DD'].iloc[0]
                                 max_dd = row_21['Max DD'].iloc[0]
                                 med_dd = row_21['Median DD'].iloc[0]
-                                
                                 with c_i1:
-                                    st.info(f"""
-                                    **📉 Risk Profile (21 Days)**
-                                    * **Typical Pain:** You usually see a **{med_dd:.1f}%** paper loss before profit.
-                                    * **Avg Drop:** The average drawdown is **{avg_dd:.1f}%**.
-                                    * **Worst Case:** One historical trade dropped **{max_dd:.1f}%**.
-                                    """)
+                                    st.info(f"**📉 Risk Profile (21 Days)**\n* **Typical Pain:** {med_dd:.1f}%\n* **Avg Drop:** {avg_dd:.1f}%\n* **Worst Case:** {max_dd:.1f}%")
                             
-                            # Optimization Insight
                             res_df['Improvement'] = res_df['Optimal EV'] - res_df['Lump EV']
                             best_imp_row = res_df.loc[res_df['Improvement'].idxmax()]
-                            
                             with c_i2:
                                 if best_imp_row['Improvement'] > 0.5:
-                                    st.success(f"""
-                                    **💰 Optimization Winner ({best_imp_row['Days']} Days)**
-                                    For a {best_imp_row['Days']}-day hold, **{best_imp_row['Optimal Entry']}** significantly outperformed Lump Sum by **+{best_imp_row['Improvement']:.2f}%**.
-                                    """)
+                                    st.success(f"**💰 Optimization Winner ({best_imp_row['Days']} Days)**\n**{best_imp_row['Optimal Entry']}** outperformed Lump Sum by **+{best_imp_row['Improvement']:.2f}%**.")
                                 else:
-                                    st.warning(f"""
-                                    **💰 Optimization Result**
-                                    Lump Sum generally performed as well as (or better than) DCA. 
-                                    *(Suggests that when this signal triggers, price usually rips higher immediately).*
-                                    """)
+                                    st.warning(f"**💰 Optimization Result**\nLump Sum generally performed as well as (or better than) DCA.")
 
                     else:
-                        st.warning("No historical matches found with these strict filters. Try widening the RSI tolerance or removing the SPY/Volume filters.")
+                        st.warning("No historical matches found. Try widening the RSI tolerance or adjusting filters.")
 
     # --------------------------------------------------------------------------
     # TAB 2: RSI PERCENTILES (Unchanged)
@@ -1554,7 +1523,6 @@ def run_rsi_scanner_app(df_global):
                 master = load_parquet_and_clean(key)
                 if master is not None and not master.empty:
                     t_col = next((c for c in master.columns if c.strip().upper() in ['TICKER', 'SYMBOL']), None)
-                    
                     with st.expander(f"View Scanned Tickers ({data_option_pct})"):
                         if t_col:
                             unique_tickers = sorted(master[t_col].unique().tolist())
