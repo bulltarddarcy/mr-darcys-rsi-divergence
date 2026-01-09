@@ -125,8 +125,8 @@ def run_sector_rotation_app(df_global=None):
         st.warning("⚠️ SECTOR_UNIVERSE secret is missing or empty.")
         return
 
-    # --- TOP GUIDE ---
-    with st.expander("📚 Page Information & User Guide", expanded=False):
+    # --- 1. GRAPHIC USER GUIDE ---
+    with st.expander("Graphic User Guide", expanded=False):
         st.markdown("""
         **🧮 How It Works (The Math)**
         This chart does **not** show price. It shows **Relative Performance** against the S&P 500 (SPY).
@@ -137,7 +137,13 @@ def run_sector_rotation_app(df_global=None):
             * `> 100`: Gaining speed (Acceleration).
             * `< 100`: Losing speed (Deceleration).
         
-        *Note: Calculations use Weighted Regression, meaning today's price action is weighted 3x more than data from 20 days ago. This eliminates lag.*
+        *Note: Calculations use Weighted Regression (Today's price weighted 3x vs 20 days ago).*
+        
+        **📊 Quadrant Guide**
+        * 🟢 **LEADING (Top Right):** Strong Trend + Accelerating Momentum. The Winners.
+        * 🟡 **WEAKENING (Bottom Right):** Strong Trend, but losing steam. Often a place to take profits.
+        * 🔴 **LAGGING (Bottom Left):** Weak Trend + Decelerating. The Losers.
+        * 🔵 **IMPROVING (Top Left):** Weak Trend, but Momentum is waking up. "Turnarounds".
         """)
 
     # 2. Session State for Controls
@@ -150,36 +156,41 @@ def run_sector_rotation_app(df_global=None):
     if "sector_theme_filter_widget" not in st.session_state:
         st.session_state.sector_theme_filter_widget = all_themes
 
-    # --- MAIN SECTION START ---
+    # --- 2. SECTOR ROTATIONS (CHART SECTION) ---
     st.subheader("Sector Rotations")
 
-    # 3. CONTROLS (Consolidated)
+    # CONTROLS
     with st.expander("⚙️ Chart Inputs & Filters", expanded=True):
         
         # --- INPUT ROW 1: Toggles & Trails ---
-        # Using tight columns to put trails right next to the radio
         c_in_1, c_in_2, c_spacer = st.columns([1.5, 1, 3]) 
         
-        # TIMEFRAME DEFINITIONS (Tooltip)
+        # TIMEFRAME TOOLTIP
         timeframe_help = """
-        ⏱️ Understanding Timeframes:
-        • 5 Days (Short): The Tactical View. (~1 Week). Highly sensitive. Use for precise entries/exits.
-        • 10 Days (Med): The Balance. (~2 Weeks). Smooths noise but reacts faster than monthly trend.
-        • 20 Days (Long): The Strategic View. (~1 Month). Primary trend. Major moves happen here.
+        ⏱️ Timeframe Definitions:
+        • 5 Days (Short): Tactical View (~1 Week). Highly sensitive.
+        • 10 Days (Med): Balanced View (~2 Weeks).
+        • 20 Days (Long): Strategic View (~1 Month). Primary trend.
         """
         
+        # TRAIL TOOLTIP
+        trails_help = "Shows the trailing path of the last 3 days to visualize velocity and direction changes (e.g. J-Hooks)."
+
         with c_in_1:
             st.session_state.sector_view = st.radio(
                 "Timeframe Window", ["5 Days", "10 Days", "20 Days"], 
                 horizontal=True, 
                 key="timeframe_radio",
-                help=timeframe_help  # Added Info Bubble here
+                help=timeframe_help
             )
         
         with c_in_2:
-            # Add vertical padding to align checkbox with radio text
             st.markdown('<div style="margin-top: 10px;"></div>', unsafe_allow_html=True)
-            st.session_state.sector_trails = st.checkbox("Show 3-Day Trails", value=st.session_state.sector_trails)
+            st.session_state.sector_trails = st.checkbox(
+                "Show 3-Day Trails", 
+                value=st.session_state.sector_trails,
+                help=trails_help
+            )
             
         # --- INPUT ROW 2: Update Button ---
         if st.button("🔄 Update Data", use_container_width=True):
@@ -216,7 +227,6 @@ def run_sector_rotation_app(df_global=None):
     # --- MOMENTUM SCANS ---
     with st.expander("🚀 Momentum Scans", expanded=True):
         
-        # --- LEGEND AT TOP ---
         with st.expander("ℹ️ Legend & Setup Key", expanded=False):
              st.markdown("""
              **Category Guide**
@@ -266,7 +276,7 @@ def run_sector_rotation_app(df_global=None):
             st.error(f"🔻 Decreasing ({len(dec_mom)})")
             for i in dec_mom: st.caption(f"{i['theme']} {i['icon']} **({i['shift']:+.1f})**")
 
-    # 4. RRG CHART
+    # RRG CHART
     chart_placeholder = st.empty()
     with chart_placeholder:
         fig = plot_simple_rrg(dm, filtered_map, view_key, st.session_state.sector_trails)
@@ -282,17 +292,11 @@ def run_sector_rotation_app(df_global=None):
     
     st.divider()
 
-    # 5. ALL THEMES PERFORMANCE
+    # --- 3. ALL THEMES PERFORMANCE ---
     st.subheader("All Themes Performance")
     
     with st.expander("ℹ️ Legend & Definitions", expanded=False):
         st.markdown("""
-        **Quadrant Guide**
-        * 🟢 **LEADING:** Strong Trend + Accelerating Momentum. The Winners.
-        * 🟡 **WEAKENING:** Strong Trend, but losing steam. Take profits?
-        * 🔴 **LAGGING:** Weak Trend + Decelerating. The Losers.
-        * 🔵 **IMPROVING:** Weak Trend, but Momentum is waking up. Turnarounds.
-        
         **Metric Definitions**
         * **Rel Perf (Ratio):** Normalized Relative Strength vs SPY. (Above 0 = Outperforming).
         * **MoM (Momentum):** Rate of Change of the Ratio. (Above 0 = Accelerating).
@@ -347,7 +351,7 @@ def run_sector_rotation_app(df_global=None):
 
     st.markdown("---")
 
-    # 6. EXPLORER SECTION
+    # --- 4. EXPLORER SECTION ---
     st.subheader(f"🔎 Explorer: {st.session_state.sector_target}")
     
     # --- INPUT FIRST, SELECTOR SECOND ---
