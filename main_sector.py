@@ -128,11 +128,6 @@ def run_sector_rotation_app(df_global=None):
     # --- TOP GUIDE ---
     with st.expander("📚 Page Information & User Guide", expanded=False):
         st.markdown("""
-        **⏱️ Understanding Timeframes**
-        * **5 Days (Short):** The Tactical View. (~1 Week). Highly sensitive. Use this for precise entries (buying dips) or exits.
-        * **10 Days (Med):** The Balance. (~2 Weeks). A middle ground that smooths out daily noise but reacts faster than the monthly trend.
-        * **20 Days (Long):** The Strategic View. (~1 Month). This is your primary trend. Major moves happen here.
-
         **🧮 How It Works (The Math)**
         This chart does **not** show price. It shows **Relative Performance** against the S&P 500 (SPY).
         * **X-Axis (Trend):** Are we beating the market?
@@ -155,6 +150,9 @@ def run_sector_rotation_app(df_global=None):
     if "sector_theme_filter_widget" not in st.session_state:
         st.session_state.sector_theme_filter_widget = all_themes
 
+    # --- MAIN SECTION START ---
+    st.subheader("Sector Rotations")
+
     # 3. CONTROLS (Consolidated)
     with st.expander("⚙️ Chart Inputs & Filters", expanded=True):
         
@@ -162,10 +160,20 @@ def run_sector_rotation_app(df_global=None):
         # Using tight columns to put trails right next to the radio
         c_in_1, c_in_2, c_spacer = st.columns([1.5, 1, 3]) 
         
+        # TIMEFRAME DEFINITIONS (Tooltip)
+        timeframe_help = """
+        ⏱️ Understanding Timeframes:
+        • 5 Days (Short): The Tactical View. (~1 Week). Highly sensitive. Use for precise entries/exits.
+        • 10 Days (Med): The Balance. (~2 Weeks). Smooths noise but reacts faster than monthly trend.
+        • 20 Days (Long): The Strategic View. (~1 Month). Primary trend. Major moves happen here.
+        """
+        
         with c_in_1:
             st.session_state.sector_view = st.radio(
                 "Timeframe Window", ["5 Days", "10 Days", "20 Days"], 
-                horizontal=True, key="timeframe_radio"
+                horizontal=True, 
+                key="timeframe_radio",
+                help=timeframe_help  # Added Info Bubble here
             )
         
         with c_in_2:
@@ -258,10 +266,7 @@ def run_sector_rotation_app(df_global=None):
             st.error(f"🔻 Decreasing ({len(dec_mom)})")
             for i in dec_mom: st.caption(f"{i['theme']} {i['icon']} **({i['shift']:+.1f})**")
 
-    st.divider()
-
     # 4. RRG CHART
-    st.subheader("Sector Rotations")
     chart_placeholder = st.empty()
     with chart_placeholder:
         fig = plot_simple_rrg(dm, filtered_map, view_key, st.session_state.sector_trails)
