@@ -17,7 +17,7 @@ def get_ma_signal(price, ma_val):
 def run_sector_rotation_app(df_global=None):
     st.title("🔄 Sector Rotation")
     
-    # --- UPDATE: CONSTRUCTION BANNER ---
+    # --- 1. CONSTRUCTION BANNER ---
     st.error("🚧 **UNDER CONSTRUCTION** 🚧: This page is currently being optimized for faster performance.")
     
     # 0. Benchmark Control (Session State)
@@ -219,7 +219,7 @@ def run_sector_rotation_app(df_global=None):
     """)
     
     summary_data = []
-    input_data_export = []  # <--- UPDATE: STORAGE FOR RAW INPUTS
+    input_data_export = []  # <--- NEW LIST FOR RAW INPUTS
     
     for theme in all_themes:
         etf_ticker = theme_map.get(theme)
@@ -230,7 +230,7 @@ def run_sector_rotation_app(df_global=None):
         
         last = etf_df.iloc[-1]
         
-        # 1. Build Display Row (The Formatted Output)
+        # 1. Build Display Row (Formatted Output)
         row = {"Theme": theme}
         for p, key in [("5d", "Short"), ("10d", "Med"), ("20d", "Long")]:
             row[f"Status ({p})"] = us.get_quadrant_status(etf_df, key)
@@ -238,7 +238,7 @@ def run_sector_rotation_app(df_global=None):
             row[f"Mom ({p})"] = last.get(f"RRG_Mom_{key}", 100) - 100
         summary_data.append(row)
 
-        # 2. Build Input Data Row (The Raw Data)
+        # 2. Build Raw Input Data Row (Source Metrics)
         input_row = {
             "Date": last.name.strftime('%Y-%m-%d') if hasattr(last, 'name') else pd.Timestamp.now().strftime('%Y-%m-%d'),
             "Theme": theme,
@@ -254,7 +254,7 @@ def run_sector_rotation_app(df_global=None):
         input_data_export.append(input_row)
         
     if summary_data:
-        # --- DISPLAY TABLE ---
+        # Display Table
         st.dataframe(
             pd.DataFrame(summary_data),
             hide_index=True,
@@ -269,8 +269,8 @@ def run_sector_rotation_app(df_global=None):
                 "Mom (20d)": st.column_config.NumberColumn("Mom (20d)", format="%+.2f"),
             }
         )
-        
-        # --- UPDATE: DOWNLOAD RAW INPUTS BUTTON ---
+
+        # --- 2. DOWNLOAD RAW INPUTS BUTTON ---
         if input_data_export:
             df_inputs = pd.DataFrame(input_data_export)
             file_date = pd.Timestamp.now().strftime("%Y%m%d")
