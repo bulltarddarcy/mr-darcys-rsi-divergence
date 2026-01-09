@@ -221,7 +221,7 @@ def run_sector_rotation_app(df_global=None):
     summary_data = []
     input_data_export = []
     
-    # 1. Get Benchmark DataFrame for Denominator
+    # 1. Get Benchmark DataFrame for Denominator lookup
     bench_ticker = st.session_state.sector_benchmark
     bench_df = etf_data_cache.get(bench_ticker)
 
@@ -242,35 +242,36 @@ def run_sector_rotation_app(df_global=None):
             row[f"Mom ({p})"] = last.get(f"RRG_Mom_{key}", 100) - 100
         summary_data.append(row)
 
-        # 2. Build Raw Input Data Row (Source Metrics)
-        
-        # Look up Benchmark Price for same date (Denominator)
+        # 2. Build Raw Input Data Row (Specifically for 5d Verification)
         bench_price = None
         if bench_df is not None and not bench_df.empty:
-            try:
-                # Assuming index is Date
-                if last.name in bench_df.index:
-                    bench_price = bench_df.loc[last.name]['Close']
-            except:
-                pass
+            if last.name in bench_df.index:
+                bench_price = bench_df.loc[last.name]['Close']
 
         etf_price = last.get("Close")
-        raw_ratio = (etf_price / bench_price) if (etf_price and bench_price) else None
+        
+        # Reverse Engineer the Math
+        # RRG_Ratio = (Ratio / Ratio_MA) * 100
+        # Thus: Ratio_MA = Ratio / (RRG_Ratio / 100)
+        
+        rrg_short = last.get("RRG_Ratio_Short")
+        curr_ratio = (etf_price / bench_price) if (etf_price and bench_price) else None
+        
+        ma_ratio_5d = None
+        if curr_ratio and rrg_short:
+            try:
+                ma_ratio_5d = curr_ratio / (rrg_short / 100.0)
+            except: pass
 
         input_row = {
             "Date": last.name.strftime('%Y-%m-%d') if hasattr(last, 'name') else pd.Timestamp.now().strftime('%Y-%m-%d'),
             "Theme": theme,
             "Ticker": etf_ticker,
-            "ETF_Price (Numerator)": etf_price,
-            "Benchmark": bench_ticker,
-            "Bench_Price (Denominator)": bench_price,
-            "Raw_Ratio (Num/Denom)": raw_ratio,
-            "RRG_Ratio_Short (5d)": last.get("RRG_Ratio_Short"),
-            "RRG_Mom_Short (5d)": last.get("RRG_Mom_Short"),
-            "RRG_Ratio_Med (10d)": last.get("RRG_Ratio_Med"),
-            "RRG_Mom_Med (10d)": last.get("RRG_Mom_Med"),
-            "RRG_Ratio_Long (20d)": last.get("RRG_Ratio_Long"),
-            "RRG_Mom_Long (20d)": last.get("RRG_Mom_Long"),
+            "ETF_Close": etf_price,
+            "Bench_Close": bench_price,
+            "Current_Ratio": curr_ratio,
+            "Ratio_SMA_5d": ma_ratio_5d,
+            "Rel_Perf_5d": (rrg_short - 100) if rrg_short else None
         }
         input_data_export.append(input_row)
         
@@ -291,19 +292,19 @@ def run_sector_rotation_app(df_global=None):
             }
         )
 
-        # --- DOWNLOAD RAW INPUTS BUTTON ---
+        # --- DOWNLOAD 5D MATH INPUTS ---
         if input_data_export:
             df_inputs = pd.DataFrame(input_data_export)
             file_date = pd.Timestamp.now().strftime("%Y%m%d")
             csv_inputs = df_inputs.to_csv(index=False).encode('utf-8')
             
             st.download_button(
-                label="💾 Download Source Data (Inputs)",
+                label="💾 Download 5d Math Data",
                 data=csv_inputs,
-                file_name=f"Sector_Raw_Inputs_{file_date}.csv",
+                file_name=f"Sector_5d_Inputs_{file_date}.csv",
                 mime="text/csv",
-                key="dl_sector_raw_inputs",
-                help="Downloads the raw ETF Price, Benchmark Price, Ratio, and Momentum values."
+                key="dl_sector_5d_inputs",
+                help="Downloads the inputs used to calculate Relative Performance (5d): Current Ratio vs 5-Day SMA."
             )
 
     st.markdown("---")
