@@ -45,22 +45,50 @@ class SectorDataManager:
         self.data_path = DATA_DIR
 
     def load_universe(self):
-        """Reads the universe from st.secrets['SECTOR_UNIVERSE']"""
-        csv_content = st.secrets.get("SECTOR_UNIVERSE", "")
-        if not csv_content:
+        """
+        Reads the universe from st.secrets['SECTOR_UNIVERSE']
+        Supports:
+        1. Google Drive View Links (e.g. https://drive.google.com/.../view?...)
+        2. Direct CSV strings (Raw text)
+        """
+        secret_val = st.secrets.get("SECTOR_UNIVERSE", "")
+        if not secret_val:
             st.error("❌ Secret 'SECTOR_UNIVERSE' is missing or empty.")
             return pd.DataFrame(), [], {}
             
         try:
-            df = pd.read_csv(StringIO(csv_content))
+            # --- DETECT URL VS RAW TEXT ---
+            if secret_val.strip().startswith("http"):
+                # It is a URL. Check if it's Google Drive.
+                if "drive.google.com" in secret_val and "/d/" in secret_val:
+                    # Convert 'view' link to 'export=download' link
+                    file_id = secret_val.split("/d/")[1].split("/")[0]
+                    csv_source = f"https://drive.google.com/uc?id={file_id}&export=download"
+                else:
+                    csv_source = secret_val
+                
+                # Read from URL
+                df = pd.read_csv(csv_source)
+            else:
+                # It is Raw Text. Read from String.
+                df = pd.read_csv(StringIO(secret_val))
             
-            # Clean data
-            df['Ticker'] = df['Ticker'].str.strip().str.upper()
-            df['Theme'] = df['Theme'].str.strip()
+            # --- CLEANING & FORMATTING ---
+            # Ensure columns exist
+            required_cols = ['Ticker', 'Theme']
+            if not all(col in df.columns for col in required_cols):
+                st.error(f"Universe CSV missing required columns: {required_cols}")
+                return pd.DataFrame(), [], {}
+
+            df['Ticker'] = df['Ticker'].astype(str).str.strip().str.upper()
+            df['Theme'] = df['Theme'].astype(str).str.strip()
             
             if 'Role' in df.columns:
-                df['Role'] = df['Role'].str.strip().str.title() 
+                df['Role'] = df['Role'].astype(str).str.strip().str.title() 
             else:
+                # If no Role column, infer ETF vs Stock? 
+                # Better to default all to Stock if unsure, or require the column.
+                # Here we default to Stock to prevent crash.
                 df['Role'] = 'Stock' 
 
             tickers = df['Ticker'].unique().tolist()
@@ -68,6 +96,7 @@ class SectorDataManager:
                 tickers.append(BENCHMARK_TICKER)
                 
             # Create Theme Map (Theme -> ETF Ticker)
+            # Find rows where Role is 'Etf'
             etf_rows = df[df['Role'] == 'Etf']
             if not etf_rows.empty:
                 theme_map = dict(zip(etf_rows['Theme'], etf_rows['Ticker']))
@@ -77,7 +106,7 @@ class SectorDataManager:
             return df, tickers, theme_map
             
         except Exception as e:
-            st.error(f"Error parsing SECTOR_UNIVERSE: {e}")
+            st.error(f"Error loading SECTOR_UNIVERSE: {e}")
             return pd.DataFrame(), [], {}
 
     def get_file_path(self, ticker):
