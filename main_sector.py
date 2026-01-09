@@ -128,7 +128,7 @@ def run_sector_rotation_app(df_global=None):
         st.warning("⚠️ SECTOR_UNIVERSE secret is missing or empty.")
         return
 
-    # --- GUIDES (EXPANDERS) ---
+    # --- TOP GUIDE ---
     with st.expander("📚 Page Information & User Guide", expanded=False):
         st.markdown("""
         **⏱️ Understanding Timeframes**
@@ -159,28 +159,6 @@ def run_sector_rotation_app(df_global=None):
         * **Long Tail:** = High Velocity. The move is strong and decisive.
         * **Short Tail:** = Indecision. The sector is stuck.
         * **J-Hook:** If the tail is in the bottom left but "Hooks" sharply up and right, smart money is rotating in aggressively.
-        """)
-    
-    with st.expander("🔑 View Setup Key", expanded=False):
-        st.markdown("""
-        **🪝 J-Hook (Turnaround)**
-        * **Definition:** Long-term trend is weak, but Short-term is exploding higher.
-        * **Action:** Aggressive bottom fishing.
-
-        **🚩 Bull Flag (Dip Buy)**
-        * **Definition:** Long-term trend is strong. Short-term rested and is turning back up.
-        * **Action:** Safe entry into leader.
-
-        **🚀 Rocket (Thrust)**
-        * **Definition:** Perfect alignment (5 > 10 > 20). Accelerating velocity.
-        * **Action:** Chase the strength (FOMO).
-        """)
-
-    with st.expander("📂 Category Guide", expanded=False):
-        st.markdown("""
-        * **📈 Increasing:** 5-Day Momentum > 20-Day Momentum. The move is accelerating (Gas Pedal is down).
-        * **🔻 Decreasing:** 5-Day Momentum < 20-Day Momentum. The move is slowing down (Braking).
-        * **⚖️ Neutral:** Mixed signals or consolidating.
         """)
 
     # 2. Session State for Controls
@@ -259,10 +237,13 @@ def run_sector_rotation_app(df_global=None):
             elif m5 < m10 < m20: dec_mom.append(item)
             else: neut_mom.append(item)
 
-        # Sort High to Low by Shift
+        # Sort Logic
+        # Increasing: High to Low (+10 before +2)
         inc_mom.sort(key=lambda x: x['shift'], reverse=True)
+        # Neutral: High to Low
         neut_mom.sort(key=lambda x: x['shift'], reverse=True)
-        dec_mom.sort(key=lambda x: x['shift'], reverse=True)
+        # Decreasing: Low to High (-10 before -2) -> "Increasing order" mathematically
+        dec_mom.sort(key=lambda x: x['shift'], reverse=False)
 
         m_col1, m_col2, m_col3 = st.columns(3)
         with m_col1: 
@@ -275,7 +256,19 @@ def run_sector_rotation_app(df_global=None):
             st.error(f"🔻 Decreasing ({len(dec_mom)})")
             for i in dec_mom: st.caption(f"{i['theme']} {i['icon']} **({i['shift']:+.1f})**")
 
-    st.divider()
+        # LEGEND INSIDE EXPANDER
+        with st.expander("ℹ️ Legend & Setup Key", expanded=False):
+             st.markdown("""
+             **Category Guide**
+             * **📈 Increasing:** 5-Day Momentum > 20-Day Momentum. The move is accelerating.
+             * **🔻 Decreasing:** 5-Day Momentum < 20-Day Momentum. The move is slowing down.
+             * **⚖️ Neutral:** Mixed signals.
+             
+             **Setup Key**
+             * **🪝 J-Hook:** Long-term weak, Short-term exploding. (Bottom Fish).
+             * **🚩 Bull Flag:** Long-term strong, Short-term rested. (Dip Buy).
+             * **🚀 Rocket:** Perfect alignment 5>10>20. (Thrust).
+             """)
 
     # 4. RRG CHART
     st.subheader("Sector Rotations")
@@ -292,13 +285,9 @@ def run_sector_rotation_app(df_global=None):
         elif "text" in point:
             st.session_state.sector_target = point["text"]
     
-    st.divider()
-
-    # 5. EXPLORER SECTION (NEW TABLE + STOCK LIST)
-    st.subheader(f"🔎 Explorer: {st.session_state.sector_target}")
+    # 5. ALL THEMES PERFORMANCE
+    st.subheader("All Themes Performance")
     
-    # --- TABLE: ALL THEMES STATUS ---
-    # Create a summary dataframe for ALL themes
     summary_data = []
     for theme in all_themes:
         etf_ticker = theme_map.get(theme)
@@ -318,13 +307,13 @@ def run_sector_rotation_app(df_global=None):
             use_container_width=True
         )
 
-    st.markdown("---")
-
-    # --- STOCK EXPLORER ---
+    # 6. EXPLORER SECTION (NEW TABLE + STOCK LIST)
+    st.subheader(f"🔎 Explorer: {st.session_state.sector_target}")
+    
     # Search Bar
     search_c1, search_c2 = st.columns([1, 3])
     with search_c1:
-        search_t = st.text_input("Find Ticker", placeholder="NVDA...").strip().upper()
+        search_t = st.text_input("Input a ticker to find its theme(s)", placeholder="NVDA...").strip().upper()
         if search_t:
             matches = uni_df[uni_df['Ticker'] == search_t]
             if not matches.empty:
@@ -333,8 +322,9 @@ def run_sector_rotation_app(df_global=None):
     
     with search_c2:
         # Update Target Dropdown
-        curr_idx = all_sorted.index(st.session_state.sector_target) if st.session_state.sector_target in all_sorted else 0
-        new_target = st.selectbox("Select Theme to View Stocks", all_sorted, index=curr_idx)
+        # FIX: 'all_themes' is used here, ensuring it is defined
+        curr_idx = all_themes.index(st.session_state.sector_target) if st.session_state.sector_target in all_themes else 0
+        new_target = st.selectbox("Select Theme to View Stocks", all_themes, index=curr_idx)
         if new_target != st.session_state.sector_target:
             st.session_state.sector_target = new_target
 
