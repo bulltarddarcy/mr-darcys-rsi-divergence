@@ -157,30 +157,32 @@ def run_sector_rotation_app(df_global=None):
 
     # 3. CONTROLS (Consolidated)
     with st.expander("⚙️ Chart Inputs & Filters", expanded=True):
-        # ROW 1: Timeframe | Trails | Update Button
-        c1, c2, c3 = st.columns([2, 1, 1])
         
-        with c1:
+        # --- INPUT ROW 1: Toggles & Trails ---
+        # Using tight columns to put trails right next to the radio
+        c_in_1, c_in_2, c_spacer = st.columns([1.5, 1, 3]) 
+        
+        with c_in_1:
             st.session_state.sector_view = st.radio(
                 "Timeframe Window", ["5 Days", "10 Days", "20 Days"], 
                 horizontal=True, key="timeframe_radio"
             )
         
-        with c2:
-            st.markdown('<div style="margin-top: 5px;"></div>', unsafe_allow_html=True)
+        with c_in_2:
+            # Add vertical padding to align checkbox with radio text
+            st.markdown('<div style="margin-top: 10px;"></div>', unsafe_allow_html=True)
             st.session_state.sector_trails = st.checkbox("Show 3-Day Trails", value=st.session_state.sector_trails)
             
-        with c3:
-            st.markdown('<div style="margin-top: 5px;"></div>', unsafe_allow_html=True)
-            if st.button("🔄 Update Data", use_container_width=True):
-                status = st.empty()
-                calc = us.SectorAlphaCalculator()
-                calc.run_full_update(status)
-                st.rerun()
+        # --- INPUT ROW 2: Update Button ---
+        if st.button("🔄 Update Data", use_container_width=True):
+            status = st.empty()
+            calc = us.SectorAlphaCalculator()
+            calc.run_full_update(status)
+            st.rerun()
 
         st.divider()
 
-        # ROW 2: Sectors Shown
+        # --- SECTORS SHOWN ---
         st.markdown("**Sectors Shown**")
         btn_col1, btn_col2, _ = st.columns([1, 1, 6])
         with btn_col1:
@@ -278,6 +280,19 @@ def run_sector_rotation_app(df_global=None):
     # 5. ALL THEMES PERFORMANCE
     st.subheader("All Themes Performance")
     
+    with st.expander("ℹ️ Legend & Definitions", expanded=False):
+        st.markdown("""
+        **Quadrant Guide**
+        * 🟢 **LEADING:** Strong Trend + Accelerating Momentum. The Winners.
+        * 🟡 **WEAKENING:** Strong Trend, but losing steam. Take profits?
+        * 🔴 **LAGGING:** Weak Trend + Decelerating. The Losers.
+        * 🔵 **IMPROVING:** Weak Trend, but Momentum is waking up. Turnarounds.
+        
+        **Metric Definitions**
+        * **Rel Perf (Ratio):** Normalized Relative Strength vs SPY. (Above 0 = Outperforming).
+        * **MoM (Momentum):** Rate of Change of the Ratio. (Above 0 = Accelerating).
+        """)
+
     summary_data = []
     for theme in all_themes:
         etf_ticker = theme_map.get(theme)
@@ -289,6 +304,8 @@ def run_sector_rotation_app(df_global=None):
         last = etf_df.iloc[-1]
         
         row = {"Theme": theme}
+        
+        # Calculate Deviation from 100 for proper display
         
         # Short (5d)
         row["Status (5d)"] = get_quadrant_status(etf_df, "Short")
@@ -314,12 +331,12 @@ def run_sector_rotation_app(df_global=None):
             use_container_width=True,
             column_config={
                 "Theme": st.column_config.TextColumn("Theme"), 
-                "Rel Perf (5d)": st.column_config.NumberColumn("Rel Perf (5d)", format="%+.2f%%"),
-                "Mom (5d)": st.column_config.NumberColumn("Mom (5d)", format="%+.2f"),
-                "Rel Perf (10d)": st.column_config.NumberColumn("Rel Perf (10d)", format="%+.2f%%"),
-                "Mom (10d)": st.column_config.NumberColumn("Mom (10d)", format="%+.2f"),
-                "Rel Perf (20d)": st.column_config.NumberColumn("Rel Perf (20d)", format="%+.2f%%"),
-                "Mom (20d)": st.column_config.NumberColumn("Mom (20d)", format="%+.2f"),
+                "Rel Perf (5d)": st.column_config.NumberColumn("Rel Perf (5d)", format="%+.2f%%", help="Relative Strength vs SPY (5 Days)"),
+                "Mom (5d)": st.column_config.NumberColumn("Mom (5d)", format="%+.2f", help="Momentum Velocity (5 Days)"),
+                "Rel Perf (10d)": st.column_config.NumberColumn("Rel Perf (10d)", format="%+.2f%%", help="Relative Strength vs SPY (10 Days)"),
+                "Mom (10d)": st.column_config.NumberColumn("Mom (10d)", format="%+.2f", help="Momentum Velocity (10 Days)"),
+                "Rel Perf (20d)": st.column_config.NumberColumn("Rel Perf (20d)", format="%+.2f%%", help="Relative Strength vs SPY (20 Days)"),
+                "Mom (20d)": st.column_config.NumberColumn("Mom (20d)", format="%+.2f", help="Momentum Velocity (20 Days)"),
             }
         )
 
@@ -368,6 +385,7 @@ def run_sector_rotation_app(df_global=None):
             ranking_data.append({
                 "Ticker": stock,
                 "Price": last['Close'],
+                # Keep raw float values for styling logic
                 "Alpha 5d": last.get("True_Alpha_Short", 0),
                 "RVOL 5d": last.get("RVOL_Short", 0),
                 "Alpha 10d": last.get("True_Alpha_Med", 0),
@@ -386,25 +404,36 @@ def run_sector_rotation_app(df_global=None):
         df_disp = pd.DataFrame(ranking_data).sort_values(by='Alpha 5d', ascending=False)
         
         def style_rows(row):
-            styles = [''] * len(row)
-            if row['Alpha 5d'] > 0 and row['RVOL 5d'] > 1.2:
+            # Logic: Alpha 5d > 0 AND RVOL 5d > 1.2
+            # We access the raw float values here
+            alpha = row.get("Alpha 5d", 0)
+            rvol = row.get("RVOL 5d", 0)
+            
+            if alpha > 0 and rvol > 1.2:
                  return ['background-color: #d4edda; color: black;'] * len(row)
-            return styles
+            return [''] * len(row)
 
         st.dataframe(
-            df_disp.style.apply(style_rows, axis=1).format({
-                "Price": "${:.2f}", 
-                "Alpha 5d": "{:+.2f}%", "RVOL 5d": "{:.1f}x",
-                "Alpha 10d": "{:+.2f}%", "RVOL 10d": "{:.1f}x",
-                "Alpha 20d": "{:+.2f}%", "RVOL 20d": "{:.1f}x"
-            }),
-            hide_index=True, use_container_width=True,
+            df_disp.style.apply(style_rows, axis=1),
+            hide_index=True, 
+            use_container_width=True,
             column_config={
-                "Ticker": st.column_config.TextColumn("Ticker"), 
-                "8 EMA": st.column_config.TextColumn("8 EMA", width="small"),
-                "21 EMA": st.column_config.TextColumn("21 EMA", width="small"),
-                "50 MA": st.column_config.TextColumn("50 MA", width="small"),
-                "200 MA": st.column_config.TextColumn("200 MA", width="small")
+                "Ticker": st.column_config.TextColumn("Ticker", help="Stock Symbol"), 
+                "Price": st.column_config.NumberColumn("Price", format="$%.2f", help="Latest Closing Price"),
+                
+                "Alpha 5d": st.column_config.NumberColumn("Alpha 5d", format="%+.2f%%", help="5-Day Performance vs Sector ETF"),
+                "RVOL 5d": st.column_config.NumberColumn("RVOL 5d", format="%.1fx", help="5-Day Relative Volume (vs 20d avg)"),
+                
+                "Alpha 10d": st.column_config.NumberColumn("Alpha 10d", format="%+.2f%%", help="10-Day Performance vs Sector ETF"),
+                "RVOL 10d": st.column_config.NumberColumn("RVOL 10d", format="%.1fx", help="10-Day Relative Volume"),
+                
+                "Alpha 20d": st.column_config.NumberColumn("Alpha 20d", format="%+.2f%%", help="20-Day Performance vs Sector ETF"),
+                "RVOL 20d": st.column_config.NumberColumn("RVOL 20d", format="%.1fx", help="20-Day Relative Volume"),
+                
+                "8 EMA": st.column_config.TextColumn("8 EMA", width="small", help="Price > 8 EMA"),
+                "21 EMA": st.column_config.TextColumn("21 EMA", width="small", help="Price > 21 EMA"),
+                "50 MA": st.column_config.TextColumn("50 MA", width="small", help="Price > 50 SMA"),
+                "200 MA": st.column_config.TextColumn("200 MA", width="small", help="Price > 200 SMA")
             }
         )
     else:
