@@ -17,8 +17,9 @@ def get_ma_signal(price, ma_val):
 def run_sector_rotation_app(df_global=None):
     st.title("🔄 Sector Rotation")
     
-    st.error("🚧 **UNDER CONSTRUCTION** 🚧: Don't use it now.")
-
+    # --- UPDATE: CONSTRUCTION BANNER ---
+    st.error("🚧 **UNDER CONSTRUCTION** 🚧: This page is currently being optimized for faster performance.")
+    
     # 0. Benchmark Control (Session State)
     if "sector_benchmark" not in st.session_state: st.session_state.sector_benchmark = "SPY"
 
@@ -218,6 +219,7 @@ def run_sector_rotation_app(df_global=None):
     """)
     
     summary_data = []
+    input_data_export = []  # <--- UPDATE: STORAGE FOR RAW INPUTS
     
     for theme in all_themes:
         etf_ticker = theme_map.get(theme)
@@ -227,16 +229,32 @@ def run_sector_rotation_app(df_global=None):
         if etf_df is None or etf_df.empty: continue
         
         last = etf_df.iloc[-1]
-        row = {"Theme": theme}
         
+        # 1. Build Display Row (The Formatted Output)
+        row = {"Theme": theme}
         for p, key in [("5d", "Short"), ("10d", "Med"), ("20d", "Long")]:
             row[f"Status ({p})"] = us.get_quadrant_status(etf_df, key)
             row[f"Rel Perf ({p})"] = last.get(f"RRG_Ratio_{key}", 100) - 100
             row[f"Mom ({p})"] = last.get(f"RRG_Mom_{key}", 100) - 100
-
         summary_data.append(row)
+
+        # 2. Build Input Data Row (The Raw Data)
+        input_row = {
+            "Date": last.name.strftime('%Y-%m-%d') if hasattr(last, 'name') else pd.Timestamp.now().strftime('%Y-%m-%d'),
+            "Theme": theme,
+            "Ticker": etf_ticker,
+            "Close_Price": last.get("Close"),
+            "RRG_Ratio_Short (5d)": last.get("RRG_Ratio_Short"),
+            "RRG_Mom_Short (5d)": last.get("RRG_Mom_Short"),
+            "RRG_Ratio_Med (10d)": last.get("RRG_Ratio_Med"),
+            "RRG_Mom_Med (10d)": last.get("RRG_Mom_Med"),
+            "RRG_Ratio_Long (20d)": last.get("RRG_Ratio_Long"),
+            "RRG_Mom_Long (20d)": last.get("RRG_Mom_Long"),
+        }
+        input_data_export.append(input_row)
         
     if summary_data:
+        # --- DISPLAY TABLE ---
         st.dataframe(
             pd.DataFrame(summary_data),
             hide_index=True,
@@ -251,6 +269,21 @@ def run_sector_rotation_app(df_global=None):
                 "Mom (20d)": st.column_config.NumberColumn("Mom (20d)", format="%+.2f"),
             }
         )
+        
+        # --- UPDATE: DOWNLOAD RAW INPUTS BUTTON ---
+        if input_data_export:
+            df_inputs = pd.DataFrame(input_data_export)
+            file_date = pd.Timestamp.now().strftime("%Y%m%d")
+            csv_inputs = df_inputs.to_csv(index=False).encode('utf-8')
+            
+            st.download_button(
+                label="💾 Download Source Data (Inputs)",
+                data=csv_inputs,
+                file_name=f"Sector_Raw_Inputs_{file_date}.csv",
+                mime="text/csv",
+                key="dl_sector_raw_inputs",
+                help="Downloads the raw RRG Ratio and Momentum values used to generate the table above."
+            )
 
     st.markdown("---")
 
