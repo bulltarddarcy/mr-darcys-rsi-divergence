@@ -303,10 +303,11 @@ def run_sector_rotation_app(df_global=None):
                 "RVOL 10d": safe_get("RVOL_Med"),
                 "Alpha 20d": safe_get("True_Alpha_Long"),
                 "RVOL 20d": safe_get("RVOL_Long"),
-                "8 EMA": get_ma_signal(last['Close'], safe_get('EMA_8')),
-                "21 EMA": get_ma_signal(last['Close'], safe_get('EMA_21')),
-                "50 MA": get_ma_signal(last['Close'], safe_get('SMA_50')),
-                "200 MA": get_ma_signal(last['Close'], safe_get('SMA_200'))
+                # Use Ema8/Sma50 because the utils file converts all cols to .title()
+                "8 EMA": get_ma_signal(last['Close'], safe_get('Ema8')),
+                "21 EMA": get_ma_signal(last['Close'], safe_get('Ema21')),
+                "50 MA": get_ma_signal(last['Close'], safe_get('Sma50')),
+                "200 MA": get_ma_signal(last['Close'], safe_get('Sma200'))
             })
         except Exception:
             continue
