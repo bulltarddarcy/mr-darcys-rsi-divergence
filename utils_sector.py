@@ -93,10 +93,10 @@ class SectorDataManager:
             buffer = get_gdrive_binary_data(url)
             if buffer:
                 df = pd.read_csv(buffer, engine='c')
-                # Assume Col 0 = Ticker, Col 1 = File ID
+                # Assume Col 0 = Ticker Key, Col 1 = File ID
                 if len(df.columns) >= 2:
-                    # Normalized Key: UPPERCASE and STRIPPED for reliable lookup
-                    t_map = dict(zip(df.iloc[:, 0].astype(str).str.strip().str.upper(), 
+                    # UPDATED: Do NOT force .upper() on the keys, preserve 'SPY_parquet' casing
+                    t_map = dict(zip(df.iloc[:, 0].astype(str).str.strip(), 
                                      df.iloc[:, 1].astype(str).str.strip()))
                     self.ticker_map = t_map
                     return t_map
@@ -266,49 +266,47 @@ def fetch_and_process_universe(benchmark_ticker="SPY"):
     missing_tickers = []
 
     # --- 1. ROBUST BENCHMARK LOOKUP ---
-    # Try all likely variations of the name
-    possible_keys = [
-        benchmark_ticker,                       # SPY
-        f"{benchmark_ticker}_PARQUET",          # SPY_PARQUET (User requested)
-        f"{benchmark_ticker}.PARQUET",          # SPY.PARQUET
+    # Prioritize the exact key format provided by user: "SPY_parquet"
+    primary_key = f"{benchmark_ticker}_parquet"
+    
+    # Fallback keys just in case
+    fallback_keys = [
+        benchmark_ticker,                       # SPY (direct)
+        f"{benchmark_ticker}_PARQUET",          # SPY_PARQUET (all caps)
         f"PARQUET_{benchmark_ticker}"           # PARQUET_SPY
     ]
     
-    bench_id = None
-    for key in possible_keys:
-        if key in t_map:
-            bench_id = t_map[key]
-            break
-            
-    # Final fallback: Look for key that CONTAINS ticker + PARQUET
+    bench_id = t_map.get(primary_key)
+    
     if not bench_id:
-        for k, v in t_map.items():
-            if benchmark_ticker in k and "PARQUET" in k:
-                bench_id = v
+        for k in fallback_keys:
+            if k in t_map:
+                bench_id = t_map[k]
                 break
 
     bench_df = _fetch_single_parquet(benchmark_ticker, bench_id)
     if bench_df is None or bench_df.empty:
         # Critical failure if Benchmark is missing, cannot calculate RS/Alpha
-        return {}, [f"CRITICAL: {benchmark_ticker} (Benchmark) not found. Tried keys: {possible_keys}"], theme_map, uni_df
+        return {}, [f"CRITICAL: {benchmark_ticker} (Benchmark) not found. Tried key: '{primary_key}'"], theme_map, uni_df
 
     # Process Benchmark
     bench_df = calc.process_dataframe(bench_df)
     data_cache[benchmark_ticker] = bench_df
 
-    # 2. Identify Missing Tickers (Using same robust logic)
+    # 2. Identify Missing Tickers (Using same specific logic)
     valid_tickers = []
     
     for t in tickers:
         # Skip benchmark as we already have it
         if t == benchmark_ticker: continue
         
-        # Robust lookup for universe tickers too
-        tid = None
-        # Order of preference: Exact -> _PARQUET -> PARQUET_
-        if t in t_map: tid = t_map[t]
-        elif f"{t}_PARQUET" in t_map: tid = t_map[f"{t}_PARQUET"]
-        elif f"PARQUET_{t}" in t_map: tid = t_map[f"PARQUET_{t}"]
+        # Robust lookup: TICKER_parquet
+        tid = t_map.get(f"{t}_parquet")
+        
+        # Fallbacks if not found
+        if not tid:
+            if t in t_map: tid = t_map[t]
+            elif f"{t}_PARQUET" in t_map: tid = t_map[f"{t}_PARQUET"]
         
         if tid:
             valid_tickers.append((t, tid))
