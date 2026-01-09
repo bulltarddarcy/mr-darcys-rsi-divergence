@@ -10,6 +10,9 @@ from datetime import date, timedelta
 from io import BytesIO
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+# --- IMPORT SHARED UTILS ---
+from utils_shared import get_gdrive_binary_data, get_table_height
+
 # --- CONSTANTS ---
 VOL_SMA_PERIOD = 30
 EMA8_PERIOD = 8
@@ -18,64 +21,7 @@ EMA21_PERIOD = 21
 # REFRESH TIME: 600 seconds = 10 minutes
 CACHE_TTL = 600 
 
-# --- PERFORMANCE OPTIMIZATION: GLOBAL SESSION ---
-# Reusing the session enables HTTP Keep-Alive for faster Drive downloads.
-GLOBAL_SESSION = requests.Session()
-
 # --- DATA LOADERS & GOOGLE DRIVE UTILS ---
-
-def get_gdrive_binary_data(url):
-    """
-    Robust Google Drive downloader using a global session for speed.
-    """
-    try:
-        # 1. Extract ID
-        match = re.search(r'/d/([a-zA-Z0-9_-]{25,})', url)
-        if not match:
-            match = re.search(r'id=([a-zA-Z0-9_-]{25,})', url)
-            
-        if not match:
-            st.error(f"Invalid Google Drive URL: {url}")
-            return None
-            
-        file_id = match.group(1)
-        download_url = "https://drive.google.com/uc?export=download"
-        
-        # 2. First Attempt (Using Global Session)
-        response = GLOBAL_SESSION.get(download_url, params={'id': file_id}, stream=True, timeout=30)
-        
-        # 3. Check for "Virus Scan" HTML Page
-        if "text/html" in response.headers.get("Content-Type", "").lower():
-            content = response.text
-            token_match = re.search(r'confirm=([a-zA-Z0-9_]+)', content)
-            
-            if token_match:
-                token = token_match.group(1)
-                params = {'id': file_id, 'confirm': token}
-                response = GLOBAL_SESSION.get(download_url, params=params, stream=True, timeout=30)
-            else:
-                for key, value in GLOBAL_SESSION.cookies.items():
-                    if key.startswith('download_warning'):
-                        params = {'id': file_id, 'confirm': value}
-                        response = GLOBAL_SESSION.get(download_url, params=params, stream=True, timeout=30)
-                        break
-
-        # 4. Final Validation
-        if response.status_code == 200:
-            try:
-                # Peek first chunk to ensure not HTML
-                chunk = next(response.iter_content(chunk_size=100), b"")
-                if chunk.strip().startswith(b"<!DOCTYPE"):
-                    return None
-                return BytesIO(chunk + response.raw.read())
-            except StopIteration:
-                return None
-                
-        return None
-
-    except Exception as e:
-        print(f"Download Exception: {e}")
-        return None
 
 @st.cache_data(ttl=CACHE_TTL)
 def get_parquet_config():
@@ -277,12 +223,6 @@ def parse_periods(periods_str):
         return sorted(list(set([int(x.strip()) for x in periods_str.split(',') if x.strip().isdigit()])))
     except:
         return [5, 21, 63, 126]
-
-def get_table_height(df, max_rows=30):
-    row_count = len(df)
-    if row_count == 0: return 100
-    display_rows = min(row_count, max_rows)
-    return (display_rows + 1) * 35 + 5
 
 @st.cache_data(ttl=CACHE_TTL)
 def get_expiry_color_map():
