@@ -116,16 +116,20 @@ class SectorAlphaCalculator:
         if df is None or df.empty: return None
 
         # 1. Normalize Columns (Source Parquet -> App Standard)
-        # Source: EMA8, SMA50, Close | App: EMA_8, SMA_50, Close
+        # We ensure they are UPPERCASE first in the fetch function, so we map UPPER -> Proper Keys
         col_map = {
-            'EMA8': 'EMA_8', 'EMA21': 'EMA_21',
-            'SMA50': 'SMA_50', 'SMA100': 'SMA_100', 'SMA200': 'SMA_200',
-            'RSI14': 'RSI_14', 'RSI': 'RSI_14'
+            'EMA8': 'EMA_8', 
+            'EMA21': 'EMA_21',
+            'SMA50': 'SMA_50', 
+            'SMA100': 'SMA_100', 
+            'SMA200': 'SMA_200',
+            'RSI14': 'RSI_14', 
+            'RSI': 'RSI_14'
         }
         # Rename only if they exist
         df = df.rename(columns={k: v for k, v in col_map.items() if k in df.columns})
 
-        # Ensure 'Close' exists
+        # Ensure 'Close' exists (Mapped from CLOSE in fetch)
         if 'Close' not in df.columns and 'CLOSE' in df.columns:
             df['Close'] = df['CLOSE']
         
@@ -133,6 +137,7 @@ class SectorAlphaCalculator:
         # We assume EMA/SMA are already in the parquet, so we skip those to save time.
         
         # Daily Range % (ADR)
+        # Check for High/Low (Mapped from HIGH/LOW in fetch)
         if 'High' in df.columns and 'Low' in df.columns:
             daily_range_pct = ((df['High'] - df['Low']) / df['Low']) * 100
             df['ADR_Pct'] = daily_range_pct.rolling(window=ATR_WINDOW).mean()
@@ -229,9 +234,9 @@ class SectorAlphaCalculator:
 def fetch_and_process_universe(benchmark_ticker="SPY"):
     """
     Optimized Data Pipeline:
-    1. Loads Universe Config (to know which stocks belong to which sector).
-    2. Downloads ONE large Parquet file (PARQUET_SECTOR_ROTATION) containing all history.
-    3. Filters data in memory to calculate RS/Alpha.
+    1. Loads Universe Config.
+    2. Downloads ONE large Parquet file (PARQUET_SECTOR_ROTATION).
+    3. STANDARDIZES columns to ensure EMA8/SMA50 are found.
     """
     dm = SectorDataManager()
     uni_df, tickers, theme_map = dm.load_universe(benchmark_ticker)
@@ -256,13 +261,24 @@ def fetch_and_process_universe(benchmark_ticker="SPY"):
         return {}, [f"Error reading Parquet file: {e}"], theme_map, uni_df
 
     # --- 2. STANDARDIZE MASTER DB ---
-    # Ensure columns are standardized (Ticker, Date, Close, etc.)
-    master_df.columns = [c.strip().title() for c in master_df.columns]
+    # Convert all to UPPERCASE to handle variations (e.g. Ema8 vs EMA8 vs ema8)
+    master_df.columns = [c.strip().upper() for c in master_df.columns]
     
-    # Handle common variations
-    if 'Symbol' in master_df.columns and 'Ticker' not in master_df.columns:
-        master_df.rename(columns={'Symbol': 'Ticker'}, inplace=True)
-        
+    # Map raw UPPERCASE columns to standard TitleCase expected by the app
+    # Note: We leave technicals (EMA8, etc) as UPPERCASE to be caught by process_dataframe
+    rename_map = {
+        'SYMBOL': 'Ticker',
+        'TICKER': 'Ticker',
+        'DATE': 'Date',
+        'CLOSE': 'Close',
+        'ADJ CLOSE': 'Close',
+        'HIGH': 'High',
+        'LOW': 'Low',
+        'VOLUME': 'Volume'
+    }
+    master_df.rename(columns=rename_map, inplace=True)
+    
+    # Date Handling
     if 'Date' in master_df.columns:
         master_df['Date'] = pd.to_datetime(master_df['Date'])
         master_df = master_df.set_index('Date').sort_index()
@@ -283,15 +299,12 @@ def fetch_and_process_universe(benchmark_ticker="SPY"):
     bench_df = master_df[master_df['Ticker'] == benchmark_ticker].copy()
     
     if bench_df.empty:
-        # Fallback: Check if user has SPY_PARQUET or similar in the big file under a different name
-        # But usually, it should be there.
         return {}, [f"Benchmark '{benchmark_ticker}' not found in PARQUET_SECTOR_ROTATION"], theme_map, uni_df
 
     bench_df = calc.process_dataframe(bench_df)
     data_cache[benchmark_ticker] = bench_df
 
     # --- 4. PROCESS ETFS (THEMES) ---
-    # We need these processed first so stocks can calculate Alpha against them
     etf_tickers = list(theme_map.values())
     
     for etf in etf_tickers:
@@ -302,7 +315,7 @@ def fetch_and_process_universe(benchmark_ticker="SPY"):
             continue
             
         df = calc.process_dataframe(df)
-        df = calc.calculate_rrg_metrics(df, bench_df) # RRG vs Benchmark
+        df = calc.calculate_rrg_metrics(df, bench_df)
         data_cache[etf] = df
 
     # --- 5. PROCESS STOCKS ---
