@@ -2,11 +2,9 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import yfinance as yf
-import os
 from io import StringIO
 from pathlib import Path
 from datetime import datetime, timedelta
-import time
 
 # ==========================================
 # 1. CONFIGURATION & CONSTANTS
@@ -33,11 +31,9 @@ TIMEFRAMES = {
 }
 
 # Filters
-EXTENDED_THRESHOLD = 3.0
-MIN_DOLLAR_VOLUME = 2_000_000  # Adjusted default
+MIN_DOLLAR_VOLUME = 2_000_000
 
-# Paths (Using a temp directory for Streamlit Cloud compatibility)
-# In cloud apps, local storage is ephemeral. We use a folder that is likely writeable.
+# Paths (Using a temp directory for Cloud compatibility)
 DATA_DIR = Path("sector_data")
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -49,10 +45,7 @@ class SectorDataManager:
         self.data_path = DATA_DIR
 
     def load_universe(self):
-        """
-        Reads the universe from st.secrets["SECTOR_UNIVERSE"].
-        Returns: df, tickers, theme_map
-        """
+        """Reads the universe from st.secrets['SECTOR_UNIVERSE']"""
         csv_content = st.secrets.get("SECTOR_UNIVERSE", "")
         if not csv_content:
             st.error("❌ Secret 'SECTOR_UNIVERSE' is missing or empty.")
@@ -115,7 +108,7 @@ class SectorAlphaCalculator:
         
         # Ensure we have close data
         if 'Close' not in df.columns and 'Adj Close' in df.columns:
-             df['Close'] = df['Adj Close'] # Fallback
+             df['Close'] = df['Adj Close']
 
         # EMAs/SMAs
         df['EMA_8'] = df['Close'].ewm(span=MA_FAST, adjust=False).mean()
@@ -123,22 +116,20 @@ class SectorAlphaCalculator:
         df['SMA_50'] = df['Close'].rolling(window=MA_SLOW).mean()
         df['SMA_200'] = df['Close'].rolling(window=MA_BASE).mean()
         
-        # Volatility
+        # Volatility & RVOL
         daily_range_pct = ((df['High'] - df['Low']) / df['Low']) * 100
         df['ADR_Pct'] = daily_range_pct.rolling(window=ATR_WINDOW).mean()
         
-        # RVOL
         avg_vol = df["Volume"].rolling(window=AVG_VOLUME_WINDOW).mean()
         df["RVOL"] = df["Volume"] / avg_vol
 
-        # Timeframe RVOL
         for label, time_window in TIMEFRAMES.items():
             df[f"RVOL_{label}"] = df["RVOL"].rolling(window=time_window).mean()
         
         return df
 
     def _calc_slope(self, series, window):
-        # Weighted Regression for smoother momentum
+        # Weighted Regression
         x = np.arange(window)
         if window < 10:
             weights = np.ones(window)
@@ -153,7 +144,6 @@ class SectorAlphaCalculator:
     def calculate_rrg_metrics(self, df, bench_df):
         if df.empty or bench_df.empty: return df
         
-        # Use Adj Close for Total Return (ETFs)
         asset_col = 'Adj Close' if 'Adj Close' in df.columns else 'Close'
         bench_col = 'Adj Close' if 'Adj Close' in bench_df.columns else 'Close'
         
@@ -164,17 +154,15 @@ class SectorAlphaCalculator:
         raw_ratio = df[asset_col] / bench[bench_col]
         
         for label, time_window in TIMEFRAMES.items():
-            # RRG Logic
             ratio_mean = raw_ratio.rolling(window=time_window).mean()
             
-            # X-Axis: Trend (Deviation)
+            # X-Axis: Trend
             col_ratio = f"RRG_Ratio_{label}"
             df[col_ratio] = ((raw_ratio - ratio_mean) / ratio_mean) * 100 + 100
             
-            # Y-Axis: Momentum (Velocity)
+            # Y-Axis: Momentum
             raw_slope = self._calc_slope(raw_ratio, time_window)
             velocity = (raw_slope / ratio_mean) * time_window * 100
-            
             col_mom = f"RRG_Mom_{label}"
             df[col_mom] = 100 + velocity
             
@@ -187,17 +175,13 @@ class SectorAlphaCalculator:
         df = df.loc[common_index].copy()
         parent = parent_df.loc[common_index].copy()
         
-        # Use standard Close for price action trading
         df['Pct_Change'] = df['Close'].pct_change(fill_method=None)
         parent['Pct_Change'] = parent['Close'].pct_change(fill_method=None)
         
-        # Beta
         rolling_cov = df['Pct_Change'].rolling(window=BETA_WINDOW).cov(parent['Pct_Change'])
         rolling_var = parent['Pct_Change'].rolling(window=BETA_WINDOW).var()
-        df['Beta'] = rolling_cov / rolling_var
-        df['Beta'] = df['Beta'].fillna(1.0)
+        df['Beta'] = (rolling_cov / rolling_var).fillna(1.0)
         
-        # Alpha
         df['Expected_Return'] = parent['Pct_Change'] * df['Beta']
         df['True_Alpha_1D'] = df['Pct_Change'] - df['Expected_Return']
         
@@ -208,25 +192,21 @@ class SectorAlphaCalculator:
         return df
 
     def run_full_update(self, status_placeholder=None):
-        """
-        Downloads data from YFinance, calculates metrics, saves to disk.
-        """
         uni_df, tickers, theme_map = self.dm.load_universe()
         if not tickers: return
 
         end_date = datetime.today()
         start_date = end_date - timedelta(days=HISTORY_YEARS * 365)
         
-        if status_placeholder: status_placeholder.write(f"⬇️ Downloading data for {len(tickers)} tickers...")
+        if status_placeholder: status_placeholder.write(f"⬇️ Downloading {len(tickers)} tickers...")
         
-        # Batch download
         chunk_size = 50
         data_cache = {}
         
         for i in range(0, len(tickers), chunk_size):
             chunk = tickers[i:i + chunk_size]
             try:
-                # auto_adjust=False to get Adj Close and Close separately
+                # auto_adjust=False to allow separation of Price (Close) and Total Return (Adj Close)
                 data = yf.download(chunk, start=start_date, end=end_date, group_by='ticker', auto_adjust=False, threads=True, progress=False)
                 
                 for t in chunk:
@@ -238,10 +218,8 @@ class SectorAlphaCalculator:
                     if not t_df.empty:
                         t_df.index.name = 'Date'
                         data_cache[t] = t_df
-            except Exception as e:
-                print(f"Batch failed: {e}")
+            except Exception: continue
 
-        # Process Spy
         if status_placeholder: status_placeholder.write("🧮 Calculating Benchmarks...")
         spy_df = data_cache.get(BENCHMARK_TICKER)
         if spy_df is None: 
@@ -251,7 +229,6 @@ class SectorAlphaCalculator:
         spy_df = self.calculate_technical_indicators(spy_df)
         self.dm.save_ticker_data(BENCHMARK_TICKER, spy_df)
 
-        # Process Themes
         themes = uni_df[uni_df['Role'] == 'Etf']['Theme'].unique()
         
         for theme in themes:
@@ -263,7 +240,6 @@ class SectorAlphaCalculator:
             etf_df = self.calculate_rrg_metrics(etf_df, spy_df)
             self.dm.save_ticker_data(etf_ticker, etf_df)
             
-            # Process Stocks in Theme
             stocks = uni_df[(uni_df['Theme'] == theme) & (uni_df['Role'] == 'Stock')]['Ticker'].tolist()
             for stock in stocks:
                 if stock not in data_cache: continue
@@ -271,7 +247,6 @@ class SectorAlphaCalculator:
                 s_df = self.calculate_technical_indicators(s_df)
                 s_df = self.calculate_stock_alpha(s_df, etf_df)
                 
-                # Quality check
                 if 'True_Alpha_1D' in s_df.columns and not s_df['True_Alpha_1D'].dropna().empty:
                     self.dm.save_ticker_data(stock, s_df)
 

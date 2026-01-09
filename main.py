@@ -2502,6 +2502,7 @@ try:
         price_date = "Offline"
 
     # 3. Navigation Setup
+    # Note: Sector Rotation is EXCLUDED here to keep it hidden from the sidebar.
     pg = st.navigation([
         st.Page(lambda: run_database_app(df_global), title="Database", icon="📂", url_path="options_db", default=True),
         st.Page(lambda: run_rankings_app(df_global), title="Rankings", icon="🏆", url_path="rankings"),
@@ -2511,7 +2512,6 @@ try:
         st.Page(lambda: run_rsi_scanner_app(df_global), title="RSI Scanner", icon="🤖", url_path="rsi_scanner"),
         st.Page(lambda: run_seasonality_app(df_global), title="Seasonality", icon="📅", url_path="seasonality"),
         st.Page(lambda: run_ema_distance_app(df_global), title="EMA Distance", icon="📏", url_path="ema_distance"),
-        st.Page(lambda: main_sector.run_sector_rotation_app(df_global), title="Sector Rotation", icon="🔄", url_path="sector_rotation"),
     ])
 
     # 4. Sidebar Captions
@@ -2558,7 +2558,16 @@ try:
         else:
             st.error("Configuration errors detected.")
     
-    pg.run()
+    # 6. ROUTING LOGIC (Hidden Page Handling)
+    # If ?page=sector_rotation is in the URL, run the sector app manually.
+    # Otherwise, run the standard sidebar navigation.
+    # To access: https://your-app.streamlit.app/?page=sector_rotation
+    
+    qp = st.query_params.to_dict()
+    if qp.get("page") == "sector_rotation":
+        main_sector.run_sector_rotation_app(df_global)
+    else:
+        pg.run()
     
     # Global padding at the bottom of the page
     st.markdown("<br><br><br><br>", unsafe_allow_html=True)
