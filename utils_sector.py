@@ -1,348 +1,257 @@
 import streamlit as st
 import pandas as pd
-import utils_sector as us
+import numpy as np
+import plotly.graph_objects as go
+from io import StringIO
+from utils_shared import get_gdrive_binary_data
 
 # ==========================================
-# UI HELPERS
+# 1. CONFIGURATION
 # ==========================================
-def get_ma_signal(price, ma_val):
-    """Returns Emoji based on Price vs MA"""
-    if pd.isna(ma_val) or ma_val == 0:
-        return "⚠️" 
-    return "✅" if price > ma_val else "❌"
+TIMEFRAMES = {
+    'Short': 5,    # 5 Trading Days
+    'Med':   10,   # 10 Trading Days
+    'Long':  20    # 20 Trading Days
+}
+MIN_DOLLAR_VOLUME = 2_000_000
+BETA_WINDOW = 60
 
 # ==========================================
-# MAIN PAGE FUNCTION
+# 2. DATA LOADING (LAYER 1 - RAW IO)
 # ==========================================
-def run_sector_rotation_app(df_global=None):
-    st.title("🔄 Sector Rotation")
-    
-    # 0. Benchmark Control (Session State)
-    if "sector_benchmark" not in st.session_state: st.session_state.sector_benchmark = "SPY"
 
-    # 1. Automatic Data Fetch (Cached 10m)
-    # UPDATED: Calls the new optimized function 'get_computed_sector_data'
-    with st.spinner(f"Calculating Sector Metrics ({st.session_state.sector_benchmark})..."):
-        etf_data_cache, missing_tickers, theme_map, uni_df = us.get_computed_sector_data(st.session_state.sector_benchmark)
+@st.cache_data(ttl=3600, show_spinner="Downloading Sector Universe...")
+def load_universe_config():
+    """Loads the universe config from Secrets."""
+    secret_val = st.secrets.get("SECTOR_UNIVERSE", "")
+    if not secret_val: return pd.DataFrame(), {}
 
-    if uni_df.empty:
-        st.warning("⚠️ SECTOR_UNIVERSE secret is missing or empty.")
-        return
-
-    # 2. Check for Missing Data
-    if missing_tickers:
-        with st.expander(f"⚠️ Missing Data for {len(missing_tickers)} Tickers", expanded=False):
-            st.caption("The following tickers were in your Universe list but no matching Parquet file was found in the Ticker Map.")
-            st.write(", ".join(missing_tickers))
-
-    # 3. Session State for Controls
-    if "sector_view" not in st.session_state: st.session_state.sector_view = "5 Days"
-    if "sector_trails" not in st.session_state: st.session_state.sector_trails = False
-    
-    # Ensure target is valid
-    all_themes = sorted(list(theme_map.keys()))
-    if not all_themes:
-        st.error("No valid themes found. Check data sources.")
-        return
-
-    if "sector_target" not in st.session_state or st.session_state.sector_target not in all_themes: 
-        st.session_state.sector_target = all_themes[0]
-    
-    if "sector_theme_filter_widget" not in st.session_state:
-        st.session_state.sector_theme_filter_widget = all_themes
-
-    # --- MAIN SECTION START ---
-    st.subheader("Rotation Quadrant Graphic")
-
-    # 1. GRAPHIC USER GUIDE
-    with st.expander("🗺️ Graphic User Guide", expanded=False):
-        st.markdown(f"""
-        **🧮 How It Works (The Math)**
-        This chart does **not** show price. It shows **Relative Performance** against **{st.session_state.sector_benchmark}**.
-        * **X-Axis (Trend):** Are we beating the benchmark?
-            * `> 100`: Outperforming {st.session_state.sector_benchmark}.
-            * `< 100`: Underperforming {st.session_state.sector_benchmark}.
-        * **Y-Axis (Momentum):** How fast is the trend changing?
-            * `> 100`: Gaining speed (Acceleration).
-            * `< 100`: Losing speed (Deceleration).
-        
-        *Note: Calculations use Weighted Regression (Today's price weighted 3x vs 20 days ago).*
-        
-        **📊 Quadrant Guide**
-        * 🟢 **LEADING (Top Right):** Strong Trend + Accelerating Momentum. The Winners.
-        * 🟡 **WEAKENING (Bottom Right):** Strong Trend, but losing steam. Often a place to take profits.
-        * 🔴 **LAGGING (Bottom Left):** Weak Trend + Decelerating. The Losers.
-        * 🔵 **IMPROVING (Top Left):** Weak Trend, but Momentum is waking up. "Turnarounds".
-        """)
-
-    # CONTROLS
-    with st.expander("⚙️ Chart Inputs & Filters", expanded=False):
-        col_inputs, col_filters = st.columns([1, 1])
-        
-        # --- LEFT COLUMN: Timeframe, Trails ---
-        with col_inputs:
-            # Benchmark Selection
-            st.markdown("**Benchmark Ticker**")
-            new_benchmark = st.radio(
-                "Benchmark",
-                ["SPY", "QQQ"],
-                horizontal=True,
-                index=["SPY", "QQQ"].index(st.session_state.sector_benchmark) if st.session_state.sector_benchmark in ["SPY", "QQQ"] else 0,
-                key="sector_benchmark_radio",
-                label_visibility="collapsed"
-            )
-            
-            # UPDATED: If changed, rerun to update session state and fetch new data
-            if new_benchmark != st.session_state.sector_benchmark:
-                st.session_state.sector_benchmark = new_benchmark
-                # Note: We do NOT clear cache here anymore because the download cache is separate now
-                st.rerun()
-
-            st.markdown("---")
-            
-            st.markdown("**Timeframe Window**") 
-            st.session_state.sector_view = st.radio(
-                "Timeframe Window", 
-                ["5 Days", "10 Days", "20 Days"], 
-                horizontal=True, 
-                key="timeframe_radio",
-                label_visibility="collapsed"
-            )
-            
-            st.markdown('<div style="margin-top: 5px;"></div>', unsafe_allow_html=True)
-            st.session_state.sector_trails = st.checkbox("Show 3-Day Trails", value=st.session_state.sector_trails)
-            
-            # Display Last Data Date
-            if st.session_state.sector_benchmark in etf_data_cache and not etf_data_cache[st.session_state.sector_benchmark].empty:
-                last_dt = etf_data_cache[st.session_state.sector_benchmark].index[-1].strftime("%Y-%m-%d")
-                st.caption(f"📅 Data Date: {last_dt}")
-
-        # --- RIGHT COLUMN: Sector Filters ---
-        with col_filters:
-            st.markdown("**Sectors Shown**")
-            btn_col1, btn_col2, btn_col3 = st.columns(3)
-            
-            with btn_col1:
-                if st.button("➕ Everything", use_container_width=True):
-                    st.session_state.sector_theme_filter_widget = all_themes
-                    st.rerun()
-
-            with btn_col2:
-                if st.button("⭐ Big 11", use_container_width=True):
-                    big_11_list = [
-                        "Communications", "Consumer Discretionary", "Consumer Staples", 
-                        "Energy", "Financials", "Healthcare", "Industrials", 
-                        "Materials", "Real Estate", "Technology", "Utilities"
-                    ]
-                    valid_themes = [t for t in big_11_list if t in all_themes]
-                    st.session_state.sector_theme_filter_widget = valid_themes
-                    st.rerun()
-
-            with btn_col3:
-                if st.button("➖ Clear", use_container_width=True):
-                    st.session_state.sector_theme_filter_widget = []
-                    st.rerun()
-            
-            sel_themes = st.multiselect(
-                "Select Themes", all_themes, 
-                key="sector_theme_filter_widget", label_visibility="collapsed"
-            )
-    
-    filtered_map = {k: v for k, v in theme_map.items() if k in sel_themes}
-    timeframe_map = {"5 Days": "Short", "10 Days": "Med", "20 Days": "Long"}
-    view_key = timeframe_map[st.session_state.sector_view]
-
-    # --- MOMENTUM SCANS ---
-    with st.expander("🚀 Momentum Scans", expanded=False):
-        inc_mom, neut_mom, dec_mom = [], [], []
-        
-        for theme, ticker in theme_map.items():
-            # Use Cache
-            df = etf_data_cache.get(ticker)
-            if df is None or df.empty or "RRG_Mom_Short" not in df.columns: continue
-            
-            last = df.iloc[-1]
-            m5 = last.get("RRG_Mom_Short",0)
-            m10 = last.get("RRG_Mom_Med",0)
-            m20 = last.get("RRG_Mom_Long",0)
-            
-            shift = m5 - m20
-            setup = us.classify_setup(df)
-            icon = setup.split()[0] if setup else ""
-            item = {"theme": theme, "shift": shift, "icon": icon}
-            
-            if m5 > m10 > m20: inc_mom.append(item)
-            elif m5 < m10 < m20: dec_mom.append(item)
-            else: neut_mom.append(item)
-
-        inc_mom.sort(key=lambda x: x['shift'], reverse=True)
-        neut_mom.sort(key=lambda x: x['shift'], reverse=True)
-        dec_mom.sort(key=lambda x: x['shift'], reverse=False)
-
-        m_col1, m_col2, m_col3 = st.columns(3)
-        with m_col1: 
-            st.success(f"📈 Increasing ({len(inc_mom)})")
-            for i in inc_mom: st.caption(f"{i['theme']} {i['icon']} **({i['shift']:+.1f})**")
-        with m_col2:
-            st.warning(f"⚖️ Neutral / Mixed ({len(neut_mom)})")
-            for i in neut_mom: st.caption(f"{i['theme']} {i['icon']} **({i['shift']:+.1f})**")
-        with m_col3:
-            st.error(f"🔻 Decreasing ({len(dec_mom)})")
-            for i in dec_mom: st.caption(f"{i['theme']} {i['icon']} **({i['shift']:+.1f})**")
-
-    # RRG CHART
-    chart_placeholder = st.empty()
-    with chart_placeholder:
-        # Pass the cache into the plotting function
-        fig = us.plot_simple_rrg(etf_data_cache, filtered_map, view_key, st.session_state.sector_trails)
-        chart_event = st.plotly_chart(fig, use_container_width=True, on_select="rerun", selection_mode="points")
-    
-    if chart_event and chart_event.selection and chart_event.selection.points:
-        point = chart_event.selection.points[0]
-        if "customdata" in point:
-            st.session_state.sector_target = point["customdata"]
-        elif "text" in point:
-            st.session_state.sector_target = point["text"]
-    
-    st.divider()
-
-    # --- ALL THEMES PERFORMANCE ---
-    st.subheader("All Themes Performance")
-    
-    st.markdown(f"""
-    * **Rel Perf (Relative Performance):** Measures the strength of the trend against {st.session_state.sector_benchmark}. 
-      Values positive (>0) indicate outperformance; negative (<0) indicate underperformance.
-    * **Mom (Momentum):** Measures the rate of change (velocity) of the trend. 
-      Values positive (>0) indicate acceleration; negative (<0) indicate deceleration.
-    """)
-    
-    summary_data = []
-    
-    for theme in all_themes:
-        etf_ticker = theme_map.get(theme)
-        if not etf_ticker: continue
-        etf_df = etf_data_cache.get(etf_ticker) # Use Cache
-        
-        if etf_df is None or etf_df.empty: continue
-        
-        last = etf_df.iloc[-1]
-        row = {"Theme": theme}
-        
-        for p, key in [("5d", "Short"), ("10d", "Med"), ("20d", "Long")]:
-            row[f"Status ({p})"] = us.get_quadrant_status(etf_df, key)
-            row[f"Rel Perf ({p})"] = last.get(f"RRG_Ratio_{key}", 100) - 100
-            row[f"Mom ({p})"] = last.get(f"RRG_Mom_{key}", 100) - 100
-
-        summary_data.append(row)
-        
-    if summary_data:
-        st.dataframe(
-            pd.DataFrame(summary_data),
-            hide_index=True,
-            use_container_width=True,
-            column_config={
-                "Theme": st.column_config.TextColumn("Theme"), 
-                "Rel Perf (5d)": st.column_config.NumberColumn("Rel Perf (5d)", format="%+.2f%%"),
-                "Mom (5d)": st.column_config.NumberColumn("Mom (5d)", format="%+.2f"),
-                "Rel Perf (10d)": st.column_config.NumberColumn("Rel Perf (10d)", format="%+.2f%%"),
-                "Mom (10d)": st.column_config.NumberColumn("Mom (10d)", format="%+.2f"),
-                "Rel Perf (20d)": st.column_config.NumberColumn("Rel Perf (20d)", format="%+.2f%%"),
-                "Mom (20d)": st.column_config.NumberColumn("Mom (20d)", format="%+.2f"),
-            }
-        )
-
-    st.markdown("---")
-
-    # --- EXPLORER SECTION ---
-    st.subheader(f"🔎 Explorer: Theme Drilldown")
-    
-    search_t = st.text_input("Input a ticker to find its theme(s)", placeholder="NVDA...").strip().upper()
-    if search_t:
-        matches = uni_df[uni_df['Ticker'] == search_t]
-        if not matches.empty:
-            found = matches['Theme'].unique()
-            st.success(f"📍 Found **{search_t}** in: **{', '.join(found)}**")
-            if len(found) > 0: st.session_state.sector_target = found[0]
+    try:
+        if secret_val.strip().startswith("http"):
+            if "docs.google.com/spreadsheets" in secret_val:
+                file_id = secret_val.split("/d/")[1].split("/")[0]
+                url = f"https://docs.google.com/spreadsheets/d/{file_id}/export?format=csv"
+            elif "drive.google.com" in secret_val:
+                file_id = secret_val.split("/d/")[1].split("/")[0]
+                url = f"https://drive.google.com/uc?id={file_id}&export=download"
+            else: url = secret_val
+            df = pd.read_csv(url)
         else:
-            st.warning(f"Ticker {search_t} not found.")
+            df = pd.read_csv(StringIO(secret_val))
+        
+        df.columns = [c.strip() for c in df.columns]
+        df['Ticker'] = df['Ticker'].astype(str).str.strip().str.upper()
+        df['Theme'] = df['Theme'].astype(str).str.strip()
+        df['Role'] = df['Role'].astype(str).str.strip().str.title() if 'Role' in df.columns else 'Stock'
+        
+        etf_rows = df[df['Role'] == 'Etf']
+        theme_map = dict(zip(etf_rows['Theme'], etf_rows['Ticker'])) if not etf_rows.empty else {}
+        
+        return df, theme_map
+    except Exception as e:
+        return pd.DataFrame(), {}
 
-    curr_idx = all_themes.index(st.session_state.sector_target) if st.session_state.sector_target in all_themes else 0
-    new_target = st.selectbox("Select Theme to View Stocks", all_themes, index=curr_idx)
-    if new_target != st.session_state.sector_target:
-        st.session_state.sector_target = new_target
+@st.cache_data(ttl=3600, show_spinner="Downloading Master Database...")
+def load_raw_sector_data():
+    """
+    Downloads Parquet and renames pre-calculated columns.
+    """
+    db_url = st.secrets.get("PARQUET_SECTOR_ROTATION")
+    if not db_url: return None
 
-    # --- STOCK TABLE ---
-    # Filter tickers for current theme
-    stock_tickers = uni_df[(uni_df['Theme'] == st.session_state.sector_target) & (uni_df['Role'] == 'Stock')]['Ticker'].tolist()
+    buffer = get_gdrive_binary_data(db_url)
+    if not buffer: return None
     
-    ranking_data = []
+    try:
+        df = pd.read_parquet(buffer)
+        
+        # 1. Standardize Header
+        df.columns = [c.strip().upper() for c in df.columns]
+        
+        # 2. Map Source Columns -> App Standard
+        rename_map = {
+            'SYMBOL': 'Ticker', 'TICKER': 'Ticker',
+            'DATE': 'Date', 'CLOSE': 'Close', 'ADJ CLOSE': 'Close',
+            'HIGH': 'High', 'LOW': 'Low', 'VOLUME': 'Volume',
+            # Pre-Calculated Technicals
+            'EMA8': 'EMA_8', 
+            'EMA21': 'EMA_21',
+            'SMA50': 'SMA_50', 
+            'SMA200': 'SMA_200',
+            'RSI14': 'RSI_14',
+            'RSI': 'RSI_14'
+        }
+        df.rename(columns={k:v for k,v in rename_map.items() if k in df.columns}, inplace=True)
+        
+        if 'Date' in df.columns:
+            df['Date'] = pd.to_datetime(df['Date'])
+            df = df.sort_values(['Ticker', 'Date'])
+            
+        df['Ticker'] = df['Ticker'].astype(str).str.upper().str.strip()
+        
+        return df
+    except Exception:
+        return None
+
+# ==========================================
+# 3. PROCESSING (LAYER 2 - MATH)
+# ==========================================
+
+def _calc_rrg_metrics(close_series, bench_series):
+    """Vectorized RRG calculation."""
+    ratio = close_series / bench_series
+    results = {}
     
-    for stock in stock_tickers:
-        sdf = etf_data_cache.get(stock) # Already fetched in initial batch
+    for label, w in TIMEFRAMES.items():
+        # Trend: Ratio vs Moving Average of Ratio
+        ma_ratio = ratio.rolling(window=w).mean()
+        results[f"RRG_Ratio_{label}"] = ((ratio - ma_ratio) / ma_ratio) * 100 + 100
         
-        if sdf is None or sdf.empty: continue
+        # Momentum: ROC of the Ratio
+        results[f"RRG_Mom_{label}"] = (ratio.pct_change(periods=w) * 100) + 100
         
-        try:
-            # Volume Filter (Assuming min 20 days data available)
-            if len(sdf) < 20: continue
-            
-            avg_vol = sdf['Volume'].tail(20).mean()
-            avg_price = sdf['Close'].tail(20).mean()
-            if (avg_vol * avg_price) < us.MIN_DOLLAR_VOLUME: continue
-            
-            last = sdf.iloc[-1]
-            
-            def safe_get(key, default=0): return last.get(key, default)
+    return pd.DataFrame(results, index=close_series.index)
 
-            ranking_data.append({
-                "Ticker": stock,
-                "Price": last['Close'],
-                "Alpha 5d": safe_get("True_Alpha_Short"),
-                "RVOL 5d": safe_get("RVOL_Short"),
-                "Alpha 10d": safe_get("True_Alpha_Med"),
-                "RVOL 10d": safe_get("RVOL_Med"),
-                "Alpha 20d": safe_get("True_Alpha_Long"),
-                "RVOL 20d": safe_get("RVOL_Long"),
-                "8 EMA": get_ma_signal(last['Close'], safe_get('EMA_8')),
-                "21 EMA": get_ma_signal(last['Close'], safe_get('EMA_21')),
-                "50 MA": get_ma_signal(last['Close'], safe_get('SMA_50')),
-                "200 MA": get_ma_signal(last['Close'], safe_get('SMA_200'))
-            })
-        except Exception:
-            continue
+@st.cache_data(ttl=1200, show_spinner="Calculating Alpha & Beta...")
+def get_computed_sector_data(benchmark_ticker):
+    """
+    Uses pre-calculated technicals from parquet. 
+    Only calculates Alpha/Beta/RVOL on the fly.
+    """
+    master_df = load_raw_sector_data()
+    uni_df, theme_map = load_universe_config()
+    
+    if master_df is None or uni_df.empty: return {}, [], theme_map, uni_df
 
-    if ranking_data:
-        df_disp = pd.DataFrame(ranking_data).sort_values(by='Alpha 5d', ascending=False)
+    # 1. Calculate RVOL (Vectorized)
+    # We assume Volume is there, but RVOL isn't pre-calc
+    if 'RVOL' not in master_df.columns:
+        master_df['Vol_Avg'] = master_df.groupby('Ticker')['Volume'].transform(lambda x: x.rolling(20).mean())
+        master_df['RVOL'] = master_df['Volume'] / master_df['Vol_Avg']
+
+    # 2. Pivot for Fast Alpha Math (Wide Format)
+    df_close_wide = master_df.pivot(index='Date', columns='Ticker', values='Close').ffill()
+    df_rets_wide = df_close_wide.pct_change()
+    
+    if benchmark_ticker not in df_close_wide.columns:
+        return {}, [f"{benchmark_ticker} missing"], theme_map, uni_df
+
+    bench_series = df_close_wide[benchmark_ticker]
+    data_cache = {}
+
+    # 3. Process ETFs (RRG)
+    etf_tickers = list(theme_map.values())
+    for etf in etf_tickers:
+        if etf not in df_close_wide.columns: continue
         
-        def highlight_cells(row):
-            styles = pd.Series('', index=row.index)
-            color = 'background-color: #d4edda; color: black;'
-            if row["Alpha 5d"] > 0 and row["RVOL 5d"] > 1.2:
-                styles["Alpha 5d"] = color; styles["RVOL 5d"] = color
-            if row["Alpha 10d"] > 0 and row["RVOL 10d"] > 1.2:
-                styles["Alpha 10d"] = color; styles["RVOL 10d"] = color
-            if row["Alpha 20d"] > 0 and row["RVOL 20d"] > 1.2:
-                styles["Alpha 20d"] = color; styles["RVOL 20d"] = color
-            return styles
+        subset = master_df[master_df['Ticker'] == etf].copy().set_index('Date').sort_index()
+        
+        # Calc RRG Metrics vs Benchmark
+        aligned_bench = bench_series.loc[subset.index]
+        rrg_metrics = _calc_rrg_metrics(subset['Close'], aligned_bench)
+        
+        data_cache[etf] = pd.concat([subset, rrg_metrics], axis=1)
 
-        st.dataframe(
-            df_disp.style.apply(highlight_cells, axis=1),
-            hide_index=True, 
-            use_container_width=True,
-            column_config={
-                "Ticker": st.column_config.TextColumn("Ticker"), 
-                "Price": st.column_config.NumberColumn("Price", format="$%.2f"),
-                "Alpha 5d": st.column_config.NumberColumn("Alpha 5d", format="%+.2f%%"),
-                "RVOL 5d": st.column_config.NumberColumn("RVOL 5d", format="%.1fx"),
-                "Alpha 10d": st.column_config.NumberColumn("Alpha 10d", format="%+.2f%%"),
-                "RVOL 10d": st.column_config.NumberColumn("RVOL 10d", format="%.1fx"),
-                "Alpha 20d": st.column_config.NumberColumn("Alpha 20d", format="%+.2f%%"),
-                "RVOL 20d": st.column_config.NumberColumn("RVOL 20d", format="%.1fx"),
-                "8 EMA": st.column_config.TextColumn("8 EMA", width="small"),
-                "21 EMA": st.column_config.TextColumn("21 EMA", width="small"),
-                "50 MA": st.column_config.TextColumn("50 MA", width="small"),
-                "200 MA": st.column_config.TextColumn("200 MA", width="small")
-            }
-        )
-    else:
-        st.info(f"No stocks found for {st.session_state.sector_target} (or filtered by volume).")
+    # 4. Process Stocks (Alpha/Beta)
+    stocks = uni_df[uni_df['Role'] == 'Stock']
+    
+    # Pre-calculate Rolling RVOLs for display
+    for k, w in TIMEFRAMES.items():
+        master_df[f"RVOL_{k}"] = master_df.groupby('Ticker')['RVOL'].transform(lambda x: x.rolling(w).mean())
+
+    for _, row in stocks.iterrows():
+        stock = row['Ticker']
+        theme = row['Theme']
+        parent_etf = theme_map.get(theme, benchmark_ticker)
+        
+        if stock not in df_close_wide.columns: continue
+        if parent_etf not in df_close_wide.columns: parent_etf = benchmark_ticker
+        
+        subset = master_df[master_df['Ticker'] == stock].copy().set_index('Date').sort_index()
+        
+        # Alpha/Beta Calculation
+        stock_rets = df_rets_wide[stock]
+        parent_rets = df_rets_wide[parent_etf]
+        
+        rolling_cov = stock_rets.rolling(BETA_WINDOW).cov(parent_rets)
+        rolling_var = parent_rets.rolling(BETA_WINDOW).var()
+        beta = (rolling_cov / rolling_var).fillna(1.0)
+        
+        true_alpha = stock_rets - (parent_rets * beta)
+        
+        subset['Beta'] = beta
+        subset['True_Alpha_1D'] = true_alpha
+        
+        for k, w in TIMEFRAMES.items():
+            subset[f"True_Alpha_{k}"] = true_alpha.rolling(w).sum() * 100
+            
+        data_cache[stock] = subset
+
+    return data_cache, [], theme_map, uni_df
+
+# ==========================================
+# 4. VISUALIZATION HELPERS
+# ==========================================
+def classify_setup(df):
+    if df is None or df.empty: return None
+    last = df.iloc[-1]
+    if "RRG_Mom_Short" not in last: return None
+    m5 = last["RRG_Mom_Short"]
+    m10 = last.get("RRG_Mom_Med", 0)
+    m20 = last.get("RRG_Mom_Long", 0)
+    r20 = last.get("RRG_Ratio_Long", 100)
+    
+    if m20 < 100 and m5 > 100 and m5 > (m20 + 2): return "🪝 J-Hook"
+    if r20 > 100 and m5 > 100 and m5 > m10: return "🚩 Bull Flag"
+    if m5 > m10 and m10 > m20 and m20 > 100: return "🚀 Rocket"
+    return None 
+
+def get_quadrant_status(df, key):
+    if df is None or df.empty: return "N/A"
+    r = df[f"RRG_Ratio_{key}"].iloc[-1]
+    m = df[f"RRG_Mom_{key}"].iloc[-1]
+    if r >= 100 and m >= 100: return "🟢 Leading"
+    elif r < 100 and m >= 100: return "🔵 Improving"
+    elif r < 100 and m < 100: return "🔴 Lagging"
+    return "🟡 Weakening"
+
+def plot_simple_rrg(data_cache, target_map, view_key, show_trails):
+    fig = go.Figure()
+    all_x, all_y = [], []
+    col_x, col_y = f"RRG_Ratio_{view_key}", f"RRG_Mom_{view_key}"
+    
+    for theme, ticker in target_map.items():
+        df = data_cache.get(ticker)
+        if df is None or df.empty or col_x not in df.columns: continue
+        
+        sl = df.tail(3) if show_trails else df.tail(1)
+        xs, ys = sl[col_x].tolist(), sl[col_y].tolist()
+        all_x.extend(xs); all_y.extend(ys)
+        
+        lx, ly = xs[-1], ys[-1]
+        color = '#00CC96' if lx>100 and ly>100 else '#636EFA' if lx<100 and ly>100 else '#FFA15A' if lx>100 and ly<100 else '#EF553B'
+        
+        fig.add_trace(go.Scatter(
+            x=xs, y=ys, mode='lines+markers+text', name=theme, text=[""]*(len(xs)-1)+[theme],
+            customdata=[theme]*len(xs), textposition="top center",
+            marker=dict(size=[8]*(len(xs)-1)+[15], color=color, line=dict(width=1, color='white')),
+            line=dict(color=color, width=1 if show_trails else 0),
+            hoverinfo='text+name', hovertext=[f"{theme}<br>T:{x:.1f} M:{y:.1f}" for x,y in zip(xs,ys)]
+        ))
+
+    lim = max(max([abs(x-100) for x in all_x]+[2.0])*1.1, 2.0) if all_x else 2.0
+    
+    fig.add_hline(y=100, line_dash="dash", line_color="gray")
+    fig.add_vline(x=100, line_dash="dash", line_color="gray")
+    
+    lbl = lim * 0.5
+    for x,y,t,c in [(100+lbl,100+lbl,"LEADING","rgba(0,255,0,0.7)"), (100-lbl,100+lbl,"IMPROVING","rgba(0,100,255,0.7)"),
+                    (100+lbl,100-lbl,"WEAKENING","rgba(255,165,0,0.7)"), (100-lbl,100-lbl,"LAGGING","rgba(255,0,0,0.7)")]:
+        fig.add_annotation(x=x, y=y, text=f"<b>{t}</b>", showarrow=False, font=dict(color=c, size=20))
+
+    fig.update_layout(
+        xaxis=dict(title="Relative Trend", showgrid=False, range=[100-lim, 100+lim]),
+        yaxis=dict(title="Relative Momentum", showgrid=False, range=[100-lim, 100+lim]),
+        height=750, showlegend=False, template="plotly_dark", margin=dict(l=40, r=40, t=40, b=40)
+    )
+    return fig
