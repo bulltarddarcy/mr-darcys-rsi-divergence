@@ -17,10 +17,13 @@ def get_ma_signal(price, ma_val):
 def run_sector_rotation_app(df_global=None):
     st.title("🔄 Sector Rotation")
     
+    # 0. Benchmark Control (Session State)
+    if "sector_benchmark" not in st.session_state: st.session_state.sector_benchmark = "SPY"
+
     # 1. Automatic Data Fetch (Cached 10m)
-    # This replaces the old logic. It fetches from Drive Parquets, processes RRG/Alpha, and returns the cache.
-    with st.spinner("Syncing Sector Data..."):
-        etf_data_cache, missing_tickers, theme_map, uni_df = us.fetch_and_process_universe()
+    # Passed the benchmark ticker to the fetch function
+    with st.spinner(f"Syncing Sector Data ({st.session_state.sector_benchmark})..."):
+        etf_data_cache, missing_tickers, theme_map, uni_df = us.fetch_and_process_universe(st.session_state.sector_benchmark)
 
     if uni_df.empty:
         st.warning("⚠️ SECTOR_UNIVERSE secret is missing or empty.")
@@ -53,12 +56,12 @@ def run_sector_rotation_app(df_global=None):
 
     # 1. GRAPHIC USER GUIDE
     with st.expander("🗺️ Graphic User Guide", expanded=False):
-        st.markdown("""
+        st.markdown(f"""
         **🧮 How It Works (The Math)**
-        This chart does **not** show price. It shows **Relative Performance** against the S&P 500 (SPY).
-        * **X-Axis (Trend):** Are we beating the market?
-            * `> 100`: Outperforming the S&P 500.
-            * `< 100`: Underperforming the S&P 500.
+        This chart does **not** show price. It shows **Relative Performance** against **{st.session_state.sector_benchmark}**.
+        * **X-Axis (Trend):** Are we beating the benchmark?
+            * `> 100`: Outperforming {st.session_state.sector_benchmark}.
+            * `< 100`: Underperforming {st.session_state.sector_benchmark}.
         * **Y-Axis (Momentum):** How fast is the trend changing?
             * `> 100`: Gaining speed (Acceleration).
             * `< 100`: Losing speed (Deceleration).
@@ -78,6 +81,25 @@ def run_sector_rotation_app(df_global=None):
         
         # --- LEFT COLUMN: Timeframe, Trails ---
         with col_inputs:
+            # Benchmark Selection
+            st.markdown("**Benchmark Ticker**")
+            new_benchmark = st.radio(
+                "Benchmark",
+                ["SPY", "QQQ"],
+                horizontal=True,
+                index=["SPY", "QQQ"].index(st.session_state.sector_benchmark) if st.session_state.sector_benchmark in ["SPY", "QQQ"] else 0,
+                key="sector_benchmark_radio",
+                label_visibility="collapsed"
+            )
+            
+            # If changed, rerun to update session state and fetch new data
+            if new_benchmark != st.session_state.sector_benchmark:
+                st.session_state.sector_benchmark = new_benchmark
+                st.cache_data.clear() # Clear cache so we fetch new RS/Alpha data
+                st.rerun()
+
+            st.markdown("---")
+            
             st.markdown("**Timeframe Window**") 
             st.session_state.sector_view = st.radio(
                 "Timeframe Window", 
@@ -90,9 +112,9 @@ def run_sector_rotation_app(df_global=None):
             st.markdown('<div style="margin-top: 5px;"></div>', unsafe_allow_html=True)
             st.session_state.sector_trails = st.checkbox("Show 3-Day Trails", value=st.session_state.sector_trails)
             
-            # Display Last Data Date (Check SPY)
-            if "SPY" in etf_data_cache and not etf_data_cache["SPY"].empty:
-                last_dt = etf_data_cache["SPY"].index[-1].strftime("%Y-%m-%d")
+            # Display Last Data Date
+            if st.session_state.sector_benchmark in etf_data_cache and not etf_data_cache[st.session_state.sector_benchmark].empty:
+                last_dt = etf_data_cache[st.session_state.sector_benchmark].index[-1].strftime("%Y-%m-%d")
                 st.caption(f"📅 Data Date: {last_dt}")
 
         # --- RIGHT COLUMN: Sector Filters ---
@@ -187,8 +209,8 @@ def run_sector_rotation_app(df_global=None):
     # --- ALL THEMES PERFORMANCE ---
     st.subheader("All Themes Performance")
     
-    st.markdown("""
-    * **Rel Perf (Relative Performance):** Measures the strength of the trend against the S&P 500. 
+    st.markdown(f"""
+    * **Rel Perf (Relative Performance):** Measures the strength of the trend against {st.session_state.sector_benchmark}. 
       Values positive (>0) indicate outperformance; negative (<0) indicate underperformance.
     * **Mom (Momentum):** Measures the rate of change (velocity) of the trend. 
       Values positive (>0) indicate acceleration; negative (<0) indicate deceleration.

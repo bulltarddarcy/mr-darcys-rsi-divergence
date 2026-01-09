@@ -15,7 +15,6 @@ from utils_shared import get_gdrive_binary_data
 # 1. CONFIGURATION & CONSTANTS
 # ==========================================
 HISTORY_YEARS = 1             
-BENCHMARK_TICKER = "SPY"      
 
 # Volatility & Normalization
 ATR_WINDOW = 20               
@@ -40,7 +39,7 @@ class SectorDataManager:
         self.universe = pd.DataFrame()
         self.ticker_map = {}
 
-    def load_universe(self):
+    def load_universe(self, benchmark_ticker="SPY"):
         """Reads the universe from st.secrets['SECTOR_UNIVERSE']"""
         secret_val = st.secrets.get("SECTOR_UNIVERSE", "")
         if not secret_val:
@@ -72,8 +71,8 @@ class SectorDataManager:
             df['Role'] = df['Role'].astype(str).str.strip().str.title() if 'Role' in df.columns else 'Stock'
 
             tickers = df['Ticker'].unique().tolist()
-            if BENCHMARK_TICKER not in tickers:
-                tickers.append(BENCHMARK_TICKER)
+            if benchmark_ticker not in tickers:
+                tickers.append(benchmark_ticker)
                 
             etf_rows = df[df['Role'] == 'Etf']
             theme_map = dict(zip(etf_rows['Theme'], etf_rows['Ticker'])) if not etf_rows.empty else {}
@@ -245,17 +244,17 @@ def _fetch_single_parquet(ticker, file_id):
     return None
 
 @st.cache_data(ttl=600, show_spinner=False)
-def fetch_and_process_universe():
+def fetch_and_process_universe(benchmark_ticker="SPY"):
     """
     Main Data Pipeline:
     1. Loads Universe & Ticker Map
-    2. Downloads SPY (Benchmark)
+    2. Downloads Benchmark (SPY or QQQ)
     3. Downloads All Sector Tickers (Parallel)
     4. Calculates Relative Strength & Alpha
     5. Returns Dictionary of DataFrames and Missing Tickers list
     """
     dm = SectorDataManager()
-    uni_df, tickers, theme_map = dm.load_universe()
+    uni_df, tickers, theme_map = dm.load_universe(benchmark_ticker)
     t_map = dm.load_ticker_map()
     
     if uni_df.empty or not t_map:
@@ -265,19 +264,17 @@ def fetch_and_process_universe():
     data_cache = {}
     missing_tickers = []
 
-    # 1. Fetch Benchmark (SPY) First
-    # Check both raw ticker and _PARQUET suffix conventions if specific key logic exists,
-    # but here we assume t_map has "SPY" -> "ID"
-    spy_id = t_map.get(BENCHMARK_TICKER, t_map.get(f"{BENCHMARK_TICKER}_PARQUET"))
+    # 1. Fetch Benchmark First
+    bench_id = t_map.get(benchmark_ticker, t_map.get(f"{benchmark_ticker}_PARQUET"))
     
-    spy_df = _fetch_single_parquet(BENCHMARK_TICKER, spy_id)
-    if spy_df is None or spy_df.empty:
-        # Critical failure if SPY is missing, cannot calculate RS/Alpha
-        return {}, ["CRITICAL: SPY (Benchmark) not found"], theme_map, uni_df
+    bench_df = _fetch_single_parquet(benchmark_ticker, bench_id)
+    if bench_df is None or bench_df.empty:
+        # Critical failure if Benchmark is missing, cannot calculate RS/Alpha
+        return {}, [f"CRITICAL: {benchmark_ticker} (Benchmark) not found"], theme_map, uni_df
 
     # Process Benchmark
-    spy_df = calc.process_dataframe(spy_df)
-    data_cache[BENCHMARK_TICKER] = spy_df
+    bench_df = calc.process_dataframe(bench_df)
+    data_cache[benchmark_ticker] = bench_df
 
     # 2. Identify Missing Tickers immediately
     # We only care about tickers in our Universe
@@ -313,7 +310,7 @@ def fetch_and_process_universe():
         
         df = raw_dfs[etf_ticker]
         df = calc.process_dataframe(df) # Standardize cols
-        df = calc.calculate_rrg_metrics(df, spy_df) # Calculate RRG vs SPY
+        df = calc.calculate_rrg_metrics(df, bench_df) # Calculate RRG vs Benchmark
         
         data_cache[etf_ticker] = df
 
@@ -331,8 +328,8 @@ def fetch_and_process_universe():
         s_df = raw_dfs[stock]
         s_df = calc.process_dataframe(s_df)
         
-        # Calculate Alpha relative to its Sector ETF (if available), else SPY
-        parent_df = data_cache.get(parent_etf, spy_df) 
+        # Calculate Alpha relative to its Sector ETF (if available), else Benchmark
+        parent_df = data_cache.get(parent_etf, bench_df) 
         s_df = calc.calculate_stock_alpha(s_df, parent_df)
         
         data_cache[stock] = s_df
