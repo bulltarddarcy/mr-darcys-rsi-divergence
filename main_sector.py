@@ -15,6 +15,9 @@ def get_ma_signal(price, ma_val):
 # MAIN PAGE FUNCTION
 # ==========================================
 def run_sector_rotation_app(df_global=None):
+
+    st.error("🚧 **UNDER CONSTRUCTION** 🚧 — This page is currently being updated.")
+    
     st.title("🔄 Sector Rotation")
     
     # 0. Benchmark Control (Session State)
