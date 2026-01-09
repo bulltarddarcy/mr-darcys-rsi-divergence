@@ -155,46 +155,49 @@ def run_sector_rotation_app(df_global=None):
     if "sector_theme_filter_widget" not in st.session_state:
         st.session_state.sector_theme_filter_widget = all_themes
 
-    # 3. CONTROLS (TWO EXPANDERS SIDE BY SIDE)
-    c1, c2 = st.columns(2)
-    
-    # --- COL 1: CHART INPUTS ---
-    with c1:
-        with st.expander("⚙️ Chart Inputs", expanded=True):
+    # 3. CONTROLS (Consolidated)
+    with st.expander("⚙️ Chart Inputs & Filters", expanded=True):
+        # ROW 1: Timeframe | Trails | Update Button
+        c1, c2, c3 = st.columns([2, 1, 1])
+        
+        with c1:
             st.session_state.sector_view = st.radio(
                 "Timeframe Window", ["5 Days", "10 Days", "20 Days"], 
                 horizontal=True, key="timeframe_radio"
             )
+        
+        with c2:
+            st.markdown('<div style="margin-top: 5px;"></div>', unsafe_allow_html=True)
+            st.session_state.sector_trails = st.checkbox("Show 3-Day Trails", value=st.session_state.sector_trails)
             
-            c_sub1, c_sub2 = st.columns([1, 1])
-            with c_sub1:
-                st.session_state.sector_trails = st.checkbox("Show 3-Day Trails", value=st.session_state.sector_trails)
-            with c_sub2:
-                if st.button("🔄 Update Data", use_container_width=True):
-                    status = st.empty()
-                    calc = us.SectorAlphaCalculator()
-                    calc.run_full_update(status)
-                    st.rerun()
+        with c3:
+            st.markdown('<div style="margin-top: 5px;"></div>', unsafe_allow_html=True)
+            if st.button("🔄 Update Data", use_container_width=True):
+                status = st.empty()
+                calc = us.SectorAlphaCalculator()
+                calc.run_full_update(status)
+                st.rerun()
 
-    # --- COL 2: SECTORS SHOWN ---
-    with c2:
-        with st.expander("👁️ Sectors Shown", expanded=True):
-            b_col1, b_col2 = st.columns(2)
-            with b_col1:
-                if st.button("➕ Add All", use_container_width=True):
-                    st.session_state.sector_theme_filter_widget = all_themes
-                    st.rerun()
-            with b_col2:
-                if st.button("➖ Remove All", use_container_width=True):
-                    st.session_state.sector_theme_filter_widget = []
-                    st.rerun()
-            
-            sel_themes = st.multiselect(
-                "Select Themes", 
-                all_themes, 
-                key="sector_theme_filter_widget", 
-                label_visibility="collapsed"
-            )
+        st.divider()
+
+        # ROW 2: Sectors Shown
+        st.markdown("**Sectors Shown**")
+        btn_col1, btn_col2, _ = st.columns([1, 1, 6])
+        with btn_col1:
+            if st.button("➕ Add All", use_container_width=True):
+                st.session_state.sector_theme_filter_widget = all_themes
+                st.rerun()
+        with btn_col2:
+            if st.button("➖ Remove All", use_container_width=True):
+                st.session_state.sector_theme_filter_widget = []
+                st.rerun()
+        
+        sel_themes = st.multiselect(
+            "Select Themes", 
+            all_themes, 
+            key="sector_theme_filter_widget", 
+            label_visibility="collapsed"
+        )
     
     filtered_map = {k: v for k, v in theme_map.items() if k in sel_themes}
     timeframe_map = {"5 Days": "Short", "10 Days": "Med", "20 Days": "Long"}
@@ -305,13 +308,13 @@ def run_sector_rotation_app(df_global=None):
         summary_data.append(row)
         
     if summary_data:
-        # Config for numeric sorting
+        # Config for numeric sorting and frozen column
         st.dataframe(
             pd.DataFrame(summary_data),
             hide_index=True,
             use_container_width=True,
             column_config={
-                "Theme": st.column_config.TextColumn("Theme", frozen=True),
+                "Theme": st.column_config.TextColumn("Theme"), # Removed frozen=True
                 "Rel Perf (5d)": st.column_config.NumberColumn("Rel Perf (5d)", format="%.1f"),
                 "Mom (5d)": st.column_config.NumberColumn("Mom (5d)", format="%.1f"),
                 "Rel Perf (10d)": st.column_config.NumberColumn("Rel Perf (10d)", format="%.1f"),
@@ -337,7 +340,6 @@ def run_sector_rotation_app(df_global=None):
             if len(found) > 0: st.session_state.sector_target = found[0]
 
     # 2. Dropdown Selector
-    # Fix: Ensure all_themes is available
     curr_idx = all_themes.index(st.session_state.sector_target) if st.session_state.sector_target in all_themes else 0
     new_target = st.selectbox("Select Theme to View Stocks", all_themes, index=curr_idx)
     if new_target != st.session_state.sector_target:
