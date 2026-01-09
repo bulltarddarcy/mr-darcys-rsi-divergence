@@ -112,13 +112,33 @@ def run_sector_rotation_app(df_global=None):
         # --- RIGHT COLUMN: Sector Filters ---
         with col_filters:
             st.markdown("**Sectors Shown**")
-            btn_col1, btn_col2 = st.columns(2)
+            # Changed to 3 columns to accommodate the new button
+            btn_col1, btn_col2, btn_col3 = st.columns(3)
+            
             with btn_col1:
-                if st.button("➕ Add All", use_container_width=True):
+                # Renamed 'Add All' to 'Everything'
+                if st.button("➕ Everything", use_container_width=True):
                     st.session_state.sector_theme_filter_widget = all_themes
                     st.rerun()
+
             with btn_col2:
-                if st.button("➖ Remove All", use_container_width=True):
+                # New 'Big 11' Button
+                if st.button("⭐ Big 11", use_container_width=True):
+                    # The specific themes you provided
+                    big_11_list = [
+                        "Communications", "Consumer Discretionary", "Consumer Staples", 
+                        "Energy", "Financials", "Healthcare", "Industrials", 
+                        "Materials", "Real Estate", "Technology", "Utilities"
+                    ]
+                    
+                    # Logic: Filter to ensure we only select themes that exist in your current data
+                    valid_themes = [t for t in big_11_list if t in all_themes]
+                    st.session_state.sector_theme_filter_widget = valid_themes
+                    st.rerun()
+
+            with btn_col3:
+                # Renamed 'Remove All' to 'Clear'
+                if st.button("➖ Clear", use_container_width=True):
                     st.session_state.sector_theme_filter_widget = []
                     st.rerun()
             
