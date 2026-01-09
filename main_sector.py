@@ -39,6 +39,12 @@ def get_quadrant_status(df, timeframe_key):
     elif r < 100 and m < 100: return "🔴 Lagging"
     else: return "🟡 Weakening"
 
+def get_ma_signal(price, ma_val):
+    """Returns Emoji based on Price vs MA"""
+    if pd.isna(ma_val) or ma_val == 0:
+        return "⚠️" # Not enough data
+    return "✅" if price > ma_val else "❌"
+
 def plot_simple_rrg(dm, target_map, view_key, show_trails):
     fig = go.Figure()
     all_x, all_y = [], []
@@ -125,7 +131,20 @@ def run_sector_rotation_app(df_global=None):
         st.warning("⚠️ SECTOR_UNIVERSE secret is missing or empty.")
         return
 
-    # --- 1. GRAPHIC USER GUIDE ---
+    # 2. Session State for Controls
+    if "sector_view" not in st.session_state: st.session_state.sector_view = "5 Days"
+    if "sector_trails" not in st.session_state: st.session_state.sector_trails = False
+    if "sector_target" not in st.session_state: st.session_state.sector_target = sorted(list(theme_map.keys()))[0] if theme_map else ""
+    
+    # Ensure filter list is init for the widget
+    all_themes = sorted(list(theme_map.keys()))
+    if "sector_theme_filter_widget" not in st.session_state:
+        st.session_state.sector_theme_filter_widget = all_themes
+
+    # --- MAIN SECTION START ---
+    st.subheader("Sector Rotations")
+
+    # 1. GRAPHIC USER GUIDE (Moved Here)
     with st.expander("Graphic User Guide", expanded=False):
         st.markdown("""
         **🧮 How It Works (The Math)**
@@ -146,34 +165,18 @@ def run_sector_rotation_app(df_global=None):
         * 🔵 **IMPROVING (Top Left):** Weak Trend, but Momentum is waking up. "Turnarounds".
         """)
 
-    # 2. Session State for Controls
-    if "sector_view" not in st.session_state: st.session_state.sector_view = "5 Days"
-    if "sector_trails" not in st.session_state: st.session_state.sector_trails = False
-    if "sector_target" not in st.session_state: st.session_state.sector_target = sorted(list(theme_map.keys()))[0] if theme_map else ""
-    
-    # Ensure filter list is init for the widget
-    all_themes = sorted(list(theme_map.keys()))
-    if "sector_theme_filter_widget" not in st.session_state:
-        st.session_state.sector_theme_filter_widget = all_themes
-
-    # --- 2. SECTOR ROTATIONS (CHART SECTION) ---
-    st.subheader("Sector Rotations")
-
-    # CONTROLS
+    # 2. CONTROLS
     with st.expander("⚙️ Chart Inputs & Filters", expanded=True):
         
         # --- INPUT ROW 1: Toggles & Trails ---
         c_in_1, c_in_2, c_spacer = st.columns([1.5, 1, 3]) 
         
-        # TIMEFRAME TOOLTIP
         timeframe_help = """
         ⏱️ Timeframe Definitions:
         • 5 Days (Short): Tactical View (~1 Week). Highly sensitive.
         • 10 Days (Med): Balanced View (~2 Weeks).
         • 20 Days (Long): Strategic View (~1 Month). Primary trend.
         """
-        
-        # TRAIL TOOLTIP
         trails_help = "Shows the trailing path of the last 3 days to visualize velocity and direction changes (e.g. J-Hooks)."
 
         with c_in_1:
@@ -314,7 +317,7 @@ def run_sector_rotation_app(df_global=None):
         
         row = {"Theme": theme}
         
-        # Calculate Deviation from 100 for proper display
+        # Calculate Deviation from 100
         
         # Short (5d)
         row["Status (5d)"] = get_quadrant_status(etf_df, "Short")
@@ -354,17 +357,13 @@ def run_sector_rotation_app(df_global=None):
     # --- 4. EXPLORER SECTION ---
     st.subheader(f"🔎 Explorer: {st.session_state.sector_target}")
     
-    # --- INPUT FIRST, SELECTOR SECOND ---
-    
     # 1. Ticker Input
     search_t = st.text_input("Not sure which theme? Input a ticker to find its theme(s)", placeholder="NVDA...").strip().upper()
     if search_t:
         matches = uni_df[uni_df['Ticker'] == search_t]
         if not matches.empty:
             found = matches['Theme'].unique()
-            # SHOW SUCCESS MSG
             st.success(f"📍 Found **{search_t}** in: **{', '.join(found)}**")
-            
             if len(found) > 0: st.session_state.sector_target = found[0]
         else:
             st.warning(f"Ticker {search_t} not found in the Sector Universe.")
@@ -384,27 +383,33 @@ def run_sector_rotation_app(df_global=None):
         
         if sdf is None or sdf.empty: continue
         
-        # Volume Filter
         try:
+            # Volume Filter
             avg_vol = sdf['Volume'].tail(20).mean()
             avg_price = sdf['Close'].tail(20).mean()
             if (avg_vol * avg_price) < us.MIN_DOLLAR_VOLUME: continue
             
             last = sdf.iloc[-1]
+            
+            # Helper to safely get value for styling logic
+            def safe_get(key, default=0):
+                return last.get(key, default)
+
             ranking_data.append({
                 "Ticker": stock,
                 "Price": last['Close'],
-                # Keep raw float values for styling logic
-                "Alpha 5d": last.get("True_Alpha_Short", 0),
-                "RVOL 5d": last.get("RVOL_Short", 0),
-                "Alpha 10d": last.get("True_Alpha_Med", 0),
-                "RVOL 10d": last.get("RVOL_Med", 0),
-                "Alpha 20d": last.get("True_Alpha_Long", 0),
-                "RVOL 20d": last.get("RVOL_Long", 0),
-                "8 EMA": "✅" if last['Close'] > last.get('EMA_8', 0) else "❌",
-                "21 EMA": "✅" if last['Close'] > last.get('EMA_21', 0) else "❌",
-                "50 MA": "✅" if last['Close'] > last.get('SMA_50', 0) else "❌",
-                "200 MA": "✅" if last['Close'] > last.get('SMA_200', 0) else "❌"
+                # Raw floats for conditional logic
+                "Alpha 5d": safe_get("True_Alpha_Short"),
+                "RVOL 5d": safe_get("RVOL_Short"),
+                "Alpha 10d": safe_get("True_Alpha_Med"),
+                "RVOL 10d": safe_get("RVOL_Med"),
+                "Alpha 20d": safe_get("True_Alpha_Long"),
+                "RVOL 20d": safe_get("RVOL_Long"),
+                # MA Emojis
+                "8 EMA": get_ma_signal(last['Close'], safe_get('EMA_8')),
+                "21 EMA": get_ma_signal(last['Close'], safe_get('EMA_21')),
+                "50 MA": get_ma_signal(last['Close'], safe_get('SMA_50')),
+                "200 MA": get_ma_signal(last['Close'], safe_get('SMA_200'))
             })
         except Exception:
             continue
@@ -412,18 +417,30 @@ def run_sector_rotation_app(df_global=None):
     if ranking_data:
         df_disp = pd.DataFrame(ranking_data).sort_values(by='Alpha 5d', ascending=False)
         
-        def style_rows(row):
-            # Logic: Alpha 5d > 0 AND RVOL 5d > 1.2
-            # We access the raw float values here
-            alpha = row.get("Alpha 5d", 0)
-            rvol = row.get("RVOL 5d", 0)
+        def highlight_cells(row):
+            # Create a Series of empty styles with index matching row
+            styles = pd.Series('', index=row.index)
+            color = 'background-color: #d4edda; color: black;'
             
-            if alpha > 0 and rvol > 1.2:
-                 return ['background-color: #d4edda; color: black;'] * len(row)
-            return [''] * len(row)
+            # Logic A: 5 Days (Alpha > 0 and RVOL > 1.2)
+            if row["Alpha 5d"] > 0 and row["RVOL 5d"] > 1.2:
+                styles["Alpha 5d"] = color
+                styles["RVOL 5d"] = color
+                
+            # Logic B: 10 Days
+            if row["Alpha 10d"] > 0 and row["RVOL 10d"] > 1.2:
+                styles["Alpha 10d"] = color
+                styles["RVOL 10d"] = color
+                
+            # Logic C: 20 Days
+            if row["Alpha 20d"] > 0 and row["RVOL 20d"] > 1.2:
+                styles["Alpha 20d"] = color
+                styles["RVOL 20d"] = color
+                
+            return styles
 
         st.dataframe(
-            df_disp.style.apply(style_rows, axis=1),
+            df_disp.style.apply(highlight_cells, axis=1),
             hide_index=True, 
             use_container_width=True,
             column_config={
@@ -442,7 +459,7 @@ def run_sector_rotation_app(df_global=None):
                 "8 EMA": st.column_config.TextColumn("8 EMA", width="small", help="Price > 8 EMA"),
                 "21 EMA": st.column_config.TextColumn("21 EMA", width="small", help="Price > 21 EMA"),
                 "50 MA": st.column_config.TextColumn("50 MA", width="small", help="Price > 50 SMA"),
-                "200 MA": st.column_config.TextColumn("200 MA", width="small", help="Price > 200 SMA")
+                "200 MA": st.column_config.TextColumn("200 MA", width="small", help="Price > 200 SMA (⚠️ = Insufficient History)")
             }
         )
     else:
