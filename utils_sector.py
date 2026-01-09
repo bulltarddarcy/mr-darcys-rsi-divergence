@@ -95,6 +95,7 @@ class SectorDataManager:
                 df = pd.read_csv(buffer, engine='c')
                 # Assume Col 0 = Ticker, Col 1 = File ID
                 if len(df.columns) >= 2:
+                    # Normalized Key: UPPERCASE and STRIPPED for reliable lookup
                     t_map = dict(zip(df.iloc[:, 0].astype(str).str.strip().str.upper(), 
                                      df.iloc[:, 1].astype(str).str.strip()))
                     self.ticker_map = t_map
@@ -248,7 +249,7 @@ def fetch_and_process_universe(benchmark_ticker="SPY"):
     """
     Main Data Pipeline:
     1. Loads Universe & Ticker Map
-    2. Downloads Benchmark (SPY or QQQ)
+    2. Downloads Benchmark (SPY or QQQ) - Robust Lookup
     3. Downloads All Sector Tickers (Parallel)
     4. Calculates Relative Strength & Alpha
     5. Returns Dictionary of DataFrames and Missing Tickers list
@@ -264,26 +265,55 @@ def fetch_and_process_universe(benchmark_ticker="SPY"):
     data_cache = {}
     missing_tickers = []
 
-    # 1. Fetch Benchmark First
-    bench_id = t_map.get(benchmark_ticker, t_map.get(f"{benchmark_ticker}_PARQUET"))
+    # --- 1. ROBUST BENCHMARK LOOKUP ---
+    # Try all likely variations of the name
+    possible_keys = [
+        benchmark_ticker,                       # SPY
+        f"{benchmark_ticker}_PARQUET",          # SPY_PARQUET (User requested)
+        f"{benchmark_ticker}.PARQUET",          # SPY.PARQUET
+        f"PARQUET_{benchmark_ticker}"           # PARQUET_SPY
+    ]
     
+    bench_id = None
+    for key in possible_keys:
+        if key in t_map:
+            bench_id = t_map[key]
+            break
+            
+    # Final fallback: Look for key that CONTAINS ticker + PARQUET
+    if not bench_id:
+        for k, v in t_map.items():
+            if benchmark_ticker in k and "PARQUET" in k:
+                bench_id = v
+                break
+
     bench_df = _fetch_single_parquet(benchmark_ticker, bench_id)
     if bench_df is None or bench_df.empty:
         # Critical failure if Benchmark is missing, cannot calculate RS/Alpha
-        return {}, [f"CRITICAL: {benchmark_ticker} (Benchmark) not found"], theme_map, uni_df
+        return {}, [f"CRITICAL: {benchmark_ticker} (Benchmark) not found. Tried keys: {possible_keys}"], theme_map, uni_df
 
     # Process Benchmark
     bench_df = calc.process_dataframe(bench_df)
     data_cache[benchmark_ticker] = bench_df
 
-    # 2. Identify Missing Tickers immediately
-    # We only care about tickers in our Universe
+    # 2. Identify Missing Tickers (Using same robust logic)
     valid_tickers = []
+    
     for t in tickers:
-        # Check Ticker or Ticker_PARQUET
-        if t in t_map: valid_tickers.append((t, t_map[t]))
-        elif f"{t}_PARQUET" in t_map: valid_tickers.append((t, t_map[f"{t}_PARQUET"]))
-        else: missing_tickers.append(t)
+        # Skip benchmark as we already have it
+        if t == benchmark_ticker: continue
+        
+        # Robust lookup for universe tickers too
+        tid = None
+        # Order of preference: Exact -> _PARQUET -> PARQUET_
+        if t in t_map: tid = t_map[t]
+        elif f"{t}_PARQUET" in t_map: tid = t_map[f"{t}_PARQUET"]
+        elif f"PARQUET_{t}" in t_map: tid = t_map[f"PARQUET_{t}"]
+        
+        if tid:
+            valid_tickers.append((t, tid))
+        else:
+            missing_tickers.append(t)
 
     # 3. Parallel Download
     raw_dfs = {}
