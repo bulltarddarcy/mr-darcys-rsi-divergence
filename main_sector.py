@@ -21,8 +21,8 @@ def run_sector_rotation_app(df_global=None):
     if "sector_benchmark" not in st.session_state: st.session_state.sector_benchmark = "SPY"
 
     # 1. Automatic Data Fetch (Cached 10m)
-    # Passed the benchmark ticker to the fetch function
-    with st.spinner(f"Syncing Sector Data ({st.session_state.sector_benchmark})..."):
+    # UPDATED: Calls the new optimized function 'get_computed_sector_data'
+    with st.spinner(f"Calculating Sector Metrics ({st.session_state.sector_benchmark})..."):
         etf_data_cache, missing_tickers, theme_map, uni_df = us.get_computed_sector_data(st.session_state.sector_benchmark)
 
     if uni_df.empty:
@@ -92,9 +92,10 @@ def run_sector_rotation_app(df_global=None):
                 label_visibility="collapsed"
             )
             
-            # If changed, rerun to update session state and fetch new data
+            # UPDATED: If changed, rerun to update session state and fetch new data
             if new_benchmark != st.session_state.sector_benchmark:
                 st.session_state.sector_benchmark = new_benchmark
+                # Note: We do NOT clear cache here anymore because the download cache is separate now
                 st.rerun()
 
             st.markdown("---")
