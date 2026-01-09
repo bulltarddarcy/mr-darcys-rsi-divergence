@@ -48,10 +48,13 @@ def run_sector_rotation_app(df_global=None):
         st.session_state.sector_theme_filter_widget = all_themes
 
     # --- MAIN SECTION START ---
-    st.subheader("Sector Rotations")
+    # (2) Rename Sector Rotations section to Rotation Quadrant Graphic
+    st.subheader("Rotation Quadrant Graphic")
 
-    # 1. GRAPHIC USER GUIDE (Moved Here)
-    with st.expander("Graphic User Guide", expanded=False):
+    # 1. GRAPHIC USER GUIDE
+    # (1) Add emoji to "graphic user guide" expander
+    # (6) Have all expanders on the entire page default to being closed
+    with st.expander("🗺️ Graphic User Guide", expanded=False):
         st.markdown("""
         **🧮 How It Works (The Math)**
         This chart does **not** show price. It shows **Relative Performance** against the S&P 500 (SPY).
@@ -72,55 +75,65 @@ def run_sector_rotation_app(df_global=None):
         """)
 
     # CONTROLS
-    with st.expander("⚙️ Chart Inputs & Filters", expanded=True):
-        c_in_1, c_in_2, c_spacer = st.columns([1.5, 1, 3]) 
+    # (6) Have all expanders on the entire page default to being closed
+    with st.expander("⚙️ Chart Inputs & Filters", expanded=False):
+        # We split into two main columns to organize inputs better
+        col_inputs, col_filters = st.columns([1, 1])
         
-        with c_in_1:
+        # --- LEFT COLUMN: Timeframe, Trails, Updates ---
+        with col_inputs:
+            # (3) Make Timeframe Window the same font as Sectors Shown just below
+            st.markdown("**Timeframe Window**") 
             st.session_state.sector_view = st.radio(
-                "Timeframe Window", ["5 Days", "10 Days", "20 Days"], 
-                horizontal=True, key="timeframe_radio"
+                "Timeframe Window", 
+                ["5 Days", "10 Days", "20 Days"], 
+                horizontal=True, 
+                key="timeframe_radio",
+                label_visibility="collapsed" # Hide default label to use Markdown header
             )
-        
-        with c_in_2:
-            st.markdown('<div style="margin-top: 10px;"></div>', unsafe_allow_html=True)
+            
+            # (4) Put 3-Day Trails just under 5/10/20 toggles
+            st.markdown('<div style="margin-top: 5px;"></div>', unsafe_allow_html=True)
             st.session_state.sector_trails = st.checkbox("Show 3-Day Trails", value=st.session_state.sector_trails)
             
-        # Update Button with Timestamp
-        last_update = dm.get_last_updated()
-        st.caption(f"📅 Data last updated: {last_update}")
-        
-        if st.button("🔄 Update Data", use_container_width=True):
-            status = st.empty()
-            calc = us.SectorAlphaCalculator()
-            calc.run_full_update(status)
-            st.cache_data.clear() # Clear cache after update
-            st.rerun()
+            st.markdown("---")
 
-        st.divider()
+            # (5) Put Update Data and the most recent date just under that also in this box.
+            last_update = dm.get_last_updated()
+            st.caption(f"📅 Data last updated: {last_update}")
+            
+            if st.button("🔄 Update Data", use_container_width=True):
+                status = st.empty()
+                calc = us.SectorAlphaCalculator()
+                calc.run_full_update(status)
+                st.cache_data.clear() # Clear cache after update
+                st.rerun()
 
-        # SECTORS SHOWN
-        st.markdown("**Sectors Shown**")
-        btn_col1, btn_col2, _ = st.columns([1, 1, 6])
-        with btn_col1:
-            if st.button("➕ Add All", use_container_width=True):
-                st.session_state.sector_theme_filter_widget = all_themes
-                st.rerun()
-        with btn_col2:
-            if st.button("➖ Remove All", use_container_width=True):
-                st.session_state.sector_theme_filter_widget = []
-                st.rerun()
-        
-        sel_themes = st.multiselect(
-            "Select Themes", all_themes, 
-            key="sector_theme_filter_widget", label_visibility="collapsed"
-        )
+        # --- RIGHT COLUMN: Sector Filters ---
+        with col_filters:
+            st.markdown("**Sectors Shown**")
+            btn_col1, btn_col2 = st.columns(2)
+            with btn_col1:
+                if st.button("➕ Add All", use_container_width=True):
+                    st.session_state.sector_theme_filter_widget = all_themes
+                    st.rerun()
+            with btn_col2:
+                if st.button("➖ Remove All", use_container_width=True):
+                    st.session_state.sector_theme_filter_widget = []
+                    st.rerun()
+            
+            sel_themes = st.multiselect(
+                "Select Themes", all_themes, 
+                key="sector_theme_filter_widget", label_visibility="collapsed"
+            )
     
     filtered_map = {k: v for k, v in theme_map.items() if k in sel_themes}
     timeframe_map = {"5 Days": "Short", "10 Days": "Med", "20 Days": "Long"}
     view_key = timeframe_map[st.session_state.sector_view]
 
     # --- MOMENTUM SCANS ---
-    with st.expander("🚀 Momentum Scans", expanded=True):
+    # (6) Have all expanders on the entire page default to being closed
+    with st.expander("🚀 Momentum Scans", expanded=False):
         inc_mom, neut_mom, dec_mom = [], [], []
         
         for theme, ticker in theme_map.items():
@@ -176,6 +189,15 @@ def run_sector_rotation_app(df_global=None):
 
     # --- ALL THEMES PERFORMANCE ---
     st.subheader("All Themes Performance")
+    
+    # (7) Add some text All Themes Performance section header, explaining Rel Perf and Mom
+    st.markdown("""
+    * **Rel Perf (Relative Performance):** Measures the strength of the trend against the S&P 500. 
+      Values positive (>0) indicate outperformance; negative (<0) indicate underperformance.
+    * **Mom (Momentum):** Measures the rate of change (velocity) of the trend. 
+      Values positive (>0) indicate acceleration; negative (<0) indicate deceleration.
+    """)
+    
     summary_data = []
     
     for theme in all_themes:
@@ -214,7 +236,8 @@ def run_sector_rotation_app(df_global=None):
     st.markdown("---")
 
     # --- EXPLORER SECTION ---
-    st.subheader(f"🔎 Explorer: {st.session_state.sector_target}")
+    # (8) Rename Explorer Header
+    st.subheader(f"🔎 Explorer: Theme Drilldown")
     
     search_t = st.text_input("Input a ticker to find its theme(s)", placeholder="NVDA...").strip().upper()
     if search_t:

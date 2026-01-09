@@ -56,13 +56,24 @@ class SectorDataManager:
             
         try:
             if secret_val.strip().startswith("http"):
-                if "drive.google.com" in secret_val and "/d/" in secret_val:
+                # CASE 1: Google Sheets (Native) -> docs.google.com
+                if "docs.google.com/spreadsheets" in secret_val:
+                    # Extract ID between /d/ and /
+                    file_id = secret_val.split("/d/")[1].split("/")[0]
+                    csv_source = f"https://docs.google.com/spreadsheets/d/{file_id}/export?format=csv"
+                
+                # CASE 2: Google Drive File (Uploaded CSV) -> drive.google.com
+                elif "drive.google.com" in secret_val and "/d/" in secret_val:
                     file_id = secret_val.split("/d/")[1].split("/")[0]
                     csv_source = f"https://drive.google.com/uc?id={file_id}&export=download"
+                
+                # CASE 3: Standard Direct URL
                 else:
                     csv_source = secret_val
+                
                 df = pd.read_csv(csv_source)
             else:
+                # CASE 4: Raw CSV String inside Secrets
                 df = pd.read_csv(StringIO(secret_val))
             
             required_cols = ['Ticker', 'Theme']
