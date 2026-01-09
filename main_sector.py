@@ -22,8 +22,8 @@ def classify_setup(df):
     if m5 > m10 and m10 > m20 and m20 > 100: return "🚀 Rocket"
     return None 
 
-def get_quadrant_label(df, timeframe_key):
-    """Returns a formatted string like 'Leading 🟢 (+3.3)'"""
+def get_quadrant_status(df, timeframe_key):
+    """Returns just the icon and label for the table"""
     if df is None or df.empty: return "N/A"
     
     col_r = f"RRG_Ratio_{timeframe_key}"
@@ -34,13 +34,10 @@ def get_quadrant_label(df, timeframe_key):
     r = df[col_r].iloc[-1]
     m = df[col_m].iloc[-1]
     
-    if r >= 100 and m >= 100: txt, icn = "Leading", "🟢"
-    elif r < 100 and m >= 100: txt, icn = "Improving", "🔵"
-    elif r < 100 and m < 100: txt, icn = "Lagging", "🔴"
-    else: txt, icn = "Weakening", "🟡"
-    
-    diff = m - 100
-    return f"{icn} {txt} ({diff:+.1f})"
+    if r >= 100 and m >= 100: return "🟢 Leading"
+    elif r < 100 and m >= 100: return "🔵 Improving"
+    elif r < 100 and m < 100: return "🔴 Lagging"
+    else: return "🟡 Weakening"
 
 def plot_simple_rrg(dm, target_map, view_key, show_trails):
     fig = go.Figure()
@@ -146,19 +143,6 @@ def run_sector_rotation_app(df_global=None):
             * `< 100`: Losing speed (Deceleration).
         
         *Note: Calculations use Weighted Regression, meaning today's price action is weighted 3x more than data from 20 days ago. This eliminates lag.*
-
-        **📊 How to Read the Quadrants**
-        * 🟢 **LEADING (Top Right):** Strong Trend + Accelerating Momentum. The Winners.
-        * 🟡 **WEAKENING (Bottom Right):** Strong Trend, but losing steam. Often a place to take profits or wait for a pullback.
-        * 🔴 **LAGGING (Bottom Left):** Weak Trend + Decelerating. The Losers. Avoid unless hunting for bottoms.
-        * 🔵 **IMPROVING (Top Left):** Weak Trend, but Momentum is waking up. This is where "Turnarounds" happen.
-
-        **🐍 Using Tails (History)**
-        * **The Dot:** Represents Today's score.
-        * **The Tail:** Shows the path of the last 3 days.
-        * **Long Tail:** = High Velocity. The move is strong and decisive.
-        * **Short Tail:** = Indecision. The sector is stuck.
-        * **J-Hook:** If the tail is in the bottom left but "Hooks" sharply up and right, smart money is rotating in aggressively.
         """)
 
     # 2. Session State for Controls
@@ -218,6 +202,22 @@ def run_sector_rotation_app(df_global=None):
 
     # --- MOMENTUM SCANS ---
     with st.expander("🚀 Momentum Scans", expanded=True):
+        
+        # --- LEGEND AT TOP ---
+        with st.expander("ℹ️ Legend & Setup Key", expanded=False):
+             st.markdown("""
+             **Category Guide**
+             * **📈 Increasing:** 5-Day Momentum > 20-Day Momentum. The move is accelerating.
+             * **🔻 Decreasing:** 5-Day Momentum < 20-Day Momentum. The move is slowing down.
+             * **⚖️ Neutral:** Mixed signals.
+             
+             **Setup Key**
+             * **🪝 J-Hook:** Long-term weak, Short-term exploding. (Bottom Fish).
+             * **🚩 Bull Flag:** Long-term strong, Short-term rested. (Dip Buy).
+             * **🚀 Rocket:** Perfect alignment 5>10>20. (Thrust).
+             """)
+
+        # --- COLUMNS ---
         inc_mom, neut_mom, dec_mom = [], [], []
         
         for theme, ticker in theme_map.items():
@@ -238,11 +238,8 @@ def run_sector_rotation_app(df_global=None):
             else: neut_mom.append(item)
 
         # Sort Logic
-        # Increasing: High to Low (+10 before +2)
         inc_mom.sort(key=lambda x: x['shift'], reverse=True)
-        # Neutral: High to Low
         neut_mom.sort(key=lambda x: x['shift'], reverse=True)
-        # Decreasing: Low to High (-10 before -2) -> "Increasing order" mathematically
         dec_mom.sort(key=lambda x: x['shift'], reverse=False)
 
         m_col1, m_col2, m_col3 = st.columns(3)
@@ -256,19 +253,7 @@ def run_sector_rotation_app(df_global=None):
             st.error(f"🔻 Decreasing ({len(dec_mom)})")
             for i in dec_mom: st.caption(f"{i['theme']} {i['icon']} **({i['shift']:+.1f})**")
 
-        # LEGEND INSIDE EXPANDER
-        with st.expander("ℹ️ Legend & Setup Key", expanded=False):
-             st.markdown("""
-             **Category Guide**
-             * **📈 Increasing:** 5-Day Momentum > 20-Day Momentum. The move is accelerating.
-             * **🔻 Decreasing:** 5-Day Momentum < 20-Day Momentum. The move is slowing down.
-             * **⚖️ Neutral:** Mixed signals.
-             
-             **Setup Key**
-             * **🪝 J-Hook:** Long-term weak, Short-term exploding. (Bottom Fish).
-             * **🚩 Bull Flag:** Long-term strong, Short-term rested. (Dip Buy).
-             * **🚀 Rocket:** Perfect alignment 5>10>20. (Thrust).
-             """)
+    st.divider()
 
     # 4. RRG CHART
     st.subheader("Sector Rotations")
@@ -285,6 +270,8 @@ def run_sector_rotation_app(df_global=None):
         elif "text" in point:
             st.session_state.sector_target = point["text"]
     
+    st.divider()
+
     # 5. ALL THEMES PERFORMANCE
     st.subheader("All Themes Performance")
     
@@ -294,41 +281,69 @@ def run_sector_rotation_app(df_global=None):
         if not etf_ticker: continue
         etf_df = dm.load_ticker_data(etf_ticker)
         
+        if etf_df is None or etf_df.empty: continue
+        
+        last = etf_df.iloc[-1]
+        
         row = {"Theme": theme}
-        row["Short (5d)"] = get_quadrant_label(etf_df, "Short")
-        row["Med (10d)"] = get_quadrant_label(etf_df, "Med")
-        row["Long (20d)"] = get_quadrant_label(etf_df, "Long")
+        
+        # Short (5d)
+        row["Status (5d)"] = get_quadrant_status(etf_df, "Short")
+        row["Rel Perf (5d)"] = last.get("RRG_Ratio_Short", 0)
+        row["Mom (5d)"] = last.get("RRG_Mom_Short", 0)
+        
+        # Med (10d)
+        row["Status (10d)"] = get_quadrant_status(etf_df, "Med")
+        row["Rel Perf (10d)"] = last.get("RRG_Ratio_Med", 0)
+        row["Mom (10d)"] = last.get("RRG_Mom_Med", 0)
+        
+        # Long (20d)
+        row["Status (20d)"] = get_quadrant_status(etf_df, "Long")
+        row["Rel Perf (20d)"] = last.get("RRG_Ratio_Long", 0)
+        row["Mom (20d)"] = last.get("RRG_Mom_Long", 0)
+
         summary_data.append(row)
         
     if summary_data:
+        # Config for numeric sorting
         st.dataframe(
             pd.DataFrame(summary_data),
             hide_index=True,
-            use_container_width=True
+            use_container_width=True,
+            column_config={
+                "Theme": st.column_config.TextColumn("Theme", frozen=True),
+                "Rel Perf (5d)": st.column_config.NumberColumn("Rel Perf (5d)", format="%.1f"),
+                "Mom (5d)": st.column_config.NumberColumn("Mom (5d)", format="%.1f"),
+                "Rel Perf (10d)": st.column_config.NumberColumn("Rel Perf (10d)", format="%.1f"),
+                "Mom (10d)": st.column_config.NumberColumn("Mom (10d)", format="%.1f"),
+                "Rel Perf (20d)": st.column_config.NumberColumn("Rel Perf (20d)", format="%.1f"),
+                "Mom (20d)": st.column_config.NumberColumn("Mom (20d)", format="%.1f"),
+            }
         )
 
-    # 6. EXPLORER SECTION (NEW TABLE + STOCK LIST)
+    st.markdown("---")
+
+    # 6. EXPLORER SECTION
     st.subheader(f"🔎 Explorer: {st.session_state.sector_target}")
     
-    # Search Bar
-    search_c1, search_c2 = st.columns([1, 3])
-    with search_c1:
-        search_t = st.text_input("Input a ticker to find its theme(s)", placeholder="NVDA...").strip().upper()
-        if search_t:
-            matches = uni_df[uni_df['Ticker'] == search_t]
-            if not matches.empty:
-                found = matches['Theme'].unique()
-                if len(found) > 0: st.session_state.sector_target = found[0]
+    # --- INPUT FIRST, SELECTOR SECOND ---
     
-    with search_c2:
-        # Update Target Dropdown
-        # FIX: 'all_themes' is used here, ensuring it is defined
-        curr_idx = all_themes.index(st.session_state.sector_target) if st.session_state.sector_target in all_themes else 0
-        new_target = st.selectbox("Select Theme to View Stocks", all_themes, index=curr_idx)
-        if new_target != st.session_state.sector_target:
-            st.session_state.sector_target = new_target
+    # 1. Ticker Input
+    search_t = st.text_input("Not sure which theme? Input a ticker to find its theme(s)", placeholder="NVDA...").strip().upper()
+    if search_t:
+        matches = uni_df[uni_df['Ticker'] == search_t]
+        if not matches.empty:
+            found = matches['Theme'].unique()
+            if len(found) > 0: st.session_state.sector_target = found[0]
 
-    # Stock Table
+    # 2. Dropdown Selector
+    # Fix: Ensure all_themes is available
+    curr_idx = all_themes.index(st.session_state.sector_target) if st.session_state.sector_target in all_themes else 0
+    new_target = st.selectbox("Select Theme to View Stocks", all_themes, index=curr_idx)
+    if new_target != st.session_state.sector_target:
+        st.session_state.sector_target = new_target
+
+    # --- STOCK TABLE ---
     stock_tickers = uni_df[(uni_df['Theme'] == st.session_state.sector_target) & (uni_df['Role'] == 'Stock')]['Ticker'].tolist()
     ranking_data = []
     
@@ -353,7 +368,10 @@ def run_sector_rotation_app(df_global=None):
                 "RVOL 10d": last.get("RVOL_Med", 0),
                 "Alpha 20d": last.get("True_Alpha_Long", 0),
                 "RVOL 20d": last.get("RVOL_Long", 0),
-                "8 EMA": "✅" if last['Close'] > last.get('EMA_8', 0) else "❌"
+                "8 EMA": "✅" if last['Close'] > last.get('EMA_8', 0) else "❌",
+                "21 EMA": "✅" if last['Close'] > last.get('EMA_21', 0) else "❌",
+                "50 MA": "✅" if last['Close'] > last.get('SMA_50', 0) else "❌",
+                "200 MA": "✅" if last['Close'] > last.get('SMA_200', 0) else "❌"
             })
         except Exception:
             continue
@@ -377,7 +395,10 @@ def run_sector_rotation_app(df_global=None):
             hide_index=True, use_container_width=True,
             column_config={
                 "Ticker": st.column_config.TextColumn("Ticker"), 
-                "8 EMA": st.column_config.TextColumn("8 EMA", width="small")
+                "8 EMA": st.column_config.TextColumn("8 EMA", width="small"),
+                "21 EMA": st.column_config.TextColumn("21 EMA", width="small"),
+                "50 MA": st.column_config.TextColumn("50 MA", width="small"),
+                "200 MA": st.column_config.TextColumn("200 MA", width="small")
             }
         )
     else:
