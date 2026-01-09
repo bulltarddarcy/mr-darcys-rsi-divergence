@@ -219,8 +219,12 @@ def run_sector_rotation_app(df_global=None):
     """)
     
     summary_data = []
-    input_data_export = []  # <--- NEW LIST FOR RAW INPUTS
+    input_data_export = []
     
+    # 1. Get Benchmark DataFrame for Denominator
+    bench_ticker = st.session_state.sector_benchmark
+    bench_df = etf_data_cache.get(bench_ticker)
+
     for theme in all_themes:
         etf_ticker = theme_map.get(theme)
         if not etf_ticker: continue
@@ -239,11 +243,28 @@ def run_sector_rotation_app(df_global=None):
         summary_data.append(row)
 
         # 2. Build Raw Input Data Row (Source Metrics)
+        
+        # Look up Benchmark Price for same date (Denominator)
+        bench_price = None
+        if bench_df is not None and not bench_df.empty:
+            try:
+                # Assuming index is Date
+                if last.name in bench_df.index:
+                    bench_price = bench_df.loc[last.name]['Close']
+            except:
+                pass
+
+        etf_price = last.get("Close")
+        raw_ratio = (etf_price / bench_price) if (etf_price and bench_price) else None
+
         input_row = {
             "Date": last.name.strftime('%Y-%m-%d') if hasattr(last, 'name') else pd.Timestamp.now().strftime('%Y-%m-%d'),
             "Theme": theme,
             "Ticker": etf_ticker,
-            "Close_Price": last.get("Close"),
+            "ETF_Price (Numerator)": etf_price,
+            "Benchmark": bench_ticker,
+            "Bench_Price (Denominator)": bench_price,
+            "Raw_Ratio (Num/Denom)": raw_ratio,
             "RRG_Ratio_Short (5d)": last.get("RRG_Ratio_Short"),
             "RRG_Mom_Short (5d)": last.get("RRG_Mom_Short"),
             "RRG_Ratio_Med (10d)": last.get("RRG_Ratio_Med"),
@@ -270,7 +291,7 @@ def run_sector_rotation_app(df_global=None):
             }
         )
 
-        # --- 2. DOWNLOAD RAW INPUTS BUTTON ---
+        # --- DOWNLOAD RAW INPUTS BUTTON ---
         if input_data_export:
             df_inputs = pd.DataFrame(input_data_export)
             file_date = pd.Timestamp.now().strftime("%Y%m%d")
@@ -282,7 +303,7 @@ def run_sector_rotation_app(df_global=None):
                 file_name=f"Sector_Raw_Inputs_{file_date}.csv",
                 mime="text/csv",
                 key="dl_sector_raw_inputs",
-                help="Downloads the raw RRG Ratio and Momentum values used to generate the table above."
+                help="Downloads the raw ETF Price, Benchmark Price, Ratio, and Momentum values."
             )
 
     st.markdown("---")
