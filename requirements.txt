@@ -10,3 +10,4 @@ tqdm
 google-generativeai
 spicy
 pyarrow
+plotly>=5.15.0

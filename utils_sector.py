@@ -2,339 +2,277 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import yfinance as yf
-import plotly.graph_objects as go
-from datetime import datetime, timedelta
+import os
 from io import StringIO
+from pathlib import Path
+from datetime import datetime, timedelta
+import time
 
-# Try to import the GDrive loader from the main utils
-try:
-    from utils import get_gdrive_binary_data
-except ImportError:
-    # Fallback if utils.py isn't found or structure differs
-    import requests
-    import re
-    def get_gdrive_binary_data(url):
-        match = re.search(r'/d/([a-zA-Z0-9_-]{25,})', url)
-        if not match: match = re.search(r'id=([a-zA-Z0-9_-]{25,})', url)
-        if not match: return None
-        file_id = match.group(1)
-        download_url = "https://drive.google.com/uc?export=download"
-        response = requests.get(download_url, params={'id': file_id})
-        return response.content if response.status_code == 200 else None
+# ==========================================
+# 1. CONFIGURATION & CONSTANTS
+# ==========================================
+HISTORY_YEARS = 1             
+BENCHMARK_TICKER = "SPY"      
 
-# --- CONFIGURATION (From Market Rotation) ---
-HISTORY_YEARS = 1
-BENCHMARK_TICKER = "SPY"
+# Moving Averages
 MA_FAST = 8         # EMA
 MA_MEDIUM = 21      # EMA
 MA_SLOW = 50        # SMA
 MA_BASE = 200       # SMA
-ATR_WINDOW = 20
-AVG_VOLUME_WINDOW = 20
 
+# Volatility & Normalization
+ATR_WINDOW = 20               
+AVG_VOLUME_WINDOW = 20        
+BETA_WINDOW = 60              
+
+# Timeframes (Trading Days)
 TIMEFRAMES = {
     'Short': 5,    # 5 Trading Days
     'Med':   10,   # 10 Trading Days
     'Long':  20    # 20 Trading Days
 }
 
-# --- DATA LOADING ---
+# Filters
+EXTENDED_THRESHOLD = 3.0
+MIN_DOLLAR_VOLUME = 2_000_000  # Adjusted default
 
-@st.cache_data(ttl=3600)
-def load_sector_universe():
-    """
-    Loads the universe from the SECTOR_UNIVERSE secret.
-    Handles both a direct CSV string or a Google Drive URL/ID.
-    """
-    secret_val = st.secrets.get("SECTOR_UNIVERSE", "")
-    
-    if not secret_val:
-        st.error("Missing Secret: SECTOR_UNIVERSE")
-        return pd.DataFrame(), [], {}
+# Paths (Using a temp directory for Streamlit Cloud compatibility)
+# In cloud apps, local storage is ephemeral. We use a folder that is likely writeable.
+DATA_DIR = Path("sector_data")
+DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-    df = None
-    
-    # Case A: Secret is a URL (GDrive)
-    if "http" in secret_val or "drive.google.com" in secret_val:
-        content = get_gdrive_binary_data(secret_val)
-        if content:
-            df = pd.read_csv(pd.io.common.BytesIO(content))
-    # Case B: Secret is the raw CSV string
-    else:
+# ==========================================
+# 2. DATA MANAGER
+# ==========================================
+class SectorDataManager:
+    def __init__(self):
+        self.data_path = DATA_DIR
+
+    def load_universe(self):
+        """
+        Reads the universe from st.secrets["SECTOR_UNIVERSE"].
+        Returns: df, tickers, theme_map
+        """
+        csv_content = st.secrets.get("SECTOR_UNIVERSE", "")
+        if not csv_content:
+            st.error("❌ Secret 'SECTOR_UNIVERSE' is missing or empty.")
+            return pd.DataFrame(), [], {}
+            
         try:
-            df = pd.read_csv(StringIO(secret_val))
-        except:
-            pass
+            df = pd.read_csv(StringIO(csv_content))
             
-    if df is None or df.empty:
-        st.error("Failed to load Sector Universe data.")
-        return pd.DataFrame(), [], {}
+            # Clean data
+            df['Ticker'] = df['Ticker'].str.strip().str.upper()
+            df['Theme'] = df['Theme'].str.strip()
+            
+            if 'Role' in df.columns:
+                df['Role'] = df['Role'].str.strip().str.title() 
+            else:
+                df['Role'] = 'Stock' 
 
-    # Clean Data
-    df.columns = [c.strip() for c in df.columns]
-    if 'Ticker' in df.columns:
-        df['Ticker'] = df['Ticker'].str.strip().str.upper()
-    if 'Theme' in df.columns:
-        df['Theme'] = df['Theme'].str.strip()
-    
-    # Default Role if missing
-    if 'Role' not in df.columns:
-        df['Role'] = 'Stock'
-        
-    # Map Themes to ETFs
-    # Assuming 'Role' == 'ETF' defines the theme's benchmark
-    theme_map = {}
-    etf_rows = df[df['Role'].isin(['ETF', 'Benchmark'])]
-    for _, row in etf_rows.iterrows():
-        theme_map[row['Theme']] = row['Ticker']
-        
-    tickers = df['Ticker'].unique().tolist()
-    
-    # Ensure Benchmark is in the list
-    if BENCHMARK_TICKER not in tickers:
-        tickers.append(BENCHMARK_TICKER)
-        
-    return df, tickers, theme_map
-
-@st.cache_data(ttl=3600)
-def fetch_sector_data(tickers):
-    """
-    Downloads historical data for all tickers.
-    Uses st.cache_data to prevent re-downloading on every rerun.
-    """
-    if not tickers:
-        return {}
-        
-    end_date = datetime.today()
-    start_date = end_date - timedelta(days=HISTORY_YEARS * 365 + 60) # Extra buffer for MAs
-    
-    # Download in bulk
-    data = yf.download(
-        tickers,
-        start=start_date,
-        end=end_date,
-        group_by='ticker',
-        auto_adjust=False,
-        threads=True,
-        progress=False
-    )
-    
-    processed_data = {}
-    
-    # Handle single ticker case vs multi-ticker
-    if len(tickers) == 1:
-        processed_data[tickers[0]] = data
-    else:
-        for t in tickers:
-            try:
-                df = data[t].copy()
-                if not df.empty:
-                    # Drop multi-index level if exists
-                    processed_data[t] = df
-            except KeyError:
-                pass
+            tickers = df['Ticker'].unique().tolist()
+            if BENCHMARK_TICKER not in tickers:
+                tickers.append(BENCHMARK_TICKER)
                 
-    return processed_data
-
-# --- CALCULATIONS ---
-
-def calculate_technical_indicators(df):
-    if df.empty: return df
-    
-    # Moving Averages
-    df['EMA_8'] = df['Close'].ewm(span=MA_FAST, adjust=False).mean()
-    df['EMA_21'] = df['Close'].ewm(span=MA_MEDIUM, adjust=False).mean()
-    df['SMA_50'] = df['Close'].rolling(window=MA_SLOW).mean()
-    df['SMA_200'] = df['Close'].rolling(window=MA_BASE).mean()
-    
-    # Volatility (ADR)
-    daily_range_pct = ((df['High'] - df['Low']) / df['Low']) * 100
-    df['ADR_Pct'] = daily_range_pct.rolling(window=ATR_WINDOW).mean()
-    
-    # Relative Volume
-    avg_vol = df["Volume"].rolling(window=AVG_VOLUME_WINDOW).mean()
-    df["RVOL"] = df["Volume"] / avg_vol
-    
-    # RVOL over timeframes
-    for label, days in TIMEFRAMES.items():
-        df[f'RVOL_{label}'] = df['RVOL'].rolling(window=days).mean()
-        
-    return df
-
-def calculate_rrg_metrics(df, benchmark_df):
-    """
-    Calculates Relative Rotation Graph (RRG) coordinates.
-    JdK RS-Ratio (Trend) and JdK RS-Momentum (Momentum of Trend).
-    """
-    if df.empty or benchmark_df.empty: return df
-    
-    # 1. Relative Strength (RS) = Price / Benchmark
-    # Align indices
-    common_idx = df.index.intersection(benchmark_df.index)
-    price = df.loc[common_idx, 'Close']
-    bench = benchmark_df.loc[common_idx, 'Close']
-    
-    rs = (price / bench) * 100
-    
-    # 2. Process for each timeframe (Short, Med, Long)
-    # RRG logic simplified approximation:
-    # Ratio = RS / MovingAverage(RS)
-    # Momentum = Ratio / MovingAverage(Ratio)
-    
-    for label, window in TIMEFRAMES.items():
-        # Adjust windows based on timeframe "speed"
-        # Standard RRG often uses roughly 10-week window. We adapt to our days.
-        # Short: fast rotation. Med: standard. Long: slow.
-        
-        trend_window = window * 4  # e.g. 20 days for Short
-        mom_window = window        # e.g. 5 days for Short
-        
-        # RS-Ratio (Trend)
-        # 100 + ((RS - MA(RS)) / MA(RS)) * 100 approx, or just RS / MA(RS) * 100
-        rs_ma = rs.rolling(window=trend_window).mean()
-        rs_ratio = 100 + ((rs - rs_ma) / rs_ma) * 100
-        
-        # RS-Momentum (Rate of Change of Ratio)
-        ratio_ma = rs_ratio.rolling(window=mom_window).mean()
-        rs_mom = 100 + ((rs_ratio - ratio_ma) / ratio_ma) * 100
-        
-        # Reindex back to original df
-        df.loc[common_idx, f'RRG_Ratio_{label}'] = rs_ratio
-        df.loc[common_idx, f'RRG_Mom_{label}'] = rs_mom
-        
-        # Pure Alpha (Performance vs Spy)
-        # Returns over N days - SPY returns over N days
-        pct_change = df['Close'].pct_change(periods=window)
-        spy_change = benchmark_df['Close'].pct_change(periods=window)
-        
-        df[f'Alpha_{label}'] = (pct_change - spy_change) * 100
-        
-    return df
-
-def process_market_data(processed_data, theme_map, universe_df):
-    """
-    Master processing function.
-    Returns:
-    1. full_data: Dict of processed dataframes
-    2. summary_df: Snapshot for tables
-    """
-    if BENCHMARK_TICKER not in processed_data:
-        return {}, pd.DataFrame()
-        
-    spy_df = processed_data[BENCHMARK_TICKER]
-    
-    summary_rows = []
-    
-    for ticker, df in processed_data.items():
-        if df.empty: continue
-        
-        # 1. Technicals
-        df = calculate_technical_indicators(df)
-        
-        # 2. RRG & Alpha
-        df = calculate_rrg_metrics(df, spy_df)
-        
-        # 3. Last Row Summary
-        last = df.iloc[-1]
-        
-        # Find Theme info
-        theme_row = universe_df[universe_df['Ticker'] == ticker]
-        theme = theme_row['Theme'].values[0] if not theme_row.empty else "Unknown"
-        role = theme_row['Role'].values[0] if not theme_row.empty else "Stock"
-        
-        row = {
-            'Ticker': ticker,
-            'Theme': theme,
-            'Role': role,
-            'Price': last['Close'],
-            'EMA8_Above_21': last['EMA_8'] > last['EMA_21'],
-            'Above_SMA200': last['Close'] > last['SMA_200'],
-            'RVOL': last['RVOL']
-        }
-        
-        # Add Timeframe specific stats
-        for label in TIMEFRAMES.keys():
-            row[f'Alpha_{label}'] = last.get(f'Alpha_{label}', 0)
-            row[f'RRG_Ratio_{label}'] = last.get(f'RRG_Ratio_{label}', 100)
-            row[f'RRG_Mom_{label}'] = last.get(f'RRG_Mom_{label}', 100)
-            row[f'RVOL_{label}'] = last.get(f'RVOL_{label}', 1)
+            # Create Theme Map (Theme -> ETF Ticker)
+            etf_rows = df[df['Role'] == 'Etf']
+            if not etf_rows.empty:
+                theme_map = dict(zip(etf_rows['Theme'], etf_rows['Ticker']))
+            else:
+                theme_map = {}
             
-        summary_rows.append(row)
+            return df, tickers, theme_map
+            
+        except Exception as e:
+            st.error(f"Error parsing SECTOR_UNIVERSE: {e}")
+            return pd.DataFrame(), [], {}
+
+    def get_file_path(self, ticker):
+        return self.data_path / f"{ticker}.parquet"
+
+    def save_ticker_data(self, ticker, df):
+        if df is None or df.empty: return
+        try:
+            df.to_parquet(self.get_file_path(ticker))
+        except Exception as e:
+            print(f"Failed to save {ticker}: {e}")
+
+    def load_ticker_data(self, ticker):
+        path = self.get_file_path(ticker)
+        if path.exists():
+            return pd.read_parquet(path)
+        return None
+
+# ==========================================
+# 3. CALCULATOR & UPDATE ENGINE
+# ==========================================
+class SectorAlphaCalculator:
+    def __init__(self):
+        self.dm = SectorDataManager()
+
+    def calculate_technical_indicators(self, df):
+        if df.empty: return df
         
-    return pd.DataFrame(summary_rows)
+        # Ensure we have close data
+        if 'Close' not in df.columns and 'Adj Close' in df.columns:
+             df['Close'] = df['Adj Close'] # Fallback
 
-# --- PLOTTING ---
-
-def get_quadrant_color(x, y):
-    if x > 100 and y > 100: return "rgb(0, 255, 0)"      # Leading (Green)
-    if x < 100 and y > 100: return "rgb(0, 100, 255)"    # Improving (Blue)
-    if x < 100 and y < 100: return "rgb(255, 0, 0)"      # Lagging (Red)
-    if x > 100 and y < 100: return "rgb(255, 165, 0)"    # Weakening (Yellow)
-    return "grey"
-
-def plot_rrg_chart(df, view='Med'):
-    """
-    Plots the Interactive RRG Chart using Plotly
-    """
-    if df.empty:
-        return go.Figure()
+        # EMAs/SMAs
+        df['EMA_8'] = df['Close'].ewm(span=MA_FAST, adjust=False).mean()
+        df['EMA_21'] = df['Close'].ewm(span=MA_MEDIUM, adjust=False).mean()
+        df['SMA_50'] = df['Close'].rolling(window=MA_SLOW).mean()
+        df['SMA_200'] = df['Close'].rolling(window=MA_BASE).mean()
         
-    ratio_col = f'RRG_Ratio_{view}'
-    mom_col = f'RRG_Mom_{view}'
-    
-    fig = go.Figure()
-    
-    # Draw Quadrant Lines
-    fig.add_shape(type="line", x0=0, y0=100, x1=200, y1=100, line=dict(color="gray", width=1, dash="dash"))
-    fig.add_shape(type="line", x0=100, y0=0, x1=100, y1=200, line=dict(color="gray", width=1, dash="dash"))
-    
-    # Background Labels
-    fig.add_annotation(x=102, y=102, text="LEADING", showarrow=False, font=dict(color="rgba(0,255,0,0.5)", size=20), xanchor="left", yanchor="bottom")
-    fig.add_annotation(x=98, y=102, text="IMPROVING", showarrow=False, font=dict(color="rgba(0,100,255,0.5)", size=20), xanchor="right", yanchor="bottom")
-    fig.add_annotation(x=98, y=98, text="LAGGING", showarrow=False, font=dict(color="rgba(255,0,0,0.5)", size=20), xanchor="right", yanchor="top")
-    fig.add_annotation(x=102, y=98, text="WEAKENING", showarrow=False, font=dict(color="rgba(255,165,0,0.5)", size=20), xanchor="left", yanchor="top")
-
-    # Plot Points
-    for i, row in df.iterrows():
-        color = get_quadrant_color(row[ratio_col], row[mom_col])
+        # Volatility
+        daily_range_pct = ((df['High'] - df['Low']) / df['Low']) * 100
+        df['ADR_Pct'] = daily_range_pct.rolling(window=ATR_WINDOW).mean()
         
-        # Size based on Role (ETFs bigger)
-        size = 12 if row['Role'] == 'ETF' else 8
-        symbol = 'diamond' if row['Role'] == 'ETF' else 'circle'
-        opacity = 0.9 if row['Role'] == 'ETF' else 0.6
+        # RVOL
+        avg_vol = df["Volume"].rolling(window=AVG_VOLUME_WINDOW).mean()
+        df["RVOL"] = df["Volume"] / avg_vol
+
+        # Timeframe RVOL
+        for label, time_window in TIMEFRAMES.items():
+            df[f"RVOL_{label}"] = df["RVOL"].rolling(window=time_window).mean()
         
-        fig.add_trace(go.Scatter(
-            x=[row[ratio_col]], 
-            y=[row[mom_col]],
-            mode='markers+text',
-            text=[row['Ticker']],
-            textposition="top center",
-            name=row['Ticker'],
-            marker=dict(color=color, size=size, symbol=symbol, opacity=opacity),
-            hovertemplate=f"<b>{row['Ticker']}</b> ({row['Theme']})<br>Ratio: %{{x:.1f}}<br>Mom: %{{y:.1f}}<extra></extra>"
-        ))
+        return df
+
+    def _calc_slope(self, series, window):
+        # Weighted Regression for smoother momentum
+        x = np.arange(window)
+        if window < 10:
+            weights = np.ones(window)
+        else:
+            weights = np.linspace(1.0, 3.0, window)
         
-        # Add simple tail (last 5% movement trace could be added here if full history was passed, 
-        # but for simplicity we are plotting the snapshot)
+        def slope_func(y):
+            return np.polyfit(x, y, 1, w=weights)[0]
+            
+        return series.rolling(window=window).apply(slope_func, raw=True)
 
-    # Dynamic Range
-    x_max = max(abs(df[ratio_col].max() - 100), abs(df[ratio_col].min() - 100)) + 2
-    y_max = max(abs(df[mom_col].max() - 100), abs(df[mom_col].min() - 100)) + 2
-    limit = max(x_max, y_max)
-    
-    fig.update_layout(
-        xaxis=dict(title="Relative Strength (Trend)", range=[100-limit, 100+limit], showgrid=False),
-        yaxis=dict(title="Relative Momentum (Velocity)", range=[100-limit, 100+limit], showgrid=False),
-        width=900, height=700,
-        showlegend=False,
-        template="plotly_dark",
-        margin=dict(l=40, r=40, t=40, b=40)
-    )
-    
-    return fig
+    def calculate_rrg_metrics(self, df, bench_df):
+        if df.empty or bench_df.empty: return df
+        
+        # Use Adj Close for Total Return (ETFs)
+        asset_col = 'Adj Close' if 'Adj Close' in df.columns else 'Close'
+        bench_col = 'Adj Close' if 'Adj Close' in bench_df.columns else 'Close'
+        
+        common_index = df.index.intersection(bench_df.index)
+        df = df.loc[common_index].copy()
+        bench = bench_df.loc[common_index].copy()
+        
+        raw_ratio = df[asset_col] / bench[bench_col]
+        
+        for label, time_window in TIMEFRAMES.items():
+            # RRG Logic
+            ratio_mean = raw_ratio.rolling(window=time_window).mean()
+            
+            # X-Axis: Trend (Deviation)
+            col_ratio = f"RRG_Ratio_{label}"
+            df[col_ratio] = ((raw_ratio - ratio_mean) / ratio_mean) * 100 + 100
+            
+            # Y-Axis: Momentum (Velocity)
+            raw_slope = self._calc_slope(raw_ratio, time_window)
+            velocity = (raw_slope / ratio_mean) * time_window * 100
+            
+            col_mom = f"RRG_Mom_{label}"
+            df[col_mom] = 100 + velocity
+            
+        return df
 
-# --- STYLING UTILS ---
+    def calculate_stock_alpha(self, df, parent_df):
+        if df.empty or parent_df.empty: return df
+        
+        common_index = df.index.intersection(parent_df.index)
+        df = df.loc[common_index].copy()
+        parent = parent_df.loc[common_index].copy()
+        
+        # Use standard Close for price action trading
+        df['Pct_Change'] = df['Close'].pct_change(fill_method=None)
+        parent['Pct_Change'] = parent['Close'].pct_change(fill_method=None)
+        
+        # Beta
+        rolling_cov = df['Pct_Change'].rolling(window=BETA_WINDOW).cov(parent['Pct_Change'])
+        rolling_var = parent['Pct_Change'].rolling(window=BETA_WINDOW).var()
+        df['Beta'] = rolling_cov / rolling_var
+        df['Beta'] = df['Beta'].fillna(1.0)
+        
+        # Alpha
+        df['Expected_Return'] = parent['Pct_Change'] * df['Beta']
+        df['True_Alpha_1D'] = df['Pct_Change'] - df['Expected_Return']
+        
+        for label, time_window in TIMEFRAMES.items():
+            col_alpha = f"True_Alpha_{label}"
+            df[col_alpha] = df['True_Alpha_1D'].fillna(0).rolling(window=time_window).sum() * 100
+            
+        return df
 
-def highlight_alpha(val):
-    color = 'green' if val > 0 else 'red'
-    return f'color: {color}'
+    def run_full_update(self, status_placeholder=None):
+        """
+        Downloads data from YFinance, calculates metrics, saves to disk.
+        """
+        uni_df, tickers, theme_map = self.dm.load_universe()
+        if not tickers: return
+
+        end_date = datetime.today()
+        start_date = end_date - timedelta(days=HISTORY_YEARS * 365)
+        
+        if status_placeholder: status_placeholder.write(f"⬇️ Downloading data for {len(tickers)} tickers...")
+        
+        # Batch download
+        chunk_size = 50
+        data_cache = {}
+        
+        for i in range(0, len(tickers), chunk_size):
+            chunk = tickers[i:i + chunk_size]
+            try:
+                # auto_adjust=False to get Adj Close and Close separately
+                data = yf.download(chunk, start=start_date, end=end_date, group_by='ticker', auto_adjust=False, threads=True, progress=False)
+                
+                for t in chunk:
+                    if len(chunk) == 1: t_df = data
+                    else: 
+                        try: t_df = data[t]
+                        except KeyError: continue
+                    
+                    if not t_df.empty:
+                        t_df.index.name = 'Date'
+                        data_cache[t] = t_df
+            except Exception as e:
+                print(f"Batch failed: {e}")
+
+        # Process Spy
+        if status_placeholder: status_placeholder.write("🧮 Calculating Benchmarks...")
+        spy_df = data_cache.get(BENCHMARK_TICKER)
+        if spy_df is None: 
+            st.error("Benchmark SPY download failed.")
+            return
+
+        spy_df = self.calculate_technical_indicators(spy_df)
+        self.dm.save_ticker_data(BENCHMARK_TICKER, spy_df)
+
+        # Process Themes
+        themes = uni_df[uni_df['Role'] == 'Etf']['Theme'].unique()
+        
+        for theme in themes:
+            etf_ticker = theme_map.get(theme)
+            if not etf_ticker or etf_ticker not in data_cache: continue
+            
+            etf_df = data_cache[etf_ticker]
+            etf_df = self.calculate_technical_indicators(etf_df)
+            etf_df = self.calculate_rrg_metrics(etf_df, spy_df)
+            self.dm.save_ticker_data(etf_ticker, etf_df)
+            
+            # Process Stocks in Theme
+            stocks = uni_df[(uni_df['Theme'] == theme) & (uni_df['Role'] == 'Stock')]['Ticker'].tolist()
+            for stock in stocks:
+                if stock not in data_cache: continue
+                s_df = data_cache[stock]
+                s_df = self.calculate_technical_indicators(s_df)
+                s_df = self.calculate_stock_alpha(s_df, etf_df)
+                
+                # Quality check
+                if 'True_Alpha_1D' in s_df.columns and not s_df['True_Alpha_1D'].dropna().empty:
+                    self.dm.save_ticker_data(stock, s_df)
+
+        if status_placeholder: status_placeholder.write("✅ Update Complete.")

@@ -23,6 +23,10 @@ from utils import (
     VOL_SMA_PERIOD, EMA8_PERIOD, EMA21_PERIOD
 )
 
+# --- IMPORT SECTOR PAGES---
+import utils_sector
+import main_sector
+
 # --- 0. PAGE CONFIGURATION ---
 st.set_page_config(page_title="Trading Toolbox", layout="wide", page_icon="💎")
 
@@ -2507,6 +2511,7 @@ try:
         st.Page(lambda: run_rsi_scanner_app(df_global), title="RSI Scanner", icon="🤖", url_path="rsi_scanner"),
         st.Page(lambda: run_seasonality_app(df_global), title="Seasonality", icon="📅", url_path="seasonality"),
         st.Page(lambda: run_ema_distance_app(df_global), title="EMA Distance", icon="📏", url_path="ema_distance"),
+        st.Page(lambda: main_sector.run_sector_rotation_app(df_global), title="Sector Rotation", icon="🔄", url_path="sector_rotation"),
     ])
 
     # 4. Sidebar Captions
