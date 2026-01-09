@@ -7,7 +7,6 @@ import yfinance as yf
 import math
 from datetime import date, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from main_sector import run_sector_rotation_app # Sector Trends Import
 
 # --- IMPORT UTILS ---
 # Import everything we moved to utils.py
