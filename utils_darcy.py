@@ -1,4 +1,4 @@
-# --- IMPORTS ---
+# utils_darcy.py
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -11,17 +11,18 @@ from io import BytesIO
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # --- IMPORT SHARED UTILS ---
-from utils_shared import get_gdrive_binary_data, get_table_height
+# Now importing core logic from shared
+from utils_shared import (
+    get_gdrive_binary_data, get_table_height, 
+    add_technicals, prepare_data, 
+    find_divergences, calculate_optimal_signal_stats,
+    VOL_SMA_PERIOD, EMA8_PERIOD, EMA21_PERIOD
+)
 
 # --- CONSTANTS ---
-VOL_SMA_PERIOD = 30
-EMA8_PERIOD = 8
-EMA21_PERIOD = 21
-
-# REFRESH TIME: 600 seconds = 10 minutes
 CACHE_TTL = 600 
 
-# --- DATA LOADERS & GOOGLE DRIVE UTILS ---
+# --- DATA LOADERS ---
 
 @st.cache_data(ttl=CACHE_TTL)
 def get_parquet_config():
@@ -60,14 +61,12 @@ def load_parquet_and_clean(key):
             
         content = buffer.getvalue()
         
-        # Try Parquet first (faster), then CSV
         try:
             df = pd.read_parquet(BytesIO(content))
             if isinstance(df.index, pd.DatetimeIndex): df.reset_index(inplace=True)
             elif df.index.name and 'DATE' in str(df.index.name).upper(): df.reset_index(inplace=True)
         except Exception:
             try:
-                # engine='c' is faster for CSV
                 df = pd.read_csv(BytesIO(content), engine='c')
             except Exception:
                 return None
@@ -117,15 +116,11 @@ def load_ticker_map():
 @st.cache_data(ttl=CACHE_TTL, show_spinner="Updating Data...")
 def load_and_clean_data(url: str) -> pd.DataFrame:
     try:
-        # Use C engine for speed
         df = pd.read_csv(url, engine='c')
-        
-        # Optimize: Filter columns immediately
         want = {"Trade Date", "Order Type", "Symbol", "Strike (Actual)", "Strike", "Expiry", "Contracts", "Dollars", "Error"}
         existing_cols = [c for c in df.columns if c in want]
         df = df[existing_cols]
         
-        # Vectorized string cleanup
         for c in ["Order Type", "Symbol", "Strike", "Expiry"]:
             if c in df.columns:
                 df[c] = df[c].astype(str).str.strip()
@@ -146,7 +141,6 @@ def load_and_clean_data(url: str) -> pd.DataFrame:
             df["Strike (Actual)"] = pd.to_numeric(df["Strike (Actual)"], errors="coerce").fillna(0.0)
             
         if "Error" in df.columns:
-            # Faster boolean masking
             mask = df["Error"].astype(str).str.upper().isin({"TRUE", "1", "YES"})
             df = df[~mask]
             
@@ -156,45 +150,6 @@ def load_and_clean_data(url: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 # --- MATH & TECHNICAL ANALYSIS ---
-
-def add_technicals(df):
-    if df is None or df.empty: return df
-    
-    # Check if we already have the columns to avoid re-calc overhead
-    cols = set(df.columns)
-    has_rsi = 'RSI' in cols or 'RSI_14' in cols
-    has_ema8 = 'EMA_8' in cols
-    has_ema21 = 'EMA_21' in cols
-    has_sma200 = 'SMA_200' in cols
-    
-    if has_rsi and has_ema8 and has_ema21 and has_sma200:
-        return df
-
-    # Find close column efficiently
-    close_col = next((c for c in ['Price', 'Close', 'CLOSE'] if c in cols), None)
-    if not close_col: return df
-    
-    # Use the series for calc
-    close_series = df[close_col]
-
-    if not has_rsi:
-        delta = close_series.diff()
-        gain = (delta.where(delta > 0, 0)).ewm(alpha=1/14, adjust=False, min_periods=14).mean()
-        loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/14, adjust=False, min_periods=14).mean()
-        rs = gain / loss
-        df['RSI'] = 100 - (100 / (1 + rs))
-        df['RSI_14'] = df['RSI']
-    
-    if not has_ema8:
-        df['EMA_8'] = close_series.ewm(span=8, adjust=False).mean()
-        
-    if not has_ema21:
-        df['EMA_21'] = close_series.ewm(span=21, adjust=False).mean()
-        
-    if not has_sma200 and len(df) >= 200:
-        df['SMA_200'] = close_series.rolling(window=200).mean()
-            
-    return df
 
 @st.cache_data(ttl=CACHE_TTL)
 def fetch_yahoo_data(ticker):
@@ -277,346 +232,6 @@ def get_stock_indicators(sym: str):
         return spot_val, ema8, ema21, sma200, h_full
     except: 
         return None, None, None, None, None
-
-
-def find_divergences(df_tf, ticker, timeframe, min_n=0, periods_input=None, optimize_for='PF', lookback_period=90, price_source='High/Low', strict_validation=True, recent_days_filter=25, rsi_diff_threshold=2.0):
-    divergences = []
-    n_rows = len(df_tf)
-    
-    if n_rows < lookback_period + 1: return divergences
-    
-    rsi_vals = df_tf['RSI'].values
-    vol_vals = df_tf['Volume'].values
-    vol_sma_vals = df_tf['VolSMA'].values
-    close_vals = df_tf['Price'].values 
-    
-    # Select Price Arrays based on User Input
-    if price_source == 'Close':
-        low_vals = close_vals
-        high_vals = close_vals
-    else:
-        low_vals = df_tf['Low'].values
-        high_vals = df_tf['High'].values
-        
-    def get_date_str(idx, fmt='%Y-%m-%d'): 
-        ts = df_tf.index[idx]
-        if timeframe.lower() == 'weekly': 
-             return df_tf.iloc[idx]['ChartDate'].strftime(fmt)
-        return ts.strftime(fmt)
-    
-    # PASS 1: VECTORIZED PRE-CHECK
-    roll_low_min = pd.Series(low_vals).shift(1).rolling(window=lookback_period).min().values
-    roll_high_max = pd.Series(high_vals).shift(1).rolling(window=lookback_period).max().values
-    
-    is_new_low = (low_vals < roll_low_min)
-    is_new_high = (high_vals > roll_high_max)
-    
-    valid_mask = np.zeros(n_rows, dtype=bool)
-    valid_mask[lookback_period:] = True
-    
-    candidate_indices = np.where(valid_mask & (is_new_low | is_new_high))[0]
-    
-    potential_signals = [] 
-
-    # PASS 2: SCAN CANDIDATES
-    for i in candidate_indices:
-        p2_rsi = rsi_vals[i]
-        p2_vol = vol_vals[i]
-        p2_volsma = vol_sma_vals[i]
-        
-        lb_start = i - lookback_period
-        lb_rsi = rsi_vals[lb_start:i]
-        
-        is_vol_high = int(p2_vol > (p2_volsma * 1.5)) if not np.isnan(p2_volsma) else 0
-        
-        # Bullish Divergence
-        if is_new_low[i]:
-            p1_idx_rel = np.argmin(lb_rsi)
-            p1_rsi = lb_rsi[p1_idx_rel]
-            
-            if p2_rsi > (p1_rsi + rsi_diff_threshold):
-                idx_p1_abs = lb_start + p1_idx_rel
-                subset_rsi = rsi_vals[idx_p1_abs : i + 1]
-                
-                is_valid_structure = True
-                if strict_validation and np.any(subset_rsi > 50):
-                    is_valid_structure = False
-                
-                if is_valid_structure: 
-                    valid = True
-                    if i < n_rows - 1:
-                        post_rsi = rsi_vals[i+1:]
-                        if np.any(post_rsi <= p1_rsi): valid = False
-                    
-                    if valid:
-                        potential_signals.append({"index": i, "type": "Bullish", "p1_idx": idx_p1_abs, "vol_high": is_vol_high})
-        
-        # Bearish Divergence
-        elif is_new_high[i]:
-            p1_idx_rel = np.argmax(lb_rsi)
-            p1_rsi = lb_rsi[p1_idx_rel]
-            
-            if p2_rsi < (p1_rsi - rsi_diff_threshold):
-                idx_p1_abs = lb_start + p1_idx_rel
-                subset_rsi = rsi_vals[idx_p1_abs : i + 1]
-                
-                is_valid_structure = True
-                if strict_validation and np.any(subset_rsi < 50):
-                    is_valid_structure = False
-                    
-                if is_valid_structure: 
-                    valid = True
-                    if i < n_rows - 1:
-                        post_rsi = rsi_vals[i+1:]
-                        if np.any(post_rsi >= p1_rsi): valid = False
-                    
-                    if valid:
-                        potential_signals.append({"index": i, "type": "Bearish", "p1_idx": idx_p1_abs, "vol_high": is_vol_high})
-
-    # PASS 3: REPORT & METRICS
-    display_threshold_idx = n_rows - recent_days_filter
-    
-    # Pre-calculate indices for stats
-    bullish_indices = [x['index'] for x in potential_signals if x['type'] == 'Bullish']
-    bearish_indices = [x['index'] for x in potential_signals if x['type'] == 'Bearish']
-
-    for sig in potential_signals:
-        i = sig["index"]
-        s_type = sig["type"]
-        idx_p1_abs = sig["p1_idx"]
-        
-        # Values
-        price_p1 = low_vals[idx_p1_abs] if s_type=='Bullish' else high_vals[idx_p1_abs]
-        price_p2 = low_vals[i] if s_type=='Bullish' else high_vals[i]
-        vol_p1 = vol_vals[idx_p1_abs]
-        vol_p2 = vol_vals[i]
-        rsi_p1 = rsi_vals[idx_p1_abs]
-        rsi_p2 = rsi_vals[i]
-        date_p1 = get_date_str(idx_p1_abs, '%Y-%m-%d')
-        date_p2 = get_date_str(i, '%Y-%m-%d')
-        
-        is_recent = (i >= display_threshold_idx)
-
-        div_obj = {
-            'Ticker': ticker, 'Type': s_type, 'Timeframe': timeframe,
-            'Signal_Date_ISO': date_p2, 
-            'P1_Date_ISO': date_p1,
-            'RSI1': rsi_p1, 'RSI2': rsi_p2,
-            'Price1': price_p1, 'Price2': price_p2,
-            'Day1_Volume': vol_p1, 'Day2_Volume': vol_p2,
-            'Is_Recent': is_recent
-        }
-
-        # Tags
-        tags = []
-        latest_row = df_tf.iloc[-1]
-        last_price = latest_row['Price']
-        last_ema8 = latest_row.get('EMA8') 
-        last_ema21 = latest_row.get('EMA21')
-        def is_valid(val): return val is not None and not pd.isna(val)
-
-        if s_type == 'Bullish':
-            if is_valid(last_ema8) and last_price >= last_ema8: tags.append(f"EMA{EMA8_PERIOD}")
-            if is_valid(last_ema21) and last_price >= last_ema21: tags.append(f"EMA{EMA21_PERIOD}")
-        else: 
-            if is_valid(last_ema8) and last_price <= last_ema8: tags.append(f"EMA{EMA8_PERIOD}")
-            if is_valid(last_ema21) and last_price <= last_ema21: tags.append(f"EMA{EMA21_PERIOD}")
-            
-        if sig["vol_high"]: tags.append("V_HI")
-        if vol_vals[i] > vol_vals[idx_p1_abs]: tags.append("V_GROW")
-        
-        # Display Strings
-        date_display = f"{get_date_str(idx_p1_abs, '%b %d')} → {get_date_str(i, '%b %d')}"
-        rsi_display = f"{int(round(rsi_p1))} {'↗' if rsi_p2 > rsi_p1 else '↘'} {int(round(rsi_p2))}"
-        price_display = f"${price_p1:,.2f} ↗ ${price_p2:,.2f}" if price_p2 > price_p1 else f"${price_p1:,.2f} ↘ ${price_p2:,.2f}"
-
-        # Optimization Stats
-        hist_list = bullish_indices if s_type == 'Bullish' else bearish_indices
-        best_stats = calculate_optimal_signal_stats(hist_list, close_vals, i, signal_type=s_type, timeframe=timeframe, periods_input=periods_input, optimize_for=optimize_for)
-        
-        if best_stats is None: best_stats = {"Best Period": "—", "Profit Factor": 0.0, "Win Rate": 0.0, "EV": 0.0, "N": 0}
-        
-        if best_stats["N"] < min_n: continue
-
-        div_obj.update({
-            'Tags': tags, 
-            'Date_Display': date_display,
-            'RSI_Display': rsi_display,
-            'Price_Display': price_display, 
-            'Last_Close': f"${latest_row['Price']:,.2f}",
-            'N': best_stats['N']
-        })
-
-        # --- FORWARD PERFORMANCE & RAW CSV DATA ---
-        prefix = "Daily" if timeframe == "Daily" else "Weekly"
-        
-        if periods_input is not None:
-            for p in periods_input:
-                future_idx = i + p
-                col_price = f"{prefix}_Price_After_{p}"
-                col_vol = f"{prefix}_Volume_After_{p}"
-                col_ret = f"Ret_{p}"
-                
-                if future_idx < n_rows:
-                    f_price = close_vals[future_idx]
-                    div_obj[col_price] = f_price
-                    div_obj[col_vol] = vol_vals[future_idx]
-                    
-                    entry = close_vals[i]
-                    # Logic: Long return for Bullish, Short return for Bearish
-                    if s_type == 'Bullish':
-                        ret_pct = (f_price - entry) / entry
-                    else:
-                        ret_pct = (entry - f_price) / entry 
-                        
-                    div_obj[col_ret] = ret_pct * 100
-                    
-                else:
-                    div_obj[col_price] = "n/a"
-                    div_obj[col_vol] = "n/a"
-                    div_obj[col_ret] = np.nan
-        
-        divergences.append(div_obj)
-            
-    return divergences
-
-
-def prepare_data(df):
-    df.columns = [col.strip().replace(' ', '').replace('-', '').upper() for col in df.columns]
-    
-    cols = df.columns
-    # Fast column lookup
-    date_col = next((c for c in cols if 'DATE' in c), None)
-    close_col = next((c for c in cols if 'CLOSE' in c and 'W_' not in c), None)
-    
-    if not date_col or not close_col: return None, None
-    
-    # Vectorized Indexing
-    if not isinstance(df.index, pd.DatetimeIndex):
-        df.index = pd.to_datetime(df[date_col])
-    
-    # Only sort if needed (check first 2 elements)
-    if len(df) > 1 and df.index[0] > df.index[-1]:
-        df = df.sort_index()
-    
-    # Identify key columns
-    vol_col = next((c for c in cols if ('VOL' in c or 'VOLUME' in c) and 'W_' not in c), None)
-    high_col = next((c for c in cols if 'HIGH' in c and 'W_' not in c), None)
-    low_col = next((c for c in cols if 'LOW' in c and 'W_' not in c), None)
-    
-    if not all([vol_col, high_col, low_col]): return None, None
-    
-    # --- BUILD DAILY ---
-    d_rsi = next((c for c in cols if c in ['RSI', 'RSI14'] and 'W_' not in c), 'RSI')
-    d_ema8 = next((c for c in cols if c == 'EMA8'), 'EMA8')
-    d_ema21 = next((c for c in cols if c == 'EMA21'), 'EMA21')
-
-    # Minimal copy
-    needed_cols = [close_col, vol_col, high_col, low_col]
-    if d_rsi in df.columns: needed_cols.append(d_rsi)
-    if d_ema8 in df.columns: needed_cols.append(d_ema8)
-    if d_ema21 in df.columns: needed_cols.append(d_ema21)
-    
-    df_d = df[needed_cols].copy()
-    
-    rename_dict = {close_col: 'Price', vol_col: 'Volume', high_col: 'High', low_col: 'Low'}
-    if d_rsi in df_d.columns: rename_dict[d_rsi] = 'RSI'
-    if d_ema8 in df_d.columns: rename_dict[d_ema8] = 'EMA8'
-    if d_ema21 in df_d.columns: rename_dict[d_ema21] = 'EMA21'
-    
-    df_d.rename(columns=rename_dict, inplace=True)
-    df_d['VolSMA'] = df_d['Volume'].rolling(window=VOL_SMA_PERIOD).mean()
-    
-    df_d = add_technicals(df_d)
-    df_d.dropna(subset=['Price', 'RSI'], inplace=True)
-    
-    # --- BUILD WEEKLY ---
-    # Quick check for pre-calculated weekly columns
-    w_close = 'W_CLOSE'
-    if w_close not in df.columns:
-        return df_d, None
-
-    cols_w = [c for c in df.columns if c.startswith('W_')]
-    df_w = df[cols_w].copy()
-    
-    # Fast rename map
-    w_map = {c: c.replace('W_', '').replace('CLOSE', 'Price').title() for c in cols_w}
-    # Fix specific keys
-    for k, v in w_map.items():
-        if 'Price' in v: w_map[k] = 'Price'
-        if 'Volume' in v: w_map[k] = 'Volume'
-        if 'High' in v: w_map[k] = 'High'
-        if 'Low' in v: w_map[k] = 'Low'
-        if 'Rsi' in v: w_map[k] = 'RSI'
-        if 'Ema8' in v: w_map[k] = 'EMA8'
-        if 'Ema21' in v: w_map[k] = 'EMA21'
-        
-    df_w.rename(columns=w_map, inplace=True)
-    df_w['VolSMA'] = df_w['Volume'].rolling(window=VOL_SMA_PERIOD).mean()
-    df_w['ChartDate'] = df_w.index - pd.to_timedelta(df_w.index.dayofweek, unit='D')
-    
-    df_w = add_technicals(df_w)
-    df_w.dropna(subset=['Price', 'RSI'], inplace=True)
-        
-    return df_d, df_w
-
-def calculate_optimal_signal_stats(history_indices, price_array, current_idx, signal_type='Bullish', timeframe='Daily', periods_input=None, optimize_for='PF'):
-    hist_arr = np.array(history_indices)
-    valid_indices = hist_arr[hist_arr < current_idx]
-    
-    if len(valid_indices) == 0: return None
-
-    periods = np.array(periods_input) if periods_input else np.array([5, 21, 63, 126])
-    total_len = len(price_array)
-    unit = 'w' if timeframe.lower() == 'weekly' else 'd'
-
-    # Vectorized Exits
-    exit_indices_matrix = valid_indices[:, None] + periods[None, :]
-    valid_exits_mask = exit_indices_matrix < total_len
-    safe_exit_indices = np.clip(exit_indices_matrix, 0, total_len - 1)
-    
-    entry_prices = price_array[valid_indices]
-    exit_prices_matrix = price_array[safe_exit_indices]
-    
-    raw_returns = (exit_prices_matrix - entry_prices[:, None]) / entry_prices[:, None]
-    if signal_type == 'Bearish': raw_returns = -raw_returns
-
-    best_score = -999.0
-    best_stats = None
-    
-    # Inner loop is small (4-5 periods max)
-    for i, p in enumerate(periods):
-        col_mask = valid_exits_mask[:, i]
-        p_rets = raw_returns[col_mask, i]
-        
-        if len(p_rets) == 0: continue
-            
-        wins = p_rets[p_rets > 0]
-        gross_win = np.sum(wins)
-        gross_loss = np.abs(np.sum(p_rets[p_rets < 0]))
-        
-        pf = 999.0 if gross_loss == 0 and gross_win > 0 else (gross_win / gross_loss if gross_loss > 0 else 0.0)
-        
-        n = len(p_rets)
-        win_rate = (len(wins) / n) * 100
-        avg_ret = np.mean(p_rets) * 100
-        std_dev = np.std(p_rets)
-        sqn = (np.mean(p_rets) / std_dev) * np.sqrt(n) if std_dev > 0 else 0.0
-        
-        current_score = pf if optimize_for == 'PF' else sqn
-        
-        if current_score > best_score:
-            best_score = current_score
-            best_stats = {
-                "Best Period": f"{p}{unit}",
-                "Profit Factor": pf,
-                "Win Rate": win_rate,
-                "EV": avg_ret,
-                "N": n,
-                "SQN": sqn
-            }
-            
-    return best_stats
 
 def get_optimal_rsi_duration(history_df, current_rsi, tolerance=2.0):
     if history_df is None or len(history_df) < 100:
@@ -765,16 +380,13 @@ def analyze_trade_setup(ticker, t_df, global_df):
     
     return score, reasons, suggestions
 
-@st.cache_data(ttl=43200) # Cache for 12 hours
+@st.cache_data(ttl=43200)
 def get_market_cap(symbol: str) -> float:
     try:
         t = yf.Ticker(symbol)
-        # Try fast_info first
         fi = t.fast_info
         mc = fi.get('marketCap')
         if mc: return float(mc)
-        
-        # Fallback: Manual calculation (More stable)
         shares = fi.get('shares')
         price = fi.get('lastPrice')
         if shares and price:
@@ -846,7 +458,6 @@ def calculate_smart_money_score(df, start_d, end_d, mc_thresh, filter_ema, limit
     if not valid_data.empty:
         valid_data["Impact"] = valid_data["Net Sentiment ($)"] / valid_data["Market Cap"]
         
-        # Vectorized Normalization
         def normalize(s):
             mn, mx = s.min(), s.max()
             return (s - mn) / (mx - mn) if mx != mn else 0
@@ -862,14 +473,12 @@ def calculate_smart_money_score(df, start_d, end_d, mc_thresh, filter_ema, limit
         
         valid_data["Last Trade"] = valid_data["Last_Trade"].dt.strftime("%d %b")
         
-        # Batch Fetch Techs
         candidates_bull = valid_data.sort_values(by="Base_Score_Bull", ascending=False).head(limit * 3)
         candidates_bear = valid_data.sort_values(by="Base_Score_Bear", ascending=False).head(limit * 3)
         
         all_tickers = set(candidates_bull["Symbol"]).union(set(candidates_bear["Symbol"]))
         batch_techs = fetch_technicals_batch(list(all_tickers)) if filter_ema else {}
 
-        # OPTIMIZED: Vectorized Filter Application
         def apply_ema_filter(df, mode="Bull"):
             if not filter_ema:
                 df["Score"] = df[f"Base_Score_{mode}"] * 100
@@ -882,7 +491,6 @@ def calculate_smart_money_score(df, start_d, end_d, mc_thresh, filter_ema, limit
                 if mode == "Bull": return (s > e8), ("✅ >EMA8" if s > e8 else "⚠️ <EMA8")
                 return (s < e8), ("✅ <EMA8" if s < e8 else "⚠️ >EMA8")
             
-            # Use list comprehension (faster than iterrows)
             results = [check_row(t) for t in df["Symbol"]]
             mask = [r[0] for r in results]
             trends = [r[1] for r in results]
@@ -900,7 +508,6 @@ def calculate_smart_money_score(df, start_d, end_d, mc_thresh, filter_ema, limit
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def fetch_history_optimized(ticker_sym, t_map):
     pq_key = f"{ticker_sym}_PARQUET"
-    # Try Parquet
     if pq_key in t_map:
         try:
             url = f"https://drive.google.com/uc?export=download&id={t_map[pq_key]}"
@@ -910,14 +517,12 @@ def fetch_history_optimized(ticker_sym, t_map):
                 return df.reset_index() if 'DATE' in str(df.index.name).upper() else df
         except Exception: pass 
 
-    # Try CSV
     if ticker_sym in t_map:
         try:
             df = get_ticker_technicals(ticker_sym, t_map)
             if df is not None and not df.empty: return df
         except Exception: pass
 
-    # Fallback
     try:
         return fetch_yahoo_data(ticker_sym)
     except Exception:
@@ -936,9 +541,8 @@ def find_rsi_percentile_signals(df, ticker, pct_low=0.10, pct_high=0.90, min_n=1
     p10 = np.quantile(rsi_vals, pct_low)
     p90 = np.quantile(rsi_vals, pct_high)
     
-    # Vectorized Signal Detection
     prev_rsi = np.roll(rsi_vals, 1)
-    prev_rsi[0] = rsi_vals[0] # Fix roll artifact
+    prev_rsi[0] = rsi_vals[0]
     
     bull_mask = (prev_rsi < p10) & (rsi_vals >= (p10 + 1.0))
     bear_mask = (prev_rsi > p90) & (rsi_vals <= (p90 - 1.0))
@@ -949,7 +553,6 @@ def find_rsi_percentile_signals(df, ticker, pct_low=0.10, pct_high=0.90, min_n=1
     
     latest_close = df['Price'].iloc[-1] 
     
-    # Process Found Signals
     for i in all_indices:
         curr_date = hist_df.index[i].date()
         if filter_date and curr_date < filter_date: continue
@@ -1009,7 +612,6 @@ def get_ticker_technicals(ticker: str, mapping: dict):
     
     if buffer:
         try:
-            # Engine C for speed
             df = pd.read_csv(buffer, engine='c')
             df.columns = [c.strip().upper() for c in df.columns]
             if "DATE" not in df.columns: df.rename(columns={df.columns[0]: "DATE"}, inplace=True)

@@ -41,7 +41,23 @@ def run_sector_rotation_app(df_global=None):
     """
     st.title("🔄 Sector Rotation")
     
-    # --- 0. BENCHMARK CONTROL ---
+    # --- 0a. PRE-CALC LAST OPTIONS TRADE ---
+    # Create lookup map for speed: Ticker -> Date string
+    last_trade_map = {}
+    if df_global is not None and not df_global.empty:
+        try:
+            # Ensure Trade Date is datetime
+            if not pd.api.types.is_datetime64_any_dtype(df_global['Trade Date']):
+                df_global['Trade Date'] = pd.to_datetime(df_global['Trade Date'], errors='coerce')
+                
+            # Group by Symbol, get Max Date
+            last_trade_series = df_global.groupby('Symbol')['Trade Date'].max()
+            # Convert to dict: {'AAPL': '25 Jan 24', ...}
+            last_trade_map = last_trade_series.dt.strftime('%d %b %y').to_dict()
+        except Exception:
+            pass # Fail silently if global data structure differs
+
+    # --- 0b. BENCHMARK CONTROL ---
     if "sector_benchmark" not in st.session_state:
         st.session_state.sector_benchmark = "SPY"
 
@@ -277,8 +293,7 @@ def run_sector_rotation_app(df_global=None):
             - Score 60+
             → **Action:** Best time to enter new positions
             
-            **⚖️ Established Leadership**  
-            - Strong but been leading for days
+            **⚖️ Established Leadership** - Strong but been leading for days
             - High score but not fresh
             → **Action:** Hold positions, don't chase
             
@@ -655,7 +670,9 @@ def run_sector_rotation_app(df_global=None):
                 breakout = us.detect_breakout_candidates(sdf, st.session_state.sector_target)
                 dip_buy = us.detect_dip_buy_candidates(sdf, st.session_state.sector_target)
                 fading = us.detect_fading_candidates(sdf, st.session_state.sector_target)
-                divergence = us.detect_relative_strength_divergence(sdf, st.session_state.sector_target)
+                
+                # UPDATED: Use Shared Divergence Logic (passed ticker)
+                divergence = us.detect_relative_strength_divergence(sdf, stock)
                 
                 # Comprehensive score
                 score_data = us.calculate_comprehensive_stock_score(
@@ -680,6 +697,9 @@ def run_sector_rotation_app(df_global=None):
                 elif divergence == 'bearish_divergence':
                     div_label = "📉 Bear Div"
                 
+                # LOOKUP LAST TRADE
+                last_trade_date = last_trade_map.get(stock, "—")
+                
                 ranking_data.append({
                     "Ticker": stock,
                     "Score": score_data['total_score'] if score_data else 0,
@@ -694,10 +714,11 @@ def run_sector_rotation_app(df_global=None):
                     "RVOL 20d": last.get('RVOL_Long', 0),
                     "Pattern": pattern,
                     "Divergence": div_label,
-                    "8 EMA": get_ma_signal(last['Close'], last.get('Ema8', 0)),
-                    "21 EMA": get_ma_signal(last['Close'], last.get('Ema21', 0)),
-                    "50 MA": get_ma_signal(last['Close'], last.get('Sma50', 0)),
-                    "200 MA": get_ma_signal(last['Close'], last.get('Sma200', 0)),
+                    "Last Option": last_trade_date, # NEW COLUMN
+                    "8 EMA": us.get_ma_signal(last['Close'], last.get('Ema8', 0)),
+                    "21 EMA": us.get_ma_signal(last['Close'], last.get('Ema21', 0)),
+                    "50 MA": us.get_ma_signal(last['Close'], last.get('Sma50', 0)),
+                    "200 MA": us.get_ma_signal(last['Close'], last.get('Sma200', 0)),
                     # Hidden columns for filtering
                     "_breakout": breakout is not None,
                     "_dip_buy": dip_buy,
@@ -705,7 +726,7 @@ def run_sector_rotation_app(df_global=None):
                 })
                 
             except Exception as e:
-                st.error(f"Error processing {stock}: {e}")
+                # st.error(f"Error processing {stock}: {e}")
                 continue
 
     if not ranking_data:
@@ -767,6 +788,8 @@ def run_sector_rotation_app(df_global=None):
                 "RVOL 5d": st.column_config.NumberColumn("RVOL 5d", format="%.1fx"),
                 "RVOL 10d": st.column_config.NumberColumn("RVOL 10d", format="%.1fx"),
                 "RVOL 20d": st.column_config.NumberColumn("RVOL 20d", format="%.1fx"),
+                "Divergence": st.column_config.TextColumn("Divergence", width="small"),
+                "Last Option": st.column_config.TextColumn("Last Option", width="medium"),
             }
         )
     
