@@ -607,10 +607,29 @@ def run_sector_rotation_app(df_global=None):
             except FileNotFoundError:
                 st.error("SCORING_GUIDE.md not found. Please ensure it's in the repo root directory.")
     
-    # Get theme ETF for quadrant status
+    # Get theme ETF for quadrant status and score
     theme_etf_ticker = theme_map.get(st.session_state.sector_target)
     theme_df = etf_data_cache.get(theme_etf_ticker)
     theme_quadrant = us.get_quadrant_status(theme_df, 'Short') if theme_df is not None else "N/A"
+    
+    # Get sector score and stage for stock scoring
+    sector_consensus = us.calculate_consensus_theme_score(theme_df) if theme_df is not None else None
+    sector_score = sector_consensus['consensus_score'] if sector_consensus else 70
+    
+    # Determine sector stage from lifecycle categories
+    categories_for_stage = us.get_actionable_theme_summary(etf_data_cache, theme_map)
+    sector_stage = "Established"  # default
+    
+    for theme_info in categories_for_stage.get('early_stage', []):
+        if theme_info['theme'] == st.session_state.sector_target:
+            sector_stage = "Early"
+            break
+    
+    if sector_stage == "Established":
+        for theme_info in categories_for_stage.get('topping', []):
+            if theme_info['theme'] == st.session_state.sector_target:
+                sector_stage = "Topping"
+                break
     
     # Filter stocks for current theme
     stock_tickers = uni_df[
@@ -651,39 +670,29 @@ def run_sector_rotation_app(df_global=None):
                 alpha_20d = last.get(f"Alpha_Long_{st.session_state.sector_target}", 0)
                 beta = last.get(f"Beta_{st.session_state.sector_target}", 1.0)
                 
-                # Pattern detection
+                # Pattern detection (keep old patterns for reference)
                 breakout = us.detect_breakout_candidates(sdf, st.session_state.sector_target)
                 dip_buy = us.detect_dip_buy_candidates(sdf, st.session_state.sector_target)
                 fading = us.detect_fading_candidates(sdf, st.session_state.sector_target)
-                divergence = us.detect_relative_strength_divergence(sdf, st.session_state.sector_target)
                 
-                # Comprehensive score
+                # Comprehensive score with NEW scoring system
                 score_data = us.calculate_comprehensive_stock_score(
                     sdf,
                     st.session_state.sector_target,
-                    theme_quadrant
+                    theme_quadrant,
+                    sector_score,
+                    sector_stage
                 )
                 
-                # Determine pattern label
-                pattern = ""
-                if breakout:
-                    pattern = f"🚀 Breakout ({breakout['strength']:.0f})"
-                elif dip_buy:
-                    pattern = "💎 Dip Buy"
-                elif fading:
-                    pattern = "⚠️ Fading"
-                
-                # Divergence indicator
-                div_label = ""
-                if divergence == 'bullish_divergence':
-                    div_label = "📈 Bull Div"
-                elif divergence == 'bearish_divergence':
-                    div_label = "📉 Bear Div"
+                if not score_data:
+                    continue
                 
                 ranking_data.append({
                     "Ticker": stock,
-                    "Score": score_data['total_score'] if score_data else 0,
-                    "Grade": score_data['grade'] if score_data else 'F',
+                    "Score": score_data['total_score'],
+                    "Grade": score_data['grade'],
+                    "Category": score_data['category'],
+                    "Pattern": score_data.get('pattern_label', ''),
                     "Price": last['Close'],
                     "Beta": beta,
                     "Alpha 5d": alpha_5d,
@@ -692,16 +701,17 @@ def run_sector_rotation_app(df_global=None):
                     "RVOL 5d": last.get('RVOL_Short', 0),
                     "RVOL 10d": last.get('RVOL_Med', 0),
                     "RVOL 20d": last.get('RVOL_Long', 0),
-                    "Pattern": pattern,
-                    "Divergence": div_label,
+                    "Days+": score_data.get('days_positive', 0),
+                    "Setup": score_data.get('setup_reason', ''),
                     "8 EMA": get_ma_signal(last['Close'], last.get('Ema8', 0)),
                     "21 EMA": get_ma_signal(last['Close'], last.get('Ema21', 0)),
                     "50 MA": get_ma_signal(last['Close'], last.get('Sma50', 0)),
                     "200 MA": get_ma_signal(last['Close'], last.get('Sma200', 0)),
-                    # Hidden columns for filtering
-                    "_breakout": breakout is not None,
-                    "_dip_buy": dip_buy,
-                    "_fading": fading
+                    # Hidden columns for new filtering
+                    "_optimal": score_data['category'] == "🎯 Optimal Entry",
+                    "_pullback": score_data['category'] == "💎 Pullback Buy",
+                    "_established": score_data['category'] == "⚖️ Established Winner",
+                    "_extended": "Extended" in score_data.get('pattern_label', '')
                 })
                 
             except Exception as e:
@@ -714,109 +724,139 @@ def run_sector_rotation_app(df_global=None):
     
     df_ranked = pd.DataFrame(ranking_data).sort_values(by='Score', ascending=False)
     
-    # --- 10. TABBED DISPLAY WITH SMART FILTERS ---
+    # --- 10. LIFECYCLE-BASED DISPLAY ---
     tab1, tab2, tab3, tab4 = st.tabs([
-        "🎯 All Stocks",
-        "🚀 Breakouts",
-        "💎 Dip Buys",
-        "⚠️ Faders"
+        "🎯 Optimal Entries",
+        "💎 Pullback Buys",
+        "⚖️ Established Winners",
+        "⚠️ Caution / Extended"
     ])
     
     # Display columns (excluding hidden filter columns)
     display_cols = [c for c in df_ranked.columns if not c.startswith('_')]
     
     with tab1:
-        st.caption(f"Showing {len(df_ranked)} stocks sorted by comprehensive score")
+        optimal = df_ranked[df_ranked['_optimal'] == True]
         
-        # Highlight function
-        def highlight_top_scores(row):
-            styles = pd.Series('', index=row.index)
-            score = row.get('Score', 0)
-            
-            if score >= 80:
-                styles['Score'] = 'background-color: #d4edda; color: #155724; font-weight: bold;'
-                styles['Grade'] = 'background-color: #d4edda; color: #155724; font-weight: bold;'
-            elif score >= 70:
-                styles['Score'] = 'background-color: #cce5ff; color: #004085;'
-                styles['Grade'] = 'background-color: #cce5ff; color: #004085;'
-            
-            # Highlight alpha columns
-            for col in ['Alpha 5d', 'Alpha 10d', 'Alpha 20d']:
-                if col in row.index:
-                    alpha = row[col]
-                    if alpha > 2.0:
-                        styles[col] = 'background-color: #d4edda; color: #155724;'
-                    elif alpha < -2.0:
-                        styles[col] = 'background-color: #f8d7da; color: #721c24;'
-            
-            return styles
-        
-        st.dataframe(
-            df_ranked[display_cols].style.apply(highlight_top_scores, axis=1),
-            hide_index=True,
-            use_container_width=True,
-            column_config={
-                "Ticker": st.column_config.TextColumn("Ticker", width="small"),
-                "Score": st.column_config.NumberColumn("Score", format="%.0f"),
-                "Grade": st.column_config.TextColumn("Grade", width="small"),
-                "Price": st.column_config.NumberColumn("Price", format="$%.2f"),
-                "Beta": st.column_config.NumberColumn("Beta", format="%.2f"),
-                "Alpha 5d": st.column_config.NumberColumn("Alpha 5d", format="%+.2f%%"),
-                "Alpha 10d": st.column_config.NumberColumn("Alpha 10d", format="%+.2f%%"),
-                "Alpha 20d": st.column_config.NumberColumn("Alpha 20d", format="%+.2f%%"),
-                "RVOL 5d": st.column_config.NumberColumn("RVOL 5d", format="%.1fx"),
-                "RVOL 10d": st.column_config.NumberColumn("RVOL 10d", format="%.1fx"),
-                "RVOL 20d": st.column_config.NumberColumn("RVOL 20d", format="%.1fx"),
-            }
-        )
-    
-    with tab2:
-        breakouts = df_ranked[df_ranked['_breakout'] == True]
-        
-        if not breakouts.empty:
-            st.success(f"🚀 Found {len(breakouts)} breakout candidates")
-            st.caption("Stocks transitioning from underperformance to outperformance with volume confirmation")
+        if not optimal.empty:
+            st.success(f"🎯 Found {len(optimal)} optimal entry setups")
+            st.caption("**Fresh inflection points** - stocks just turning positive (0-2% alpha) in strong sectors. Best risk/reward!")
             
             st.dataframe(
-                breakouts[display_cols],
+                optimal[display_cols],
                 hide_index=True,
                 use_container_width=True,
                 column_config={
-                    "Ticker": st.column_config.TextColumn("Ticker", width="small"),
                     "Score": st.column_config.NumberColumn("Score", format="%.0f"),
+                    "Grade": st.column_config.TextColumn("Grade", width="small"),
                     "Alpha 5d": st.column_config.NumberColumn("Alpha 5d", format="%+.2f%%"),
-                    "RVOL 5d": st.column_config.NumberColumn("RVOL 5d", format="%.1fx"),
+                    "Alpha 10d": st.column_config.NumberColumn("Alpha 10d", format="%+.2f%%"),
+                    "Alpha 20d": st.column_config.NumberColumn("Alpha 20d", format="%+.2f%%"),
+                    "Days+": st.column_config.NumberColumn("Days+", help="Days with positive alpha"),
+                    "Setup": st.column_config.TextColumn("Setup", width="large"),
+                }
+            )
+            
+            with st.expander("📖 Why These Are 'Optimal'"):
+                st.markdown("""
+                **Selection Criteria:**
+                - ✅ **Just Turning Positive:** Alpha 0-2% (catching the turn, not chasing)
+                - ✅ **Fresh Momentum:** Just started moving in last few days
+                - ✅ **Volume Confirming:** RVOL 1.2x+ (institutions buying)
+                - ✅ **Strong Sector:** Theme score 70+ (sector rotation IN)
+                - ✅ **Room to Run:** Stock lagging sector (catch-up potential)
+                
+                **Goal:** Catch the wave as it's forming, not after it's crested!
+                """)
+        else:
+            st.info("No optimal entry setups currently - stocks are either extended or not yet set up")
+    
+    with tab2:
+        pullbacks = df_ranked[df_ranked['_pullback'] == True]
+        
+        if not pullbacks.empty:
+            st.success(f"💎 Found {len(pullbacks)} pullback opportunities")
+            st.caption("**Buy strength on weakness** - proven winners pulling back to support. Lower risk entries.")
+            
+            st.dataframe(
+                pullbacks[display_cols],
+                hide_index=True,
+                use_container_width=True,
+                column_config={
+                    "Score": st.column_config.NumberColumn("Score", format="%.0f"),
+                    "Grade": st.column_config.TextColumn("Grade", width="small"),
+                    "Setup": st.column_config.TextColumn("Setup", width="large"),
+                }
+            )
+            
+            with st.expander("📖 Why These Are 'Pullbacks'"):
+                st.markdown("""
+                **Selection Criteria:**
+                - ✅ **Was Strong:** Alpha 20d +3%+ (proven winner)
+                - ✅ **Pulled Back:** Alpha 5d now 0-1.5% (resting)
+                - ✅ **Trend Intact:** Price still above 21 EMA
+                - ✅ **Near Support:** Within 5% of key level
+                
+                **Goal:** Buy dips in stocks that have already proven they can lead!
+                """)
+        else:
+            st.info("No pullback opportunities currently")
+    
+    with tab3:
+        established = df_ranked[df_ranked['_established'] == True]
+        
+        if not established.empty:
+            st.info(f"⚖️ {len(established)} established winners")
+            st.caption("**Already leading** - great stocks but late to enter. Hold if you own them, don't chase if you don't.")
+            
+            st.dataframe(
+                established[display_cols],
+                hide_index=True,
+                use_container_width=True,
+                column_config={
+                    "Score": st.column_config.NumberColumn("Score", format="%.0f"),
+                    "Grade": st.column_config.TextColumn("Grade", width="small"),
+                    "Days+": st.column_config.NumberColumn("Days+", help="Days been positive"),
+                }
+            )
+            
+            with st.expander("📖 Why These Are 'Established'"):
+                st.markdown("""
+                **Characteristics:**
+                - Alpha 4%+ (already ran significantly)
+                - Been leading for 10+ days
+                - High score BUT late entry
+                
+                **Action:**
+                - ✅ **If you own it:** Hold, it's still strong
+                - ❌ **If you don't:** Don't chase - wait for pullback
+                
+                **Why scored high but not recommended to enter:** Score reflects quality, not timing. 
+                These are great stocks you missed - wait for them to rest!
+                """)
+        else:
+            st.info("No established winners in this sector")
+    
+    with tab4:
+        caution = df_ranked[
+            (df_ranked['_optimal'] == False) & 
+            (df_ranked['_pullback'] == False) & 
+            (df_ranked['_established'] == False)
+        ]
+        
+        if not caution.empty:
+            st.warning(f"⚠️ {len(caution)} stocks to avoid or watch carefully")
+            st.caption("**Extended, fading, or poor setups** - avoid new entries or take profits if holding")
+            
+            st.dataframe(
+                caution[display_cols],
+                hide_index=True,
+                use_container_width=True,
+                column_config={
+                    "Score": st.column_config.NumberColumn("Score", format="%.0f"),
+                    "Grade": st.column_config.TextColumn("Grade", width="small"),
+                    "Setup": st.column_config.TextColumn("Setup", width="large"),
                 }
             )
         else:
-            st.info("No breakout patterns detected currently")
-    
-    with tab3:
-        dip_buys = df_ranked[df_ranked['_dip_buy'] == True]
-        
-        if not dip_buys.empty:
-            st.success(f"💎 Found {len(dip_buys)} dip buy opportunities")
-            st.caption("Stocks that were outperforming but pulled back to average - potential buy-the-dip setups")
-            
-            st.dataframe(
-                dip_buys[display_cols],
-                hide_index=True,
-                use_container_width=True
-            )
-        else:
-            st.info("No dip buy setups currently")
-    
-    with tab4:
-        faders = df_ranked[df_ranked['_fading'] == True]
-        
-        if not faders.empty:
-            st.warning(f"⚠️ {len(faders)} stocks showing weakness")
-            st.caption("Stocks that were very strong but alpha is declining - consider taking profits")
-            
-            st.dataframe(
-                faders[display_cols],
-                hide_index=True,
-                use_container_width=True
-            )
-        else:
-            st.success("✅ No concerning faders detected")
+            st.success("✅ All stocks showing decent setups!")
