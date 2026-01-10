@@ -255,52 +255,162 @@ def run_sector_rotation_app(df_global=None):
     
     st.divider()
 
-    # --- 7. ALL THEMES PERFORMANCE TABLE ---
-    st.subheader("All Themes Performance")
+    # --- 7. ACTIONABLE THEME SCORECARD ---
+    st.subheader("📊 Sector Scorecard")
     
-    st.markdown(f"""
-    * **Rel Perf (Relative Performance):** Trend strength vs {st.session_state.sector_benchmark}. 
-      Positive = outperforming, Negative = underperforming.
-    * **Mom (Momentum):** Rate of change (velocity) of the trend. 
-      Positive = accelerating, Negative = decelerating.
-    """)
-    
-    summary_data = []
-    
-    for theme in all_themes:
-        etf_ticker = theme_map.get(theme)
-        if not etf_ticker:
-            continue
+    # Help section for theme scoring
+    col_help_theme1, col_help_theme2, col_help_theme3 = st.columns([1, 1, 1])
+    with col_help_theme1:
+        st.markdown("**📈 Score:** Position (40%) + Momentum (30%) + Trajectory (20%) + Stability (10%)")
+    with col_help_theme2:
+        st.markdown("**🏷️ Labels:** 🆕 Fresh • ⭐ Early • 🕐 Established • 🚀 Accelerating")
+    with col_help_theme3:
+        with st.popover("📖 How Theme Scoring Works", use_container_width=True):
+            st.markdown("""
+            ### Theme Score Breakdown
             
-        etf_df = etf_data_cache.get(etf_ticker)
-        if etf_df is None or etf_df.empty:
-            continue
+            **40 pts - Position:**
+            - Leading quadrant = Best
+            - Distance from center = Strength
+            
+            **30 pts - Momentum:**
+            - Consistent across 5d/10d/20d
+            - Accelerating over time
+            
+            **20 pts - Trajectory:**
+            - 3-day path analysis
+            - Improving vs declining
+            
+            **10 pts - Stability:**
+            - Smooth = Good
+            - Choppy = Risky
+            
+            **Freshness:**
+            - Days in current quadrant
+            - Fresh = Early opportunity
+            """)
+            st.markdown("---")
+            if st.button("📖 View Complete Theme Guide", use_container_width=True):
+                st.session_state.show_theme_guide = True
+                st.rerun()
+    
+    # Show full theme guide if requested
+    if st.session_state.get('show_theme_guide', False):
+        with st.expander("📖 Complete Theme Scoring Guide", expanded=True):
+            if st.button("✖️ Close Theme Guide"):
+                st.session_state.show_theme_guide = False
+                st.rerun()
+            
+            try:
+                with open("THEME_SCORING_GUIDE.md", "r") as f:
+                    st.markdown(f.read())
+            except FileNotFoundError:
+                st.error("THEME_SCORING_GUIDE.md not found. Please ensure it's in the repo root directory.")
+    
+    # Get actionable theme summary
+    timeframe_map = {"5 Days": "Short", "10 Days": "Med", "20 Days": "Long"}
+    view_key = timeframe_map[st.session_state.sector_view]
+    
+    categories = us.get_actionable_theme_summary(etf_data_cache, theme_map, view_key)
+    
+    # Display in actionable groups
+    if categories['momentum']:
+        st.success(f"🚀 **MOMENTUM SECTORS** ({len(categories['momentum'])} themes) - Action: ✅ Actively Allocate")
         
-        last = etf_df.iloc[-1]
-        row = {"Theme": theme}
+        momentum_data = []
+        for theme_info in categories['momentum']:
+            momentum_data.append({
+                "Theme": theme_info['theme'],
+                "Score": theme_info['score'],
+                "Grade": theme_info['grade'],
+                "Status": theme_info['quadrant'],
+                "Fresh": theme_info['freshness'],
+                "Path": theme_info['trajectory'],
+                "Action": theme_info['action']
+            })
         
-        for p, key in [("5d", "Short"), ("10d", "Med"), ("20d", "Long")]:
-            row[f"Status ({p})"] = us.get_quadrant_status(etf_df, key)
-            row[f"Rel Perf ({p})"] = last.get(f"RRG_Ratio_{key}", 100) - 100
-            row[f"Mom ({p})"] = last.get(f"RRG_Mom_{key}", 100) - 100
-
-        summary_data.append(row)
-        
-    if summary_data:
         st.dataframe(
-            pd.DataFrame(summary_data),
+            pd.DataFrame(momentum_data),
             hide_index=True,
             use_container_width=True,
             column_config={
-                "Theme": st.column_config.TextColumn("Theme"),
-                "Rel Perf (5d)": st.column_config.NumberColumn("Rel Perf (5d)", format="%+.2f%%"),
-                "Mom (5d)": st.column_config.NumberColumn("Mom (5d)", format="%+.2f"),
-                "Rel Perf (10d)": st.column_config.NumberColumn("Rel Perf (10d)", format="%+.2f%%"),
-                "Mom (10d)": st.column_config.NumberColumn("Mom (10d)", format="%+.2f"),
-                "Rel Perf (20d)": st.column_config.NumberColumn("Rel Perf (20d)", format="%+.2f%%"),
-                "Mom (20d)": st.column_config.NumberColumn("Mom (20d)", format="%+.2f"),
+                "Score": st.column_config.NumberColumn("Score", format="%.0f"),
+                "Grade": st.column_config.TextColumn("Grade", width="small"),
             }
         )
+    
+    if categories['rotation']:
+        st.info(f"💎 **ROTATION OPPORTUNITIES** ({len(categories['rotation'])} themes) - Action: 🎯 Watch & Prepare")
+        
+        rotation_data = []
+        for theme_info in categories['rotation']:
+            rotation_data.append({
+                "Theme": theme_info['theme'],
+                "Score": theme_info['score'],
+                "Grade": theme_info['grade'],
+                "Status": theme_info['quadrant'],
+                "Fresh": theme_info['freshness'],
+                "Path": theme_info['trajectory'],
+                "Action": theme_info['action']
+            })
+        
+        st.dataframe(
+            pd.DataFrame(rotation_data),
+            hide_index=True,
+            use_container_width=True,
+            column_config={
+                "Score": st.column_config.NumberColumn("Score", format="%.0f"),
+                "Grade": st.column_config.TextColumn("Grade", width="small"),
+            }
+        )
+    
+    if categories['hold']:
+        st.warning(f"⚠️ **WEAKENING SECTORS** ({len(categories['hold'])} themes) - Action: ⚠️ Reduce / Hold")
+        
+        hold_data = []
+        for theme_info in categories['hold']:
+            hold_data.append({
+                "Theme": theme_info['theme'],
+                "Score": theme_info['score'],
+                "Grade": theme_info['grade'],
+                "Status": theme_info['quadrant'],
+                "Fresh": theme_info['freshness'],
+                "Path": theme_info['trajectory'],
+                "Action": theme_info['action']
+            })
+        
+        st.dataframe(
+            pd.DataFrame(hold_data),
+            hide_index=True,
+            use_container_width=True,
+            column_config={
+                "Score": st.column_config.NumberColumn("Score", format="%.0f"),
+                "Grade": st.column_config.TextColumn("Grade", width="small"),
+            }
+        )
+    
+    if categories['avoid']:
+        with st.expander(f"🚫 **AVOID SECTORS** ({len(categories['avoid'])} themes) - Action: 🚫 Zero Allocation", expanded=False):
+            avoid_data = []
+            for theme_info in categories['avoid']:
+                avoid_data.append({
+                    "Theme": theme_info['theme'],
+                    "Score": theme_info['score'],
+                    "Grade": theme_info['grade'],
+                    "Status": theme_info['quadrant'],
+                    "Fresh": theme_info['freshness'],
+                    "Path": theme_info['trajectory']
+                })
+            
+            st.dataframe(
+                pd.DataFrame(avoid_data),
+                hide_index=True,
+                use_container_width=True,
+                column_config={
+                    "Score": st.column_config.NumberColumn("Score", format="%.0f"),
+                    "Grade": st.column_config.TextColumn("Grade", width="small"),
+                }
+            )
 
     st.markdown("---")
 
