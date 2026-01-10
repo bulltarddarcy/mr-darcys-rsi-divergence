@@ -323,16 +323,70 @@ def run_sector_rotation_app(df_global=None):
         else:
             st.warning(f"Ticker {search_t} not found.")
 
-    # Theme selector
+    # Theme selector with immediate update
     curr_idx = all_themes.index(st.session_state.sector_target) \
         if st.session_state.sector_target in all_themes else 0
-    new_target = st.selectbox("Select Theme to View Stocks", all_themes, index=curr_idx)
     
-    if new_target != st.session_state.sector_target:
-        st.session_state.sector_target = new_target
+    def update_theme():
+        st.session_state.sector_target = st.session_state.theme_selector
+    
+    new_target = st.selectbox(
+        "Select Theme to View Stocks", 
+        all_themes, 
+        index=curr_idx,
+        key="theme_selector",
+        on_change=update_theme
+    )
 
-    # --- 9. STOCK ANALYSIS WITH SMART FILTERS ---
+    st.markdown("---")
+
+    # --- 9. STOCK ANALYSIS WITH SCORING HELP ---
     st.subheader(f"📊 {st.session_state.sector_target} - Stock Analysis")
+    
+    # Help section - MORE PROMINENT
+    st.info("💡 **Stocks are ranked by comprehensive score:** Alpha Performance (40%) + Volume Confirmation (20%) + Technical Position (20%) + Theme Alignment (20%)")
+    
+    col_help1, col_help2, col_help3 = st.columns([1, 1, 1])
+    with col_help1:
+        st.markdown("**📊 Grades:** A (80+) • B (70-79) • C (60-69) • D/F (Avoid)")
+    with col_help2:
+        st.markdown("**🎯 Patterns:** 🚀 Breakout • 💎 Dip Buy • ⚠️ Fading")
+    with col_help3:
+        with st.popover("📖 How Scoring Works", use_container_width=True):
+            st.markdown("""
+            ### Quick Reference
+            
+            **Score Breakdown:**
+            - 40 pts: Alpha (beating sector?)
+            - 20 pts: Volume (institutions buying?)
+            - 20 pts: Technicals (uptrend?)
+            - 20 pts: Theme Alignment (sector strong?)
+            
+            **Pattern Bonuses:**
+            - 🚀 Breakout: +10 pts
+            - 💎 Dip Buy: +5 pts
+            - 📈 Bullish Divergence: +5 pts
+            - 📉 Bearish Divergence: -10 pts
+            """)
+            
+            st.markdown("---")
+            
+            if st.button("📖 View Complete Guide", use_container_width=True):
+                st.session_state.show_full_guide = True
+                st.rerun()
+
+    # Show full guide if requested
+    if st.session_state.get('show_full_guide', False):
+        with st.expander("📖 Complete Scoring & Pattern Guide", expanded=True):
+            if st.button("✖️ Close Guide"):
+                st.session_state.show_full_guide = False
+                st.rerun()
+            
+            try:
+                with open("SCORING_GUIDE.md", "r") as f:
+                    st.markdown(f.read())
+            except FileNotFoundError:
+                st.error("SCORING_GUIDE.md not found. Please ensure it's in the repo root directory.")
     
     # Get theme ETF for quadrant status
     theme_etf_ticker = theme_map.get(st.session_state.sector_target)
@@ -418,6 +472,7 @@ def run_sector_rotation_app(df_global=None):
                     "Alpha 20d": alpha_20d,
                     "RVOL 5d": last.get('RVOL_Short', 0),
                     "RVOL 10d": last.get('RVOL_Med', 0),
+                    "RVOL 20d": last.get('RVOL_Long', 0),
                     "Pattern": pattern,
                     "Divergence": div_label,
                     "8 EMA": get_ma_signal(last['Close'], last.get('Ema8', 0)),
@@ -492,6 +547,7 @@ def run_sector_rotation_app(df_global=None):
                 "Alpha 20d": st.column_config.NumberColumn("Alpha 20d", format="%+.2f%%"),
                 "RVOL 5d": st.column_config.NumberColumn("RVOL 5d", format="%.1fx"),
                 "RVOL 10d": st.column_config.NumberColumn("RVOL 10d", format="%.1fx"),
+                "RVOL 20d": st.column_config.NumberColumn("RVOL 20d", format="%.1fx"),
             }
         )
     
