@@ -528,6 +528,7 @@ def detect_relative_strength_divergence(
     return None
 
 def calculate_comprehensive_stock_score(
+def calculate_comprehensive_stock_score(
     df: pd.DataFrame, 
     theme_suffix: str, 
     theme_quadrant: str,
@@ -546,9 +547,9 @@ def calculate_comprehensive_stock_score(
     4. Sector Context (10%) - Is sector at right stage?
     
     PHILOSOPHY:
-    - High scores = Early inflection points (0-2% alpha, just turning)
+    - High scores = Early inflection points (0-3% alpha, just turning)
     - Low scores = Already extended (5%+ alpha, too late)
-    - Penalties for chasing momentum
+    - Base scoring + bonuses (not all-or-nothing)
     
     Args:
         df: Stock dataframe
@@ -582,7 +583,7 @@ def calculate_comprehensive_stock_score(
         rvol_10d = last.get('RVOL_Med', 0)
         rvol_20d = last.get('RVOL_Long', 0)
         
-        # Calculate days in current alpha state (CUMULATIVE, not consecutive)
+        # Calculate days positive (cumulative in last 20)
         days_positive = 0
         for i in range(min(20, len(df))):
             row_alpha = df.iloc[-(i+1)].get(f"Alpha_Short_{theme_suffix}", 0)
@@ -593,88 +594,42 @@ def calculate_comprehensive_stock_score(
         setup_score = 0
         setup_reason = ""
         
-        # Part A: Position Relative to Sector (20 points)
-        sector_is_strong = "Leading" in theme_quadrant or "Improving" in theme_quadrant
-        
-        # CATCHING UP PLAY: +20 (BEST SETUP)
-        if (sector_is_strong and 
-            0 <= alpha_5d <= 2.0 and 
-            -2.0 <= alpha_20d <= 0 and
-            rvol_5d >= 1.2):
-            setup_score += 20
-            setup_reason = "Catching Up Play: Sector hot, stock just turning positive"
-        
-        # EMERGING LEADER: +15 (CLEAN SETUP)
-        elif ("Improving" in theme_quadrant and
-              1.0 <= alpha_5d <= 3.0 and
-              alpha_5d > alpha_10d > alpha_20d and
-              rvol_5d >= 1.2):
-            setup_score += 15
-            setup_reason = "Emerging Leader: Building with sector"
-        
-        # LAGGARD AWAKENING: +12 (CATCH-UP TRADE)
-        elif (sector_stage == "Early" and
-              -3.0 <= alpha_20d <= -1.0 and
-              0 <= alpha_5d <= 2.0):
+        # BASE SCORING: Give points for being positive in decent sector
+        if alpha_5d > 0 and sector_score >= 60:
             setup_score += 12
-            setup_reason = "Laggard Awakening: Worst performer waking up"
-        
-        # EMERGING FROM NEUTRAL: +8
-        elif (-1.0 <= alpha_20d <= 1.0 and
-              1.0 <= alpha_5d <= 3.0):
+            setup_reason = "Positive in decent sector"
+        elif alpha_5d > 0:
             setup_score += 8
-            setup_reason = "Emerging: Early move, not confirmed"
+            setup_reason = "Positive alpha"
         
-        # ALREADY LEADING: +5 (LATE ENTRY)
-        elif (alpha_5d >= 3.0 and alpha_5d <= 5.0 and
-              alpha_10d >= 2.5 and
-              alpha_20d >= 2.0):
-            setup_score += 5
-            setup_reason = "Already Leading: Been strong for weeks, late entry"
+        # BONUS 1: Fresh Entry Range (0-3% alpha) = +15 points
+        if 0 <= alpha_5d <= 3.0:
+            setup_score += 15
+            setup_reason = "Fresh entry range (0-3% alpha)"
+            
+            # Extra bonus if also fresh on days
+            if days_positive <= 7:
+                setup_score += 5
+                setup_reason += ", very fresh (≤7 days)"
         
-        # ALREADY EXTENDED: -10 PENALTY (TOO LATE)
-        elif (alpha_5d > 5.0 or
-              (alpha_5d > 4.0 and alpha_10d > 4.0 and days_positive >= 10) or
-              (sector_stage == "Established" and alpha_5d > 4.0)):
+        # BONUS 2: Improving Trend (alpha accelerating) = +10 points
+        if alpha_5d > alpha_10d and alpha_10d > alpha_20d:
+            setup_score += 10
+            setup_reason += ", accelerating"
+        elif alpha_5d > alpha_20d:
+            setup_score += 6
+            setup_reason += ", improving"
+        
+        # PENALTY: Extended (>5% alpha OR high alpha + mature) = -15 points
+        if alpha_5d > 5.0:
+            setup_score -= 15
+            setup_reason = "Extended (>5% alpha)"
+        elif alpha_5d > 3.5 and days_positive >= 15:
             setup_score -= 10
-            setup_reason = "Extended: Already ran, too late to enter"
+            setup_reason = "Extended (mature + high alpha)"
         
-        score_breakdown['setup_position'] = setup_score
+        score_breakdown['setup_quality'] = max(0, min(40, setup_score))
         score_breakdown['setup_reason'] = setup_reason
-        
-        # Part B: Trend Reversal Quality (20 points)
-        reversal_score = 0
-        reversal_reason = ""
-        
-        # FRESH BREAKOUT: +20 (HIGHEST QUALITY)
-        if (-2.0 <= alpha_20d <= -0.5 and
-            -0.5 <= alpha_10d <= 0.5 and
-            0.5 <= alpha_5d <= 2.5 and
-            rvol_5d >= 1.3):
-            reversal_score += 20
-            reversal_reason = "Fresh Breakout: Just turned positive with volume"
-        
-        # DIP BUY IN STRONG STOCK: +15
-        elif (alpha_20d >= 3.0 and
-              0 <= alpha_5d <= 1.5 and
-              price > ema21 and ema21 > 0 and
-              abs(price - ema21) / ema21 <= 0.05):
-            reversal_score += 15
-            reversal_reason = "Dip Buy: Strong stock at support"
-        
-        # CONTINUATION PATTERN: +12
-        elif (alpha_5d > 0 and alpha_10d > 0 and alpha_20d > 0 and
-              2.0 <= alpha_5d <= 4.0):
-            reversal_score += 12
-            reversal_reason = "Continuation: Building on strength"
-        
-        # ALREADY LEADING - EXTENDED: +5 (LATE)
-        elif (alpha_5d >= 4.0 and alpha_10d >= 3.0 and days_positive >= 14):
-            reversal_score += 5
-            reversal_reason = "Extended Leader: Late entry"
-        
-        score_breakdown['reversal_quality'] = reversal_score
-        score_breakdown['reversal_reason'] = reversal_reason
         
         # --- FACTOR 2: Entry Timing (30 points) ---
         timing_score = 0
@@ -691,173 +646,181 @@ def calculate_comprehensive_stock_score(
         else:
             dist_from_sma50 = 999
         
-        # NEAR SUPPORT: +15 (PULLBACK ENTRY)
-        if (abs(dist_from_ema21) <= 0.02 and price > sma200 and sma200 > 0):
-            timing_score += 15
-            timing_reason = "At Support: Near 21 EMA, low risk entry"
+        # BASE: Give some points for reasonable position
+        if price > sma200 and sma200 > 0:
+            timing_score += 5
+            timing_reason = "Above 200 MA"
         
-        # FRESH BREAKOUT: +15
-        elif (0 < dist_from_sma50 <= 0.07 and rvol_5d >= 1.3):
-            timing_score += 15
-            timing_reason = "Fresh Breakout: Just crossed key level"
-        
-        # TIGHT CONSOLIDATION: +12
-        elif (-0.03 <= dist_from_ema21 <= 0.03):
-            timing_score += 12
-            timing_reason = "Consolidating: Tight range"
-        
-        # NEUTRAL ZONE: +8
-        elif (-0.05 <= dist_from_ema21 <= 0.05):
-            timing_score += 8
-            timing_reason = "Neutral: Between support levels"
-        
-        # EXTENDED FROM ENTRY: -10 PENALTY
-        elif (dist_from_ema21 > 0.10 or dist_from_sma50 > 0.15):
+        # BONUS: Near support = +10 points
+        if abs(dist_from_ema21) <= 0.03 and price > sma200 and sma200 > 0:
+            timing_score += 10
+            timing_reason = "At support (21 EMA)"
+        # BONUS: Fresh breakout = +10 points
+        elif 0 < dist_from_sma50 <= 0.08 and rvol_5d >= 1.2:
+            timing_score += 10
+            timing_reason = "Fresh breakout"
+        # OK: Neutral zone = +5 points
+        elif -0.05 <= dist_from_ema21 <= 0.08:
+            timing_score += 5
+            timing_reason = "Neutral zone"
+        # PENALTY: Extended from entry = -10 points
+        elif dist_from_ema21 > 0.12 or dist_from_sma50 > 0.18:
             timing_score -= 10
-            timing_reason = "Extended: >10% from entry, wait for pullback"
+            timing_reason = "Extended from entry"
         
         score_breakdown['timing_price'] = timing_score
-        score_breakdown['timing_reason'] = timing_reason
         
-        # Part B: Volume Pattern (15 points)
+        # Part B: Volume Pattern (15 points) - LOWERED THRESHOLDS
         volume_score = 0
         volume_reason = ""
         
-        # BUILDING VOLUME (ACCUMULATION): +15
-        if (1.2 <= rvol_5d <= 1.8 and 
-            rvol_5d > rvol_10d > rvol_20d):
+        # BASE: Give points for any reasonable volume
+        if rvol_5d >= 1.3:
             volume_score += 15
-            volume_reason = "Accumulation: Volume building gradually"
-        
-        # EXPLOSIVE VOLUME (BREAKOUT): +12
-        elif rvol_5d >= 2.0:
+            volume_reason = "Strong volume (1.3x+)"
+        elif rvol_5d >= 1.0:
             volume_score += 12
-            volume_reason = "Explosive: Major move happening"
-        
-        # STEADY VOLUME: +8
-        elif 1.0 <= rvol_5d <= 1.2:
+            volume_reason = "Steady volume (1.0-1.3x)"
+        elif rvol_5d >= 0.85:
             volume_score += 8
-            volume_reason = "Steady: Normal volume"
-        
-        # DECLINING VOLUME: +3
-        elif rvol_5d < 1.0:
+            volume_reason = "Acceptable volume (0.85x+)"
+        else:
             volume_score += 3
-            volume_reason = "Weak: Volume declining"
+            volume_reason = "Weak volume (<0.85x)"
         
-        score_breakdown['timing_volume'] = volume_score
-        score_breakdown['volume_reason'] = volume_reason
+        # BONUS: Volume building (accelerating) = +3 points
+        if rvol_5d > rvol_10d > rvol_20d:
+            volume_score += 3
+            volume_reason += ", building"
+        
+        score_breakdown['timing_volume'] = min(15, volume_score)
+        score_breakdown['timing_reason'] = timing_reason + "; " + volume_reason
         
         # --- FACTOR 3: Risk/Reward (20 points) ---
         rr_score = 0
         rr_reason = ""
         
         # Part A: Upside Potential (15 points)
-        # Sector is leading by X%, stock is at Y%, gap = upside potential
-        sector_implied_alpha = 3.0 if sector_score >= 80 else (2.0 if sector_score >= 70 else 1.0)
+        sector_implied_alpha = 3.5 if sector_score >= 80 else (2.5 if sector_score >= 70 else 1.5)
         upside_gap = sector_implied_alpha - alpha_5d
         
-        # HIGH CATCH-UP POTENTIAL: +15
-        if upside_gap >= 3.0 and sector_score >= 70:
-            rr_score += 15
-            rr_reason = f"High Upside: {upside_gap:.1f}% room to catch sector"
-        
-        # MODERATE POTENTIAL: +10
-        elif -1.0 <= upside_gap <= 3.0:
-            rr_score += 10
-            rr_reason = "Moderate Upside: Tracking sector"
-        
-        # LIMITED UPSIDE: +5
-        elif upside_gap < -1.0:
+        # BASE: Give points for being in strong sector
+        if sector_score >= 70:
             rr_score += 5
-            rr_reason = "Limited Upside: Already ahead of sector"
         
-        score_breakdown['rr_upside'] = rr_score
-        score_breakdown['rr_upside_reason'] = rr_reason
+        # BONUS: High catch-up potential
+        if upside_gap >= 2.5 and sector_score >= 70:
+            rr_score += 10
+            rr_reason = f"High upside ({upside_gap:.1f}% room)"
+        elif upside_gap >= 0.5:
+            rr_score += 7
+            rr_reason = "Moderate upside"
+        elif upside_gap >= -1.0:
+            rr_score += 4
+            rr_reason = "Limited upside"
+        else:
+            rr_reason = "Already ahead of sector"
         
         # Part B: Downside Protection (5 points)
-        support_score = 0
+        if price > sma50 > sma200 and sma50 > 0 and sma200 > 0:
+            rr_score += 5
+        elif price > sma200 and sma200 > 0:
+            rr_score += 3
         
-        # STRONG SUPPORT STRUCTURE: +5
-        if (price > sma50 > sma200 and sma50 > 0 and sma200 > 0):
-            support_score += 5
-        
-        score_breakdown['rr_support'] = support_score
+        score_breakdown['risk_reward'] = min(20, rr_score)
+        score_breakdown['rr_reason'] = rr_reason
         
         # --- FACTOR 4: Sector Context (10 points) ---
         context_score = 0
         context_reason = ""
         
-        # EARLY STAGE SECTOR: +10 (PERFECT TIMING)
         if sector_stage == "Early" and sector_score >= 70:
             context_score += 10
-            context_reason = "Perfect: Sector just heating up"
-        
-        # ESTABLISHED SECTOR: +5 (STILL GOOD)
+            context_reason = "Perfect: Early stage sector"
         elif sector_stage == "Established" and sector_score >= 65:
-            context_score += 5
-            context_reason = "Good: Sector still strong"
-        
-        # TOPPING SECTOR: -10 PENALTY (WRONG SECTOR)
+            context_score += 7
+            context_reason = "Good: Established sector"
+        elif sector_stage == "Established" and sector_score >= 55:
+            context_score += 4
+            context_reason = "OK: Mature sector"
         elif sector_stage == "Topping" or sector_score < 50:
             context_score -= 10
-            context_reason = "Wrong Sector: Fighting rotation"
+            context_reason = "Wrong sector: Topping/weak"
         
         score_breakdown['sector_context'] = context_score
         score_breakdown['context_reason'] = context_reason
         
         # --- CALCULATE BASE TOTAL ---
-        total_score = (setup_score + reversal_score + timing_score + 
-                      volume_score + rr_score + support_score + context_score)
+        total_score = (score_breakdown['setup_quality'] + 
+                      score_breakdown['timing_price'] + 
+                      score_breakdown['timing_volume'] +
+                      score_breakdown['risk_reward'] + 
+                      score_breakdown['sector_context'])
         
-        # --- PATTERN BONUSES/PENALTIES ---
+        # --- PATTERN BONUSES/PENALTIES (Partial Credit) ---
         pattern_label = ""
+        pattern_score = 0
         
-        # FRESH BREAKOUT PATTERN: +10
-        if (-2.0 <= alpha_20d <= 0 and 0.5 <= alpha_5d <= 2.0 and rvol_5d >= 1.3):
-            total_score += 10
+        # FRESH BREAKOUT PATTERN: Check 4 criteria, give partial credit
+        fb_matches = 0
+        if -2.5 <= alpha_20d <= 0.5: fb_matches += 1
+        if 0 <= alpha_5d <= 3.0: fb_matches += 1
+        if rvol_5d >= 1.2: fb_matches += 1
+        if days_positive <= 8: fb_matches += 1
+        
+        if fb_matches >= 3:
+            pattern_score = 10 if fb_matches == 4 else 7
             pattern_label = "🚀 Fresh Breakout"
-            score_breakdown['pattern_bonus'] = 10
+            score_breakdown['pattern_bonus'] = pattern_score
         
-        # DIP BUY PATTERN: +8
-        elif (alpha_20d >= 3.0 and 0 <= alpha_5d <= 1.5 and 
-              price > ema21 and ema21 > 0):
-            total_score += 8
-            pattern_label = "💎 Dip Buy"
-            score_breakdown['pattern_bonus'] = 8
+        # DIP BUY PATTERN: Check 3 criteria, partial credit
+        elif alpha_20d >= 2.5 and -0.5 <= alpha_5d <= 2.0:
+            db_matches = 1  # Already know alpha criteria match
+            if price > ema21 and ema21 > 0: db_matches += 1
+            if abs(dist_from_ema21) <= 0.05: db_matches += 1
+            
+            if db_matches >= 2:
+                pattern_score = 8 if db_matches == 3 else 5
+                pattern_label = "💎 Dip Buy"
+                score_breakdown['pattern_bonus'] = pattern_score
         
-        # SECTOR ROTATION PLAY: +12
+        # SECTOR ROTATION: Early sector + turning positive
         elif (sector_stage == "Early" and 
-              -1.0 <= alpha_20d <= 1.0 and 
-              1.0 <= alpha_5d <= 3.0):
-            total_score += 12
+              -1.5 <= alpha_20d <= 2.0 and 
+              0.5 <= alpha_5d <= 4.0):
+            pattern_score = 12
             pattern_label = "🎯 Sector Rotation"
-            score_breakdown['pattern_bonus'] = 12
+            score_breakdown['pattern_bonus'] = pattern_score
         
-        # EXTENDED WARNING: -15 PENALTY
-        if (alpha_5d > 5.0 or 
-            (alpha_5d > 3.0 and days_positive >= 13) or  # 13/20 days = 65% of time
-            (alpha_5d > 4.0 and days_positive >= 10) or
-            dist_from_ema21 > 0.10):
-            total_score -= 15
+        # EXTENDED WARNING: -12 PENALTY (less harsh than -15)
+        extended_count = 0
+        if alpha_5d > 5.0: extended_count += 1
+        if alpha_5d > 3.5 and days_positive >= 13: extended_count += 1
+        if dist_from_ema21 > 0.12: extended_count += 1
+        
+        if extended_count >= 2:
+            pattern_score = -12
             pattern_label = "⚡ Extended"
-            score_breakdown['extended_penalty'] = -15
+            score_breakdown['extended_penalty'] = pattern_score
         
-        # BEARISH DIVERGENCE: -10 PENALTY
+        # BEARISH DIVERGENCE: -8 PENALTY
         divergence = detect_relative_strength_divergence(df, theme_suffix)
         if divergence == 'bearish_divergence':
-            total_score -= 10
-            pattern_label = "📉 Bear Div" if not pattern_label else pattern_label + " + 📉"
-            score_breakdown['divergence_penalty'] = -10
+            pattern_score -= 8
+            pattern_label = pattern_label + " + 📉" if pattern_label else "📉 Bear Div"
+            score_breakdown['divergence_penalty'] = -8
+        
+        total_score += pattern_score
         
         # Cap score at 0-100
         total_score = min(100, max(0, total_score))
         
         # Determine category label
-        if total_score >= 80 and alpha_5d <= 3.0:
+        if total_score >= 75 and alpha_5d <= 3.5 and days_positive <= 12:
             category = "🎯 Optimal Entry"
-        elif total_score >= 75 and alpha_20d >= 3.0 and alpha_5d <= 1.5:
+        elif total_score >= 70 and alpha_20d >= 3.0 and alpha_5d <= 2.0:
             category = "💎 Pullback Buy"
-        elif total_score >= 80 and alpha_5d > 4.0:
+        elif total_score >= 75 and alpha_5d > 4.0:
             category = "⚖️ Established Winner"
         elif total_score >= 60:
             category = "⚖️ Selective"
@@ -870,19 +833,12 @@ def calculate_comprehensive_stock_score(
             'grade': _score_to_grade(total_score),
             'category': category,
             'pattern_label': pattern_label,
-            'days_positive': days_positive,
-            'setup_reason': setup_reason,
-            'timing_reason': timing_reason,
-            'volume_reason': volume_reason,
-            'rr_reason': rr_reason,
-            'context_reason': context_reason
+            'days_positive': days_positive
         }
     except Exception as e:
         logger.error(f"Error calculating stock score: {e}")
         return None
 
-def _score_to_grade(score: float) -> str:
-    """Convert numeric score to letter grade."""
     if score >= 80: return 'A'
     if score >= 70: return 'B'
     if score >= 60: return 'C'
@@ -1325,20 +1281,7 @@ def get_actionable_theme_summary(
             theme_info['reason'] = reason
             categories['early_stage'].append(theme_info)
         
-        # --- TOPPING: Momentum declining OR 5d weakening ---
-        elif (
-            momentum_declining and
-            score >= 40 and
-            (is_20d_bullish or is_10d_bullish)
-        ):
-            reason = f"Momentum declining ({score_5d:.0f} < {score_10d:.0f} or {score_20d:.0f})"
-            if quad_5d == '🟡 Weakening':
-                reason += f", 5-day already weakening"
-            
-            theme_info['reason'] = reason
-            categories['topping'].append(theme_info)
-        
-        # --- ESTABLISHED: High score but not fresh OR declining momentum ---
+        # --- ESTABLISHED: High score + Not fresh (check this BEFORE topping) ---
         elif (
             bullish_count >= 2 and
             score >= 65 and
@@ -1352,6 +1295,20 @@ def get_actionable_theme_summary(
             
             theme_info['reason'] = reason
             categories['established'].append(theme_info)
+        
+        # --- TOPPING: Momentum declining + Lower score ---
+        elif (
+            momentum_declining and
+            score >= 40 and
+            score < 65 and
+            (is_20d_bullish or is_10d_bullish)
+        ):
+            reason = f"Momentum declining ({score_5d:.0f} < {score_10d:.0f} or {score_20d:.0f})"
+            if quad_5d == '🟡 Weakening':
+                reason += f", 5-day already weakening"
+            
+            theme_info['reason'] = reason
+            categories['topping'].append(theme_info)
         
         # --- WEAK: Everything else ---
         else:
